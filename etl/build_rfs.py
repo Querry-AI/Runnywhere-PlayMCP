@@ -85,6 +85,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 GRAPH = DATA / "seoul_graph.pkl"
 FACILITIES = DATA / "facilities.pkl"
+INFRA_POINTS = DATA / "infra_points.pkl"
 SNAPSHOT = DATA / "snapshot.json"
 
 
@@ -734,6 +735,8 @@ def main() -> None:
     )
     with FACILITIES.open("wb") as f:
         pickle.dump(facs, f)
+    with INFRA_POINTS.open("wb") as f:
+        pickle.dump({"streetlight": light_pts, "pedestrian_signal": signal_pts}, f)
 
     SNAPSHOT.write_text(json.dumps({
         "date": date.today().isoformat(),
@@ -748,6 +751,8 @@ def main() -> None:
                    "slope_edges": n_slope,
                    "signal_scored_edges": n_signal,
                    "streetlight_scored_edges": n_light,
+                   "infra_points": {"streetlight": len(light_pts),
+                                    "pedestrian_signal": len(signal_pts)},
                    "facilities": facility_counts},
     }, ensure_ascii=False, indent=2))
 

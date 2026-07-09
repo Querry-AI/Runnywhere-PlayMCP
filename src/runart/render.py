@@ -10,8 +10,9 @@ from . import graph as graphmod
 from .course import Course, smooth_series
 from .facilities import LABELS_KO
 from .geo import haversine_m
+from .infrastructure import infra_count_along
 from .models import encode_course_id, encode_shape_token
-from .rfs import edge_rfs
+from .rfs import COMPONENT_LABELS_KO, edge_rfs
 from .shapes import SHAPES
 
 
@@ -109,6 +110,73 @@ def _profile_svg(profile: list) -> str:
     )
 
 
+def _km_markers(course: Course) -> list[dict]:
+    markers = []
+    target = 1.0
+    cum = 0.0
+    prev = None
+    for lat, lon in course.points:
+        if prev is None:
+            prev = (lat, lon)
+            continue
+        seg_km = haversine_m(prev[0], prev[1], lat, lon) / 1000.0
+        while seg_km > 0 and cum + seg_km >= target:
+            t = (target - cum) / seg_km
+            markers.append({
+                "lat": round(prev[0] + (lat - prev[0]) * t, 6),
+                "lon": round(prev[1] + (lon - prev[1]) * t, 6),
+                "km": int(target),
+            })
+            target += 1.0
+        cum += seg_km
+        prev = (lat, lon)
+    return markers
+
+
+def _score_breakdown_html(course: Course) -> str:
+    comps = course.rfs.get("components", {})
+    weights = course.rfs.get("weights", {})
+    if not comps or not weights:
+        return ""
+    rows = []
+    for key in ("sidewalk", "slope", "lighting", "cctv", "park", "crossing"):
+        value = float(comps.get(key, 0.5))
+        weight = float(weights.get(key, 0.0))
+        rows.append(
+            f'<div class="metric">'
+            f'<div class="metric-top"><span>{COMPONENT_LABELS_KO[key]}</span>'
+            f'<span>{round(value * 100)}점 · {round(weight * 100)}%</span></div>'
+            f'<div class="bar"><i style="width:{max(3, round(value * 100))}%"></i></div>'
+            f'</div>'
+        )
+    return '<section class="panel"><h3>러닝 친화도 산정</h3>' + "".join(rows) + "</section>"
+
+
+def _course_fact_html(course: Course, facilities: list[dict]) -> str:
+    signals = infra_count_along(course.points, "pedestrian_signal")
+    streetlights = infra_count_along(course.points, "streetlight")
+    restroom_count = sum(1 for f in facilities if f["type"] == "restroom")
+    convenience_count = sum(1 for f in facilities if f["type"] == "convenience_store")
+    light_gap = round(course.length_m / streetlights) if streetlights else None
+    light_text = f"약 {light_gap}m마다" if light_gap else "정보 없음"
+    items = [
+        ("횡단 신호", f"{signals}개"),
+        ("가로등 간격", light_text),
+        ("편의점", f"{convenience_count}개"),
+        ("화장실", f"{restroom_count}개"),
+    ]
+    cells = "".join(
+        f'<div class="fact"><b>{value}</b><span>{label}</span></div>'
+        for label, value in items
+    )
+    return (
+        '<section class="panel"><h3>러너 체크포인트</h3>'
+        f'<div class="facts">{cells}</div>'
+        '<p class="hint">코스 100m 반경의 서울시/OSM 시설 포인트 기준입니다.</p>'
+        '</section>'
+    )
+
+
 def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
     p = course.params
     cid = encode_course_id(p)
@@ -121,7 +189,10 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
         f" · {p.location_name or '서울'} — RunArt(런아트)"
     )
     segments = json.dumps(_segments_with_rfs(course))
+    km_markers = json.dumps(_km_markers(course))
     profile_svg = _profile_svg(_elevation_profile(course))
+    score_breakdown = _score_breakdown_html(course)
+    course_facts = _course_fact_html(course, facilities)
     markers = json.dumps([
         {"lat": f["lat"], "lon": f["lon"],
          "label": html.escape(f"{LABELS_KO[f['type']]} · {f['at_km']:g}km 지점")}
@@ -146,17 +217,44 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
- body{{margin:0;font-family:-apple-system,'Apple SD Gothic Neo',sans-serif}}
- #map{{height:52vh}}
- .card{{padding:16px 20px;max-width:640px;margin:0 auto}}
- .stat{{color:#444;line-height:1.7}}
- .score{{font-size:1.4em;font-weight:700;color:#0a7d43}}
- .legend{{font-size:.8em;color:#777}}
- .btn{{display:inline-block;margin:6px 8px 0 0;padding:10px 14px;border-radius:10px;
-      background:#111;color:#fff;text-decoration:none;font-size:.95em}}
- footer{{color:#999;font-size:.8em;padding:12px 20px;text-align:center}}
+ body{{margin:0;font-family:-apple-system,'Apple SD Gothic Neo',sans-serif;color:#17201b;background:#f5f7f3}}
+ #map{{height:58vh;min-height:380px;background:#e8ece5}}
+ .leaflet-control-attribution{{font-size:10px}}
+ .map-hud{{position:absolute;z-index:500;left:14px;right:14px;top:14px;display:flex;gap:8px;flex-wrap:wrap;pointer-events:none}}
+ .pill{{background:rgba(255,255,255,.94);border:1px solid rgba(20,35,25,.08);border-radius:8px;
+      padding:8px 10px;font-size:13px;font-weight:700;box-shadow:0 4px 18px rgba(0,0,0,.08)}}
+ .wrap{{padding:16px;max-width:760px;margin:0 auto}}
+ .card,.panel{{background:#fff;border:1px solid #e2e7df;border-radius:8px;padding:16px;margin:0 0 12px}}
+ h2{{margin:0 0 10px;font-size:22px;letter-spacing:0}}
+ h3{{margin:0 0 12px;font-size:16px;letter-spacing:0}}
+ .stat{{color:#3d473f;line-height:1.65;font-size:15px}}
+ .score{{font-size:1.35em;font-weight:800;color:#0a7d43}}
+ .legend{{font-size:12px;color:#6b746d;margin:10px 0 0}}
+ .btn{{display:inline-block;margin:6px 8px 0 0;padding:10px 13px;border-radius:8px;
+      background:#142018;color:#fff;text-decoration:none;font-size:14px;font-weight:700}}
+ .metric{{margin:10px 0}}
+ .metric-top{{display:flex;justify-content:space-between;gap:12px;font-size:13px;color:#445048;margin-bottom:5px}}
+ .bar{{height:8px;background:#e8ede6;border-radius:999px;overflow:hidden}}
+ .bar i{{display:block;height:100%;background:#2da85f;border-radius:999px}}
+ .facts{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}}
+ .fact{{border:1px solid #e1e7dd;background:#f7faf5;border-radius:8px;padding:10px;min-width:0}}
+ .fact b{{display:block;font-size:18px;color:#142018;margin-bottom:3px;word-break:keep-all}}
+ .fact span{{font-size:12px;color:#66726a}}
+ .hint{{font-size:12px;color:#7b857d;margin:10px 0 0}}
+ .facility-list{{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}}
+ .chip{{border:1px solid #dce3d8;background:#f7faf5;border-radius:999px;padding:5px 8px;font-size:12px;color:#344238}}
+ .km-marker{{background:#fff;border:2px solid #111;border-radius:999px;width:24px;height:24px;line-height:20px;
+      text-align:center;font-size:11px;font-weight:800;box-shadow:0 2px 8px rgba(0,0,0,.2)}}
+ footer{{color:#7b857d;font-size:12px;padding:8px 20px 20px;text-align:center}}
+ @media (max-width:560px){{.facts{{grid-template-columns:repeat(2,1fr)}} #map{{height:54vh;min-height:320px}}}}
 </style></head><body>
-<div id="map"></div>
+<div id="map"><div class="map-hud">
+ <span class="pill">{course.length_km:.2f}km</span>
+ <span class="pill">오르막 {course.ascent_m:.0f}m</span>
+ <span class="pill">RFS {course.rfs["score"]}/100</span>
+ <span class="pill">{course.grade_label}</span>
+</div></div>
+<div class="wrap">
 <div class="card">
  <h2>{title}</h2>
  <div class="stat">
@@ -166,27 +264,41 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
   실거리 {course.length_km:.2f}km · 누적 오르막 {course.ascent_m:.0f}m ({course.grade_label}) ·
   예상 {course.duration_range_min[0]}~{course.duration_range_min[1]}분
  </div>
- <p class="legend">지도 색상 = 구간별 러닝 친화도 (초록: 좋음 · 빨강: 주의)</p>
+ <p class="legend">초록 구간일수록 보도·경사·조명·안심 요소가 좋은 길입니다.</p>
  {profile_svg}
  <div>
   <a class="btn" href="{base_url}/c/{cid}.gpx">⬇️ GPX 다운로드</a>
   <a class="btn" href="{base_url}/c/{cid}/card.svg">🖼️ 공유 카드</a>{share}
  </div>
 </div>
+{course_facts}
+{score_breakdown}
+<section class="panel"><h3>코스 주변 편의시설</h3>
+ <div class="facility-list">
+  {''.join(f'<span class="chip">{LABELS_KO[f["type"]]} · {f["at_km"]:g}km</span>' for f in facilities[:10]) or '<span class="chip">100m 반경 편의시설 없음</span>'}
+ </div>
+</section>
+</div>
 <footer>RunArt(런아트) · 데이터: OpenStreetMap, SRTM, 서울열린데이터광장 (스냅숏 기준) ·
 위치 정보는 저장되지 않습니다</footer>
 <script>
  const segs = {segments};
+ const kms = {km_markers};
  const map = L.map('map');
- L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
-   {{attribution:'&copy; OpenStreetMap'}}).addTo(map);
- const color = s => `hsl(${{Math.round(120 * s)}},72%,42%)`;
+ L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png',
+   {{attribution:'&copy; OpenStreetMap &copy; CARTO', subdomains:'abcd', maxZoom:20}}).addTo(map);
+ const color = s => s >= .62 ? '#18a558' : (s >= .48 ? '#f0a202' : '#dc3d2a');
  const group = L.featureGroup();
+ const route = segs.map(s => [s[0], s[1]]);
+ if (segs.length) route.push([segs[segs.length - 1][2], segs[segs.length - 1][3]]);
+ L.polyline(route, {{color:'#ffffff', weight:9, opacity:.95, lineJoin:'round', lineCap:'round'}}).addTo(group);
  for (const [a, b, c, d, s] of segs)
-   L.polyline([[a, b], [c, d]], {{color: color(s), weight: 5, opacity: .9}}).addTo(group);
+   L.polyline([[a, b], [c, d]], {{color: color(s), weight: 5, opacity: .92, lineJoin:'round', lineCap:'round'}}).addTo(group);
  group.addTo(map);
- map.fitBounds(group.getBounds(), {{padding: [24, 24]}});
- if (segs.length) L.marker([segs[0][0], segs[0][1]]).addTo(map).bindPopup('출발/도착');
+ map.fitBounds(group.getBounds(), {{padding: [42, 42]}});
+ if (segs.length) L.circleMarker([segs[0][0], segs[0][1]], {{radius: 8, color:'#111', fillColor:'#fff', fillOpacity:1, weight:3}})
+   .addTo(map).bindPopup('출발/도착');
+ for (const k of kms) L.marker([k.lat, k.lon], {{icon:L.divIcon({{className:'km-marker', html:k.km, iconSize:[24,24], iconAnchor:[12,12]}})}}).addTo(map);
  for (const m of {markers}) L.circleMarker([m.lat, m.lon], {{radius: 6, color: '#2563eb'}})
    .addTo(map).bindPopup(m.label);
 </script></body></html>"""

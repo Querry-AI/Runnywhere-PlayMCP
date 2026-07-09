@@ -97,6 +97,8 @@ def route_rfs_summary(
         "top_percent": citywide_top_percent(score01),
         "highlights": highlights[:3],
         "park_ratio": park_ratio,
+        "components": {k: round(v, 2) for k, v in comps.items()},
+        "weights": w,
     }
 
 

@@ -18,6 +18,10 @@
     "slope_edges": 232006,
     "signal_scored_edges": 232006,
     "streetlight_scored_edges": 232006,
+    "infra_points": {
+      "streetlight": 19316,
+      "pedestrian_signal": 26769
+    },
     "facilities": {
       "convenience_store": 6693,
       "restroom": 4985,
