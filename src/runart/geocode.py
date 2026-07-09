@@ -1,7 +1,7 @@
 """Start-location resolution (PRD §7.3 fallback chain).
 
 Order: ① direct coordinates ② offline gazetteer of Seoul running spots
-(no network, keeps avg latency low) ③ Kakao Local keyword search when
+(no network, keeps avg latency low) ③ Kakao Local keyword/address search when
 `KAKAO_REST_API_KEY` is set (1s timeout, LRU-cached) ④ actionable guidance.
 
 The API key never appears in logs, responses, or errors (PRD §8).
@@ -17,6 +17,7 @@ import urllib.request
 from .course import CourseError
 
 _LOCAL_SEARCH_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
+_ADDRESS_SEARCH_URL = "https://dapi.kakao.com/v2/local/search/address.json"
 _TIMEOUT_S = 1.0
 _SEOUL_BOUNDS = (37.4, 37.72, 126.76, 127.19)
 
@@ -97,6 +98,36 @@ def _keyword_search(query: str) -> tuple[float, float, str] | None:
     return None
 
 
+@functools.lru_cache(maxsize=1024)
+def _address_search(query: str) -> tuple[float, float, str] | None:
+    """Kakao Local address search for user-entered current/home addresses.
+
+    Returns None on any failure and never exposes the API key. We only accept
+    Seoul-bound results because the route graph is Seoul-only.
+    """
+    key = os.environ.get("KAKAO_REST_API_KEY")
+    if not key:
+        return None
+    params = urllib.parse.urlencode({"query": query, "size": 3})
+    req = urllib.request.Request(
+        f"{_ADDRESS_SEARCH_URL}?{params}", headers={"Authorization": f"KakaoAK {key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT_S, context=_SSL_CTX) as r:
+            docs = json.load(r).get("documents", [])
+    except Exception:  # noqa: BLE001 — timeout/HTTP/parse all fall through
+        return None
+    for doc in docs:
+        lat, lon = float(doc["y"]), float(doc["x"])
+        if _in_seoul(lat, lon):
+            name = (
+                doc.get("road_address", {}).get("address_name")
+                or doc.get("address", {}).get("address_name")
+                or query
+            )
+            return lat, lon, name
+    return None
+
+
 def resolve_location(location: str | None, lat: float | None, lon: float | None,
                      ) -> tuple[float, float, str]:
     if lat is not None and lon is not None:
@@ -111,7 +142,10 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
         hit = _keyword_search(location.strip())
         if hit:
             return hit
-        known = "시청, 강남역, 여의도한강공원, 서울숲, 석촌호수, 올림픽공원"
+        hit = _address_search(location.strip())
+        if hit:
+            return hit
+        known = "시청, 강남역, 여의도한강공원, 서울숲, 석촌호수, 올림픽공원, 서울시 중구 세종대로 110"
         raise CourseError(
             f"'{location}' 위치를 찾지 못했어요. 좌표(위도/경도)로 알려주시거나 "
             f"더 잘 알려진 지명으로 시도해 주세요. 예: {known}"
