@@ -26,6 +26,8 @@ UPRIGHT_ROTATIONS = (0, 15, 345, 30, 330)
 GENTLE_ROTATIONS = (0, 15, 345, 30, 330, 45, 315, 60, 300)
 ROTATIONS = UPRIGHT_ROTATIONS
 SCALES = (1.0, 0.85, 1.15)  # real road grids often fit a slightly resized shape
+FIT_SCALES = (0.7, 0.85, 1.0, 0.6, 0.5, 0.8, 0.9, 1.1, 1.15)
+MAX_SHAPE_DISTANCE_ERROR = 0.18
 # Anytime cutoffs (PRD §7.1). Worst case = full search + alternatives probe;
 # the pair must stay well under the 3s p99 spec including queueing headroom.
 TIME_BUDGET_S = 0.6
@@ -54,32 +56,19 @@ SHAPES: dict[str, ShapeSpec] = {
     for s in (
         ShapeSpec(
             "rabbit", "토끼", "🐰", 2.0,
-            _closed([
-                (0.0, 0.0), (0.8, -0.3), (2.4, -0.35), (3.8, 0.0), (4.5, 0.6),
-                (4.7, 1.4), (4.4, 2.1), (4.9, 3.3), (4.7, 5.0), (4.1, 5.2),
-                (3.8, 3.2), (3.5, 2.2), (3.0, 3.7), (2.4, 5.4), (1.8, 5.3),
-                (2.0, 3.5), (2.2, 2.5), (1.3, 2.1), (0.4, 1.3), (-0.4, 1.1),
-                (-0.75, 0.65), (-0.35, 0.25)
-            ]),
+            _closed([(0, 0), (2, 0), (2.6, 1.2), (2.2, 2.2), (2.8, 4.2), (2.2, 4.4),
+                     (1.8, 2.6), (1.2, 2.6), (0.8, 4.4), (0.2, 4.2), (0.8, 2.2), (-0.4, 1.4)]),
         ),
         ShapeSpec(
             "cat", "고양이", "🐱", 3.0,
-            _closed([
-                (0.0, 0.0), (0.8, -0.35), (2.4, -0.4), (3.9, -0.15), (5.2, 0.45),
-                (5.8, 1.2), (5.7, 2.0), (5.0, 2.6), (4.4, 2.75), (4.15, 3.45),
-                (4.75, 4.45), (3.75, 3.95), (3.1, 4.25), (2.45, 3.95), (1.45, 4.45),
-                (2.05, 3.45), (1.8, 2.65), (0.9, 2.25), (0.25, 1.55), (-0.1, 0.75),
-                (-1.0, 1.25), (-1.65, 2.0), (-1.45, 2.75), (-0.75, 2.25), (-0.25, 1.25)
-            ]),
+            _closed([(0, 0), (3, 0), (3, 2), (2.6, 3.2), (3.2, 4.4), (2.2, 3.8),
+                     (1.5, 4.1), (0.8, 3.8), (-0.2, 4.4), (0.4, 3.2), (0, 2)]),
         ),
         ShapeSpec(
-            "dog", "강아지", "🐶", 3.0,
-            _closed([
-                (0.0, 0.0), (1.0, -0.25), (2.2, -0.25), (2.35, 0.8), (3.5, 0.8),
-                (3.7, -0.1), (4.7, 0.05), (4.9, 1.5), (4.55, 2.35), (5.35, 2.15),
-                (5.65, 1.55), (6.1, 1.95), (5.35, 3.05), (4.35, 3.2), (3.0, 3.05),
-                (1.3, 2.85), (0.55, 2.1), (-0.15, 2.35), (-0.55, 1.65), (-0.1, 0.9)
-            ]),
+            "dog", "강아지", "🐶", 5.0,
+            _closed([(0, 0), (1.2, 0), (1.4, 1.2), (2.8, 1.2), (3.0, 0), (4.2, 0),
+                     (4.4, 2.0), (3.6, 3.2), (4.4, 3.0), (4.6, 2.2), (5.0, 2.6),
+                     (4.4, 3.8), (3.0, 3.6), (1.0, 3.4), (0.4, 2.2), (-0.6, 2.6), (-0.2, 1.4)]),
         ),
         ShapeSpec(
             "whale", "고래", "🐳", 3.0,
@@ -164,7 +153,7 @@ def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
                   rotations=ROTATIONS, scales=SCALES) -> tuple[Course | None, float]:
     """Snap the shape template to the road network; best candidate + score."""
     target_m = params.distance_km * 1000.0
-    n_anchor = max(16, min(40, int(target_m / 250)))
+    n_anchor = max(10, min(18, int(target_m / 500)))
     source = outline or spec.outline
     template = _resample(source, n_anchor)
     base_scale = target_m / _outline_length(list(source) + [source[0]])
@@ -181,12 +170,13 @@ def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
 
     best: Course | None = None
     best_sim = -1.0
+    best_len_err = math.inf
     best_key: tuple | None = None
     for scale_f in scales:
         scale = base_scale * scale_f
         diameter_m = diameter_units * scale
         for rot in rotations:
-            if time.perf_counter() > deadline or best_sim >= GOOD_ENOUGH:
+            if time.perf_counter() > deadline or (best_sim >= GOOD_ENOUGH and best_len_err <= 0.08):
                 break
             cos_r, sin_r = math.cos(math.radians(rot)), math.sin(math.radians(rot))
             anchors_xy = [
@@ -216,14 +206,17 @@ def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
                          for n in path]
             sim = similarity(routed_xy, anchors_xy, diameter_m)
             length, ascent = _path_metrics(g, path)
-            if abs(length - target_m) / target_m > 0.25:
-                sim *= 0.8  # penalize big distance misses when ranking
+            length_err = abs(length - target_m) / target_m
+            if length_err > MAX_SHAPE_DISTANCE_ERROR:
+                sim *= 0.7  # strong penalty: cute shape is not useful at the wrong distance
             points = [(g.nodes[n]["lat"], g.nodes[n]["lon"]) for n in path]
             fac_hits, fac_total = facility_requirement_score(points, params.need_facilities)
             clears_gate = sim >= SIMILARITY_GATE
             key = (
+                length_err > MAX_SHAPE_DISTANCE_ERROR,
                 not clears_gate,
                 fac_total - fac_hits if clears_gate else 999,
+                length_err,
                 -round(sim, 2),
                 followability_penalty(points, length),
                 -sim,
@@ -231,6 +224,7 @@ def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
             if best_key is None or key < best_key:
                 best_key = key
                 best_sim = sim
+                best_len_err = length_err
                 best = Course(
                     params=params,
                     path=path,
@@ -241,7 +235,7 @@ def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
                                           params.include_hills),
                     shape_similarity=round(sim, 3),
                 )
-        if time.perf_counter() > deadline or best_sim >= GOOD_ENOUGH:
+        if time.perf_counter() > deadline or (best_sim >= GOOD_ENOUGH and best_len_err <= 0.08):
             break
     return best, best_sim
 
@@ -263,12 +257,13 @@ def generate_shape_course(params: CourseParams) -> Course:
 
     deadline = time.perf_counter() + TIME_BUDGET_S
     body_rotations = GENTLE_ROTATIONS if spec.key == "whale" else UPRIGHT_ROTATIONS
-    best, best_sim = _search_shape(spec, params, deadline=deadline, rotations=body_rotations)
+    best, best_sim = _search_shape(
+        spec, params, deadline=deadline, rotations=body_rotations, scales=FIT_SCALES)
     if (best is None or best_sim < SIMILARITY_GATE) and spec.key in FACE_OUTLINES:
         best, best_sim = _search_shape(
             spec, params, deadline=time.perf_counter() + TIME_BUDGET_S,
-            outline=FACE_OUTLINES[spec.key])
-    if best is None or best_sim < SIMILARITY_GATE:
+            outline=FACE_OUTLINES[spec.key], rotations=UPRIGHT_ROTATIONS, scales=FIT_SCALES)
+    if best is None or best_sim < SIMILARITY_GATE or abs(best.length_m - params.distance_km * 1000.0) / (params.distance_km * 1000.0) > MAX_SHAPE_DISTANCE_ERROR:
         # Honest alternatives: quick-probe the other shapes and suggest only
         # those that actually clear the gate here (편의성 — 실패도 대화의 일부).
         alts = suggest_alternatives(params)

@@ -10,7 +10,7 @@ import math
 from . import graph as graphmod
 from .course import Course, smooth_series
 from .facilities import LABELS_KO
-from .geo import haversine_m
+from .geo import haversine_m, to_xy
 from .infrastructure import infra_count_along
 from .models import encode_course_id, encode_shape_token
 from .rfs import COMPONENT_LABELS_KO, edge_rfs
@@ -166,6 +166,56 @@ def _screen_angle_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> flo
     return math.degrees(math.atan2(-dy, dx))
 
 
+def _point_line_distance(p, a, b) -> float:
+    px, py = p
+    ax, ay = a
+    bx, by = b
+    dx, dy = bx - ax, by - ay
+    denom = dx * dx + dy * dy
+    if denom == 0:
+        return math.dist(p, a)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / denom))
+    return math.dist(p, (ax + t * dx, ay + t * dy))
+
+
+def _rdp(points_xy: list[tuple[float, float]], keep: list[int], lo: int, hi: int, tolerance_m: float) -> None:
+    if hi <= lo + 1:
+        return
+    best_i = lo
+    best_d = 0.0
+    for i in range(lo + 1, hi):
+        d = _point_line_distance(points_xy[i], points_xy[lo], points_xy[hi])
+        if d > best_d:
+            best_i = i
+            best_d = d
+    if best_d >= tolerance_m:
+        keep.append(best_i)
+        _rdp(points_xy, keep, lo, best_i, tolerance_m)
+        _rdp(points_xy, keep, best_i, hi, tolerance_m)
+
+
+def _shape_only_route(course: Course) -> list[list[float]]:
+    """Display-only simplification for the cute shape view.
+
+    The exact road-following points remain in GPX and guide mode; this layer
+    only removes tiny street wiggles that make GPS art look noisy at a glance.
+    """
+    points = course.points
+    if len(points) <= 3:
+        return [[round(lat, 6), round(lon, 6)] for lat, lon in points]
+    lat0, lon0 = points[0]
+    xy = [to_xy(lat, lon, lat0, lon0) for lat, lon in points]
+    keep = [0, len(points) - 1]
+    tolerance = 35.0 if course.shape_similarity is None else 55.0
+    _rdp(xy, keep, 0, len(points) - 1, tolerance)
+    keep = sorted(set(keep))
+    # Keep the simplified visual cute, but not so sparse that the animal vanishes.
+    if len(keep) < 12 and len(points) > 12:
+        step = max(1, len(points) // 12)
+        keep = sorted(set(keep + list(range(0, len(points), step)) + [len(points) - 1]))
+    return [[round(points[i][0], 6), round(points[i][1], 6)] for i in keep]
+
+
 def _score_breakdown_html(course: Course) -> str:
     comps = course.rfs.get("components", {})
     weights = course.rfs.get("weights", {})
@@ -231,6 +281,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
         f" · {p.location_name or '서울'} — 러니웨어"
     )
     segments = json.dumps(_segments_with_rfs(course))
+    shape_route = json.dumps(_shape_only_route(course))
     km_markers = json.dumps(_km_markers(course))
     dir_markers = json.dumps(_direction_markers(course))
     profile_svg = _profile_svg(_elevation_profile(course))
@@ -353,6 +404,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
 위치 정보는 저장되지 않습니다</footer>
 <script>
  const segs = {segments};
+ const shapeRoute = {shape_route};
  const kms = {km_markers};
  const dirs = {dir_markers};
  const map = L.map('map');
@@ -360,12 +412,15 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
    {{attribution:'&copy; OpenStreetMap &copy; CARTO', subdomains:'abcd', maxZoom:20}}).addTo(map);
  const color = s => s >= .62 ? '#18a558' : (s >= .48 ? '#f0a202' : '#dc3d2a');
  const group = L.featureGroup();
+ const shapeLayer = L.featureGroup();
  const guideLayer = L.layerGroup().addTo(map);
  const route = segs.map(s => [s[0], s[1]]);
  if (segs.length) route.push([segs[segs.length - 1][2], segs[segs.length - 1][3]]);
  L.polyline(route, {{color:'#ffffff', weight:9, opacity:.95, lineJoin:'round', lineCap:'round'}}).addTo(group);
  for (const [a, b, c, d, s] of segs)
    L.polyline([[a, b], [c, d]], {{color: color(s), weight: 5, opacity: .92, lineJoin:'round', lineCap:'round'}}).addTo(group);
+ L.polyline(shapeRoute, {{color:'#ffffff', weight:13, opacity:.72, lineJoin:'round', lineCap:'round'}}).addTo(shapeLayer);
+ L.polyline(shapeRoute, {{color:'#18a558', weight:8, opacity:.92, lineJoin:'round', lineCap:'round'}}).addTo(shapeLayer);
  group.addTo(map);
  map.fitBounds(group.getBounds(), {{padding: [42, 42]}});
  if (segs.length) L.marker([segs[0][0], segs[0][1]], {{icon:L.divIcon({{className:'start-marker', html:'출발·도착', iconAnchor:[28,16]}})}})
@@ -384,9 +439,16 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
    shapeView.classList.toggle('active', shapeOnly);
    guideView.classList.toggle('active', !shapeOnly);
    if (shapeOnly) {{
+     map.removeLayer(group);
      map.removeLayer(guideLayer);
+     if (!map.hasLayer(shapeLayer)) shapeLayer.addTo(map);
    }} else if (!map.hasLayer(guideLayer)) {{
+     map.removeLayer(shapeLayer);
+     if (!map.hasLayer(group)) group.addTo(map);
      guideLayer.addTo(map);
+   }} else {{
+     map.removeLayer(shapeLayer);
+     if (!map.hasLayer(group)) group.addTo(map);
    }}
  }};
  shapeView.addEventListener('click', () => setMapMode('shape'));

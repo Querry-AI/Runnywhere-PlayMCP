@@ -23,6 +23,14 @@ def test_shape_course_passes_similarity_gate(shape):
     assert course.points[0] == course.points[-1]
 
 
+@pytest.mark.parametrize("shape", ["cat", "dog", "rabbit", "whale"])
+def test_shape_course_does_not_overshoot_requested_distance(shape):
+    target = max(5.0, SHAPES[shape].min_km)
+    params = CourseParams(**GANGNAM, distance_km=target, shape=shape)
+    course = generate_shape_course(params)
+    assert abs(course.length_km - target) / target <= 0.18
+
+
 def test_too_short_for_giraffe_suggests_alternatives():
     params = CourseParams(**CITY_HALL, distance_km=2.5, shape="giraffe")
     with pytest.raises(CourseError) as e:
