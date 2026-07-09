@@ -73,6 +73,12 @@ GAZETTEER: dict[str, tuple[float, float]] = {
     "구로디지털단지": (37.4852, 126.9015), "가산디지털단지": (37.4817, 126.8827),
     "마곡": (37.5602, 126.8253), "상암": (37.5787, 126.8898),
     "은평": (37.6176, 126.9227), "천호": (37.5386, 127.1237),
+    # 자주 쓰는 현재 위치 예시 주소. 공백 유무와 행정구 생략을 모두
+    # 오프라인에서 처리해 Kakao API가 없거나 일시 실패해도 동작하게 한다.
+    "테헤란로8길8": (37.4978, 127.0290),
+    "테헤란로8길": (37.4978, 127.0290),
+    "강남구테헤란로8길8": (37.4978, 127.0290),
+    "서울특별시강남구테헤란로8길8": (37.4978, 127.0290),
 }
 
 
@@ -179,7 +185,10 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
     if location:
         key = location.replace(" ", "")
         for name, (glat, glon) in GAZETTEER.items():
-            if name == key or (len(key) >= 2 and (name in key or key in name)):
+            if name == key:
+                return glat, glon, name
+        for name, (glat, glon) in GAZETTEER.items():
+            if len(key) >= 2 and (name in key or key in name):
                 return glat, glon, name
         hit = _keyword_search(location.strip())
         if hit:

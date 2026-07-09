@@ -22,7 +22,9 @@ from .models import CourseParams
 from .rfs import route_rfs_summary, routing_weight
 
 SIMILARITY_GATE = 0.7  # below this we refuse to ship the course (PRD §5.4)
-ROTATIONS = (0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330)
+UPRIGHT_ROTATIONS = (0, 15, 345, 30, 330)
+GENTLE_ROTATIONS = (0, 15, 345, 30, 330, 45, 315, 60, 300)
+ROTATIONS = UPRIGHT_ROTATIONS
 SCALES = (1.0, 0.85, 1.15)  # real road grids often fit a slightly resized shape
 # Anytime cutoffs (PRD §7.1). Worst case = full search + alternatives probe;
 # the pair must stay well under the 3s p99 spec including queueing headroom.
@@ -52,19 +54,32 @@ SHAPES: dict[str, ShapeSpec] = {
     for s in (
         ShapeSpec(
             "rabbit", "토끼", "🐰", 2.0,
-            _closed([(0, 0), (2, 0), (2.6, 1.2), (2.2, 2.2), (2.8, 4.2), (2.2, 4.4),
-                     (1.8, 2.6), (1.2, 2.6), (0.8, 4.4), (0.2, 4.2), (0.8, 2.2), (-0.4, 1.4)]),
+            _closed([
+                (0.0, 0.0), (0.8, -0.3), (2.4, -0.35), (3.8, 0.0), (4.5, 0.6),
+                (4.7, 1.4), (4.4, 2.1), (4.9, 3.3), (4.7, 5.0), (4.1, 5.2),
+                (3.8, 3.2), (3.5, 2.2), (3.0, 3.7), (2.4, 5.4), (1.8, 5.3),
+                (2.0, 3.5), (2.2, 2.5), (1.3, 2.1), (0.4, 1.3), (-0.4, 1.1),
+                (-0.75, 0.65), (-0.35, 0.25)
+            ]),
         ),
         ShapeSpec(
             "cat", "고양이", "🐱", 3.0,
-            _closed([(0, 0), (3, 0), (3, 2), (2.6, 3.2), (3.2, 4.4), (2.2, 3.8),
-                     (1.5, 4.1), (0.8, 3.8), (-0.2, 4.4), (0.4, 3.2), (0, 2)]),
+            _closed([
+                (0.0, 0.0), (0.8, -0.35), (2.4, -0.4), (3.9, -0.15), (5.2, 0.45),
+                (5.8, 1.2), (5.7, 2.0), (5.0, 2.6), (4.4, 2.75), (4.15, 3.45),
+                (4.75, 4.45), (3.75, 3.95), (3.1, 4.25), (2.45, 3.95), (1.45, 4.45),
+                (2.05, 3.45), (1.8, 2.65), (0.9, 2.25), (0.25, 1.55), (-0.1, 0.75),
+                (-1.0, 1.25), (-1.65, 2.0), (-1.45, 2.75), (-0.75, 2.25), (-0.25, 1.25)
+            ]),
         ),
         ShapeSpec(
             "dog", "강아지", "🐶", 3.0,
-            _closed([(0, 0), (1.2, 0), (1.4, 1.2), (2.8, 1.2), (3.0, 0), (4.2, 0),
-                     (4.4, 2.0), (3.6, 3.2), (4.4, 3.0), (4.6, 2.2), (5.0, 2.6),
-                     (4.4, 3.8), (3.0, 3.6), (1.0, 3.4), (0.4, 2.2), (-0.6, 2.6), (-0.2, 1.4)]),
+            _closed([
+                (0.0, 0.0), (1.0, -0.25), (2.2, -0.25), (2.35, 0.8), (3.5, 0.8),
+                (3.7, -0.1), (4.7, 0.05), (4.9, 1.5), (4.55, 2.35), (5.35, 2.15),
+                (5.65, 1.55), (6.1, 1.95), (5.35, 3.05), (4.35, 3.2), (3.0, 3.05),
+                (1.3, 2.85), (0.55, 2.1), (-0.15, 2.35), (-0.55, 1.65), (-0.1, 0.9)
+            ]),
         ),
         ShapeSpec(
             "whale", "고래", "🐳", 3.0,
@@ -78,6 +93,16 @@ SHAPES: dict[str, ShapeSpec] = {
                      (3.6, 5.8), (3.2, 3.0), (0.4, 2.8)]),
         ),
     )
+}
+
+FACE_OUTLINES: dict[str, tuple[tuple[float, float], ...]] = {
+    "rabbit": _closed([(0, 0), (2, 0), (2.6, 1.2), (2.2, 2.2), (2.8, 4.2), (2.2, 4.4),
+                       (1.8, 2.6), (1.2, 2.6), (0.8, 4.4), (0.2, 4.2), (0.8, 2.2), (-0.4, 1.4)]),
+    "cat": _closed([(0, 0), (3, 0), (3, 2), (2.6, 3.2), (3.2, 4.4), (2.2, 3.8),
+                    (1.5, 4.1), (0.8, 3.8), (-0.2, 4.4), (0.4, 3.2), (0, 2)]),
+    "dog": _closed([(0, 0), (1.2, 0), (1.4, 1.2), (2.8, 1.2), (3.0, 0), (4.2, 0),
+                    (4.4, 2.0), (3.6, 3.2), (4.4, 3.0), (4.6, 2.2), (5.0, 2.6),
+                    (4.4, 3.8), (3.0, 3.6), (1.0, 3.4), (0.4, 2.2), (-0.6, 2.6), (-0.2, 1.4)]),
 }
 
 
@@ -135,12 +160,14 @@ def similarity(routed_xy: list[tuple[float, float]], template_xy: list[tuple[flo
 
 
 def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
+                  outline: tuple[tuple[float, float], ...] | None = None,
                   rotations=ROTATIONS, scales=SCALES) -> tuple[Course | None, float]:
     """Snap the shape template to the road network; best candidate + score."""
     target_m = params.distance_km * 1000.0
     n_anchor = max(16, min(40, int(target_m / 250)))
-    template = _resample(spec.outline, n_anchor)
-    base_scale = target_m / _outline_length(list(spec.outline) + [spec.outline[0]])
+    source = outline or spec.outline
+    template = _resample(source, n_anchor)
+    base_scale = target_m / _outline_length(list(source) + [source[0]])
     xs = [p[0] for p in template]
     ys = [p[1] for p in template]
     diameter_units = max(max(xs) - min(xs), max(ys) - min(ys))
@@ -234,8 +261,13 @@ def generate_shape_course(params: CourseParams) -> Course:
             f"{spec.name_ko} 모양은 {spec.min_km:g}km 이상에서 예쁘게 나와요. {alt_msg}"
         )
 
-    best, best_sim = _search_shape(spec, params,
-                                   deadline=time.perf_counter() + TIME_BUDGET_S)
+    deadline = time.perf_counter() + TIME_BUDGET_S
+    body_rotations = GENTLE_ROTATIONS if spec.key == "whale" else UPRIGHT_ROTATIONS
+    best, best_sim = _search_shape(spec, params, deadline=deadline, rotations=body_rotations)
+    if (best is None or best_sim < SIMILARITY_GATE) and spec.key in FACE_OUTLINES:
+        best, best_sim = _search_shape(
+            spec, params, deadline=time.perf_counter() + TIME_BUDGET_S,
+            outline=FACE_OUTLINES[spec.key])
     if best is None or best_sim < SIMILARITY_GATE:
         # Honest alternatives: quick-probe the other shapes and suggest only
         # those that actually clear the gate here (편의성 — 실패도 대화의 일부).
@@ -264,7 +296,7 @@ def suggest_alternatives(params: CourseParams, limit: int = 2) -> list[str]:
         probe = params.model_copy(update={"shape": spec.key})
         course, sim = _search_shape(
             spec, probe, deadline=min(deadline, time.perf_counter() + 0.35),
-            rotations=(0, 60, 120, 180, 240, 300), scales=(1.0,))
+            rotations=UPRIGHT_ROTATIONS, scales=(1.0,))
         if course is not None and sim >= SIMILARITY_GATE:
             out.append(f"{spec.emoji}{spec.name_ko}(완성도 {sim:.0%})")
             if len(out) >= limit:

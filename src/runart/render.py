@@ -53,7 +53,7 @@ def course_markdown(course: Course, base_url: str, facilities: list[dict]) -> st
     lines.append(f"- 🗺️ 지도 보기: {base_url}/c/{cid}  ⬇️ GPX: {base_url}/c/{cid}.gpx")
     if shape:
         token = encode_shape_token(p.shape, p.distance_km)
-        lines.append(f"- {shape.emoji} 친구도 자기 동네에서 이 모양 뛰기: {base_url}/s/{token}")
+        lines.append(f"- {shape.emoji} 모양 공유 링크: {base_url}/s/{token}")
     return "\n".join(lines)
 
 
@@ -246,10 +246,6 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
         f' · 모양 완성도 {course.shape_similarity:.0%}'
         if course.shape_similarity is not None else ""
     )
-    share = (
-        f'<a class="btn" href="{base_url}/s/{encode_shape_token(p.shape, p.distance_km)}">'
-        f"🐾 내 동네에서 이 모양 뛰기</a>" if shape else ""
-    )
     return f"""<!DOCTYPE html><html lang="ko"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>러니웨어 — {title}</title>
@@ -272,6 +268,11 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  .run-panel button.on{{background:#0a7d43}}
  .run-status{{background:rgba(255,255,255,.96);border:1px solid rgba(20,35,25,.08);padding:10px 12px;
       color:#243028;font-size:13px;font-weight:700;line-height:1.35;min-width:128px}}
+ .view-toggle{{position:absolute;z-index:530;right:14px;top:62px;display:flex;background:rgba(255,255,255,.96);
+      border:1px solid rgba(20,35,25,.1);border-radius:8px;box-shadow:0 4px 18px rgba(0,0,0,.1);overflow:hidden}}
+ .view-toggle button{{border:0;background:transparent;color:#4b5a50;padding:9px 11px;font-size:12px;font-weight:800}}
+ .view-toggle button.active{{background:#142018;color:#fff}}
+ body.shape-only .map-hud,body.shape-only .run-panel{{display:none}}
  .wrap{{padding:16px;max-width:760px;margin:0 auto}}
  .card,.panel{{background:#fff;border:1px solid #e2e7df;border-radius:8px;padding:16px;margin:0 0 12px}}
  h2{{margin:0 0 10px;font-size:22px;letter-spacing:0}}
@@ -290,6 +291,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  .fact b{{display:block;font-size:18px;color:#142018;margin-bottom:3px;word-break:keep-all}}
  .fact span{{font-size:12px;color:#66726a}}
  .hint{{font-size:12px;color:#7b857d;margin:10px 0 0}}
+ .steps{{margin:8px 0 0;padding-left:20px;color:#3d473f;line-height:1.65;font-size:14px}}
  .facility-list{{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}}
  .chip{{border:1px solid #dce3d8;background:#f7faf5;border-radius:999px;padding:5px 8px;font-size:12px;color:#344238}}
  .km-marker{{background:#fff;border:2px solid #111;border-radius:999px;width:24px;height:24px;line-height:20px;
@@ -310,6 +312,9 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
 </div><div class="run-panel">
  <button id="runStart" type="button">러닝 시작</button>
  <div id="runStatus" class="run-status">위치 추적 대기</div>
+</div><div class="view-toggle" aria-label="지도 보기 전환">
+ <button id="shapeView" type="button">코스만</button>
+ <button id="guideView" type="button" class="active">안내 포함</button>
 </div></div>
 <div class="wrap">
 <div class="card">
@@ -325,9 +330,17 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  {profile_svg}
  <div>
   <a class="btn" href="{base_url}/c/{cid}.gpx">⬇️ GPX 다운로드</a>
-  <a class="btn" href="{base_url}/c/{cid}/card.svg">🖼️ 공유 카드</a>{share}
+  <a class="btn" href="{base_url}/c/{cid}/card.svg">🖼️ 공유 카드</a>
  </div>
 </div>
+<section class="panel"><h3>GPX 사용 방법</h3>
+ <ol class="steps">
+  <li>GPX 다운로드를 눌러 코스 파일을 저장합니다.</li>
+  <li>카카오맵에서 파일 열기/공유 대상으로 카카오맵이 보이면 선택합니다.</li>
+  <li>카카오맵에 GPX 가져오기 메뉴가 보이지 않으면 직접 등록이 제한된 환경입니다.</li>
+  <li>그때는 이 페이지의 러닝 시작을 쓰거나, GPX를 지원하는 러닝 앱에서 파일을 엽니다.</li>
+ </ol>
+</section>
 {course_facts}
 {score_breakdown}
 <section class="panel"><h3>코스 주변 편의점·화장실</h3>
@@ -347,6 +360,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
    {{attribution:'&copy; OpenStreetMap &copy; CARTO', subdomains:'abcd', maxZoom:20}}).addTo(map);
  const color = s => s >= .62 ? '#18a558' : (s >= .48 ? '#f0a202' : '#dc3d2a');
  const group = L.featureGroup();
+ const guideLayer = L.layerGroup().addTo(map);
  const route = segs.map(s => [s[0], s[1]]);
  if (segs.length) route.push([segs[segs.length - 1][2], segs[segs.length - 1][3]]);
  L.polyline(route, {{color:'#ffffff', weight:9, opacity:.95, lineJoin:'round', lineCap:'round'}}).addTo(group);
@@ -355,11 +369,28 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  group.addTo(map);
  map.fitBounds(group.getBounds(), {{padding: [42, 42]}});
  if (segs.length) L.marker([segs[0][0], segs[0][1]], {{icon:L.divIcon({{className:'start-marker', html:'출발·도착', iconAnchor:[28,16]}})}})
-   .addTo(map).bindPopup('출발/도착');
- for (const m of dirs) L.marker([m.lat, m.lon], {{icon:L.divIcon({{className:'dir-marker', html:'<span style="transform:rotate('+m.angle+'deg)">➤</span>', iconSize:[22,22], iconAnchor:[11,11]}})}}).addTo(map);
- for (const k of kms) L.marker([k.lat, k.lon], {{icon:L.divIcon({{className:'km-marker', html:k.km, iconSize:[24,24], iconAnchor:[12,12]}})}}).addTo(map);
+   .addTo(guideLayer).bindTooltip('출발·도착 지점', {{direction:'top'}}).bindPopup('출발·도착 지점');
+ for (const m of dirs) L.marker([m.lat, m.lon], {{icon:L.divIcon({{className:'dir-marker', html:'<span style="transform:rotate('+m.angle+'deg)">➤</span>', iconSize:[22,22], iconAnchor:[11,11]}})}})
+   .addTo(guideLayer).bindTooltip('진행 방향', {{direction:'top'}});
+ for (const k of kms) L.marker([k.lat, k.lon], {{icon:L.divIcon({{className:'km-marker', html:k.km, iconSize:[24,24], iconAnchor:[12,12]}})}})
+   .addTo(guideLayer).bindTooltip(`${{k.km}}km 지점`, {{direction:'top'}});
  for (const m of {markers}) L.circleMarker([m.lat, m.lon], {{radius: 6, color: '#2563eb'}})
-   .addTo(map).bindPopup(m.label);
+   .addTo(guideLayer).bindTooltip(m.label, {{direction:'top'}}).bindPopup(m.label);
+ const shapeView = document.getElementById('shapeView');
+ const guideView = document.getElementById('guideView');
+ const setMapMode = mode => {{
+   const shapeOnly = mode === 'shape';
+   document.body.classList.toggle('shape-only', shapeOnly);
+   shapeView.classList.toggle('active', shapeOnly);
+   guideView.classList.toggle('active', !shapeOnly);
+   if (shapeOnly) {{
+     map.removeLayer(guideLayer);
+   }} else if (!map.hasLayer(guideLayer)) {{
+     guideLayer.addTo(map);
+   }}
+ }};
+ shapeView.addEventListener('click', () => setMapMode('shape'));
+ guideView.addEventListener('click', () => setMapMode('guide'));
  const startBtn = document.getElementById('runStart');
  const runStatus = document.getElementById('runStatus');
  let watchId = null;
