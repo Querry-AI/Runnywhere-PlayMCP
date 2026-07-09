@@ -266,6 +266,12 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  .map-hud{{position:absolute;z-index:500;left:14px;right:14px;top:14px;display:flex;gap:8px;flex-wrap:wrap;pointer-events:none}}
  .pill{{background:rgba(255,255,255,.94);border:1px solid rgba(20,35,25,.08);border-radius:8px;
       padding:8px 10px;font-size:13px;font-weight:700;box-shadow:0 4px 18px rgba(0,0,0,.08)}}
+ .run-panel{{position:absolute;z-index:520;left:14px;right:14px;bottom:16px;display:flex;gap:8px;align-items:center;pointer-events:none}}
+ .run-panel button,.run-status{{pointer-events:auto;border-radius:8px;box-shadow:0 4px 18px rgba(0,0,0,.14)}}
+ .run-panel button{{border:0;background:#142018;color:#fff;padding:11px 14px;font-size:14px;font-weight:800}}
+ .run-panel button.on{{background:#0a7d43}}
+ .run-status{{background:rgba(255,255,255,.96);border:1px solid rgba(20,35,25,.08);padding:10px 12px;
+      color:#243028;font-size:13px;font-weight:700;line-height:1.35;min-width:128px}}
  .wrap{{padding:16px;max-width:760px;margin:0 auto}}
  .card,.panel{{background:#fff;border:1px solid #e2e7df;border-radius:8px;padding:16px;margin:0 0 12px}}
  h2{{margin:0 0 10px;font-size:22px;letter-spacing:0}}
@@ -291,6 +297,8 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  .dir-marker span{{display:block;color:#142018;font-size:20px;text-shadow:0 0 3px #fff,0 1px 4px rgba(0,0,0,.2)}}
  .start-marker{{background:#142018;color:#fff;border:2px solid #fff;border-radius:999px;padding:6px 9px;
       font-size:12px;font-weight:800;box-shadow:0 3px 12px rgba(0,0,0,.28);white-space:nowrap}}
+ .user-dot{{width:18px;height:18px;background:#1677ff;border:3px solid #fff;border-radius:999px;
+      box-shadow:0 0 0 8px rgba(22,119,255,.18),0 2px 10px rgba(0,0,0,.25)}}
  footer{{color:#7b857d;font-size:12px;padding:8px 20px 20px;text-align:center}}
  @media (max-width:560px){{.facts{{grid-template-columns:repeat(2,1fr)}} #map{{height:54vh;min-height:320px}}}}
 </style></head><body>
@@ -299,6 +307,9 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  <span class="pill">오르막 {course.ascent_m:.0f}m</span>
  <span class="pill">RFS {course.rfs["score"]}/100</span>
  <span class="pill">{course.grade_label}</span>
+</div><div class="run-panel">
+ <button id="runStart" type="button">러닝 시작</button>
+ <div id="runStatus" class="run-status">위치 추적 대기</div>
 </div></div>
 <div class="wrap">
 <div class="card">
@@ -349,6 +360,78 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  for (const k of kms) L.marker([k.lat, k.lon], {{icon:L.divIcon({{className:'km-marker', html:k.km, iconSize:[24,24], iconAnchor:[12,12]}})}}).addTo(map);
  for (const m of {markers}) L.circleMarker([m.lat, m.lon], {{radius: 6, color: '#2563eb'}})
    .addTo(map).bindPopup(m.label);
+ const startBtn = document.getElementById('runStart');
+ const runStatus = document.getElementById('runStatus');
+ let watchId = null;
+ let userMarker = null;
+ let accuracyCircle = null;
+ const userIcon = L.divIcon({{className:'', html:'<div class="user-dot"></div>', iconSize:[24,24], iconAnchor:[12,12]}});
+ const toRad = deg => deg * Math.PI / 180;
+ const distM = (a, b, c, d) => {{
+   const R = 6371000;
+   const x = toRad(d - b) * Math.cos(toRad((a + c) / 2));
+   const y = toRad(c - a);
+   return Math.sqrt(x * x + y * y) * R;
+ }};
+ const nearestRouteM = (lat, lon) => {{
+   let best = Infinity;
+   for (const [a, b, c, d] of segs) {{
+     const x = distM(a, b, a, lon);
+     const y = distM(a, b, lat, b);
+     const sx = distM(a, b, a, d) * (d >= b ? 1 : -1);
+     const sy = distM(a, b, c, b) * (c >= a ? 1 : -1);
+     const px = x * (lon >= b ? 1 : -1);
+     const py = y * (lat >= a ? 1 : -1);
+     const len2 = sx * sx + sy * sy || 1;
+     const t = Math.max(0, Math.min(1, (px * sx + py * sy) / len2));
+     const dx = px - sx * t;
+     const dy = py - sy * t;
+     best = Math.min(best, Math.sqrt(dx * dx + dy * dy));
+   }}
+   return best;
+ }};
+ const setStatus = text => runStatus.textContent = text;
+ const updatePosition = pos => {{
+   const lat = pos.coords.latitude;
+   const lon = pos.coords.longitude;
+   const acc = Math.round(pos.coords.accuracy || 0);
+   const off = Math.round(nearestRouteM(lat, lon));
+   if (!userMarker) {{
+     userMarker = L.marker([lat, lon], {{icon:userIcon, zIndexOffset:1000}}).addTo(map);
+     accuracyCircle = L.circle([lat, lon], {{radius: acc, color:'#1677ff', weight:1, fillOpacity:.06}}).addTo(map);
+   }} else {{
+     userMarker.setLatLng([lat, lon]);
+     accuracyCircle.setLatLng([lat, lon]).setRadius(acc);
+   }}
+   const guide = off > 80 ? `코스에서 약 ${{off}}m 벗어남` : `코스 위를 달리는 중 · 오차 ${{acc}}m`;
+   setStatus(guide);
+ }};
+ const locationError = err => {{
+   const msg = err.code === 1 ? '위치 권한이 필요해요' : '현재 위치를 가져오지 못했어요';
+   setStatus(msg);
+   startBtn.classList.remove('on');
+   startBtn.textContent = '러닝 시작';
+ }};
+ startBtn.addEventListener('click', () => {{
+   if (!navigator.geolocation) {{
+     setStatus('이 브라우저는 위치 추적을 지원하지 않아요');
+     return;
+   }}
+   if (watchId !== null) {{
+     navigator.geolocation.clearWatch(watchId);
+     watchId = null;
+     startBtn.classList.remove('on');
+     startBtn.textContent = '러닝 시작';
+     setStatus('위치 추적 일시정지');
+     return;
+   }}
+   setStatus('위치 권한 확인 중');
+   startBtn.classList.add('on');
+   startBtn.textContent = '추적 중지';
+   watchId = navigator.geolocation.watchPosition(updatePosition, locationError, {{
+     enableHighAccuracy:true, maximumAge:3000, timeout:12000
+   }});
+ }});
 </script></body></html>"""
 
 
