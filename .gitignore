@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+.venv/
+cache/
+.pytest_cache/
+*.egg-info/
+.DS_Store
+
+# Never commit local secrets or deployment credentials.
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.key
+
+# Raw source data is local-only; the deploy image uses baked data/ artifacts.
+*.csv
+*.xlsx
+서울시 경사도/
+서울시 경사도/

@@ -1,0 +1,25 @@
+[project]
+name = "runart"
+version = "0.1.0"
+description = "RunArt(런아트) — AI running course designer MCP server for Agentic Player 10"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.9",
+    "networkx>=3.2",
+    "numpy>=1.26",
+    "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+etl = ["osmnx>=2.0", "geopandas>=1.0", "requests>=2.31"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,18 @@
+.venv
+.pytest_cache
+__pycache__
+*.pyc
+.DS_Store
+.env
+.env.*
+*.pem
+*.p12
+*.key
+cache/
+tests/
+scripts/
+etl/
+*.csv
+*.xlsx
+서울시 경사도/
+서울시 경사도/

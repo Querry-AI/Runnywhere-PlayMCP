@@ -1,0 +1,65 @@
+"""Tool-level tests: call the underlying functions the MCP tools wrap."""
+
+from runart import server
+from runart.models import CourseParams, encode_course_id
+
+CITY_HALL = dict(location="시청")
+
+
+def test_generate_running_course_defaults_to_5km_with_note():
+    out = server.generate_running_course(**CITY_HALL)
+    assert "기본 5km" in out
+    assert "러닝 친화도" in out
+    assert "/c/" in out and ".gpx" in out
+
+
+def test_duration_conversion_is_explained():
+    out = server.generate_running_course(**CITY_HALL, duration_min=30)
+    assert "6:30/km" in out and "4.6km" in out
+
+
+def test_requested_facility_is_reflected_in_course():
+    out = server.generate_running_course(**CITY_HALL, distance_km=5.0,
+                                         need_facilities=["restroom"])
+    assert "경유:" in out
+    assert "화장실" in out
+
+
+def test_animal_course_includes_share_link():
+    out = server.generate_animal_course(shape="whale", **CITY_HALL, distance_km=5.0)
+    assert "고래" in out
+    assert "/s/whale-5k" in out
+    assert "모양 완성도" in out
+
+
+def test_shape_token_recreates_shape():
+    out = server.generate_animal_course(shape_token="whale-5k", **CITY_HALL)
+    assert "고래" in out
+
+
+def test_refine_and_status_roundtrip():
+    cid = encode_course_id(CourseParams(lat=37.5665, lon=126.9780,
+                                        location_name="시청", distance_km=5.0))
+    refined = server.refine_course(course_id=cid, distance_km=3.0)
+    import re
+    got_km = float(re.search(r"([\d.]+)km 러닝 코스", refined).group(1))
+    assert abs(got_km - 3.0) / 3.0 <= 0.10  # demo 80m grid: ±10%; real graph targets ±5%
+    status = server.get_course_status(course_id=cid)
+    assert "러닝 친화도" in status
+
+
+def test_bad_course_id_gives_guidance_not_traceback():
+    out = server.find_facilities_near_course(course_id="not-a-real-id")
+    assert out.startswith("⚠️")
+
+
+def test_no_kakao_in_tool_names():
+    import asyncio
+    tools = asyncio.run(server.mcp.list_tools())
+    assert 3 <= len(tools) <= 10
+    for t in tools:
+        assert "kakao" not in t.name.lower()
+        assert t.annotations.readOnlyHint is True
+        assert t.annotations.destructiveHint is False
+        assert len(t.description) <= 1024
+        assert "RunArt" in t.description
