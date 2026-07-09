@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import networkx as nx
 
 from . import graph as graphmod
-from .course import Course, CourseError, _path_metrics
+from .course import Course, CourseError, _path_metrics, followability_penalty
 from .facilities import facility_requirement_score
 from .geo import to_latlon, to_xy
 from .models import CourseParams
@@ -197,6 +197,8 @@ def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
             key = (
                 not clears_gate,
                 fac_total - fac_hits if clears_gate else 999,
+                -round(sim, 2),
+                followability_penalty(points, length),
                 -sim,
             )
             if best_key is None or key < best_key:

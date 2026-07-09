@@ -5,6 +5,7 @@ data sources is escaped before rendering (PRD §8)."""
 
 import html
 import json
+import math
 
 from . import graph as graphmod
 from .course import Course, smooth_series
@@ -135,6 +136,36 @@ def _km_markers(course: Course) -> list[dict]:
     return markers
 
 
+def _direction_markers(course: Course) -> list[dict]:
+    markers = []
+    if len(course.points) < 2:
+        return markers
+    target = 0.35
+    cum = 0.0
+    prev = course.points[0]
+    for lat, lon in course.points[1:]:
+        seg_km = haversine_m(prev[0], prev[1], lat, lon) / 1000.0
+        while seg_km > 0 and cum + seg_km >= target:
+            t = (target - cum) / seg_km
+            mlat = prev[0] + (lat - prev[0]) * t
+            mlon = prev[1] + (lon - prev[1]) * t
+            markers.append({
+                "lat": round(mlat, 6),
+                "lon": round(mlon, 6),
+                "angle": round(_screen_angle_deg(prev[0], prev[1], lat, lon), 1),
+            })
+            target += 0.45
+        cum += seg_km
+        prev = (lat, lon)
+    return markers
+
+
+def _screen_angle_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    dx = (lon2 - lon1) * 111_320.0
+    dy = (lat2 - lat1) * 111_320.0
+    return math.degrees(math.atan2(-dy, dx))
+
+
 def _score_breakdown_html(course: Course) -> str:
     comps = course.rfs.get("components", {})
     weights = course.rfs.get("weights", {})
@@ -201,6 +232,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
     )
     segments = json.dumps(_segments_with_rfs(course))
     km_markers = json.dumps(_km_markers(course))
+    dir_markers = json.dumps(_direction_markers(course))
     profile_svg = _profile_svg(_elevation_profile(course))
     score_breakdown = _score_breakdown_html(course)
     course_facts = _course_fact_html(course, facilities)
@@ -256,6 +288,9 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  .chip{{border:1px solid #dce3d8;background:#f7faf5;border-radius:999px;padding:5px 8px;font-size:12px;color:#344238}}
  .km-marker{{background:#fff;border:2px solid #111;border-radius:999px;width:24px;height:24px;line-height:20px;
       text-align:center;font-size:11px;font-weight:800;box-shadow:0 2px 8px rgba(0,0,0,.2)}}
+ .dir-marker span{{display:block;color:#142018;font-size:20px;text-shadow:0 0 3px #fff,0 1px 4px rgba(0,0,0,.2)}}
+ .start-marker{{background:#142018;color:#fff;border:2px solid #fff;border-radius:999px;padding:6px 9px;
+      font-size:12px;font-weight:800;box-shadow:0 3px 12px rgba(0,0,0,.28);white-space:nowrap}}
  footer{{color:#7b857d;font-size:12px;padding:8px 20px 20px;text-align:center}}
  @media (max-width:560px){{.facts{{grid-template-columns:repeat(2,1fr)}} #map{{height:54vh;min-height:320px}}}}
 </style></head><body>
@@ -295,6 +330,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
 <script>
  const segs = {segments};
  const kms = {km_markers};
+ const dirs = {dir_markers};
  const map = L.map('map');
  L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png',
    {{attribution:'&copy; OpenStreetMap &copy; CARTO', subdomains:'abcd', maxZoom:20}}).addTo(map);
@@ -307,8 +343,9 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
    L.polyline([[a, b], [c, d]], {{color: color(s), weight: 5, opacity: .92, lineJoin:'round', lineCap:'round'}}).addTo(group);
  group.addTo(map);
  map.fitBounds(group.getBounds(), {{padding: [42, 42]}});
- if (segs.length) L.circleMarker([segs[0][0], segs[0][1]], {{radius: 8, color:'#111', fillColor:'#fff', fillOpacity:1, weight:3}})
+ if (segs.length) L.marker([segs[0][0], segs[0][1]], {{icon:L.divIcon({{className:'start-marker', html:'출발·도착', iconAnchor:[28,16]}})}})
    .addTo(map).bindPopup('출발/도착');
+ for (const m of dirs) L.marker([m.lat, m.lon], {{icon:L.divIcon({{className:'dir-marker', html:'<span style="transform:rotate('+m.angle+'deg)">➤</span>', iconSize:[22,22], iconAnchor:[11,11]}})}}).addTo(map);
  for (const k of kms) L.marker([k.lat, k.lon], {{icon:L.divIcon({{className:'km-marker', html:k.km, iconSize:[24,24], iconAnchor:[12,12]}})}}).addTo(map);
  for (const m of {markers}) L.circleMarker([m.lat, m.lon], {{radius: 6, color: '#2563eb'}})
    .addTo(map).bindPopup(m.label);

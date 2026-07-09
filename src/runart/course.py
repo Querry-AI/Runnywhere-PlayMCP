@@ -25,6 +25,7 @@ N_WAYPOINTS = 4
 BEARINGS = (0, 45, 90, 135, 180, 225, 270, 315)
 MAX_RESCALES = 5
 PACE_MIN_PER_KM = 6.5
+FOLLOW_EDGE_PENALTY_M = 8.0
 # "평지" 판정: 누적 상승 < 8m/km. SRTM 30m 고도의 현실적 잡음 수준을 반영한
 # 기준 (러닝 앱 통념상 10m/km 이하면 평지 취급).
 FLAT_CUM_GAIN_PER_KM = 8.0
@@ -100,6 +101,45 @@ def _route(g, weight, a, b) -> list:
     return nx.bidirectional_dijkstra(g, a, b, weight=weight)[1]
 
 
+def easy_route_weight(base_weight: str):
+    """Prefer roads that are easier to follow without exposing a new score.
+
+    A tiny fixed cost per edge discourages routes made of many short alley
+    fragments while keeping the existing RFS/length weighting dominant.
+    """
+    def _weight(_u, _v, attrs):
+        return attrs.get(base_weight, attrs["length"]) + FOLLOW_EDGE_PENALTY_M
+    return _weight
+
+
+def followability_penalty(points: list[tuple[float, float]], length_m: float) -> float:
+    """Internal ranking penalty for confusing routes: many turns, sharp turns,
+    and U-turn-like bends. This is deliberately not shown as a user-facing
+    score; it just nudges candidate selection toward runnable courses."""
+    if len(points) < 3 or length_m <= 0:
+        return 0.0
+    turns = sharp = uturns = 0
+    for a, b, c in zip(points, points[1:], points[2:]):
+        ax, ay = to_xy(a[0], a[1], b[0], b[1])
+        cx, cy = to_xy(c[0], c[1], b[0], b[1])
+        v1 = (-ax, -ay)
+        v2 = (cx, cy)
+        n1 = math.hypot(*v1)
+        n2 = math.hypot(*v2)
+        if n1 < 8 or n2 < 8:
+            continue
+        cosv = max(-1.0, min(1.0, (v1[0] * v2[0] + v1[1] * v2[1]) / (n1 * n2)))
+        angle = math.degrees(math.acos(cosv))
+        if angle >= 35:
+            turns += 1
+        if angle >= 70:
+            sharp += 1
+        if angle >= 125:
+            uturns += 1
+    km = max(length_m / 1000.0, 0.1)
+    return 0.6 * turns / km + 1.6 * sharp / km + 4.0 * uturns / km
+
+
 def _loop_via_circle(g, weight, start_node, target_m: float, bearing_deg: float) -> list | None:
     start = g.nodes[start_node]
     lat0, lon0 = start["lat"], start["lon"]
@@ -148,7 +188,7 @@ def generate_course(params: CourseParams) -> Course:
     # Local subgraph keeps every Dijkstra bounded regardless of city size.
     g = graphmod.subgraph_around(params.lat, params.lon,
                                  target_m / math.pi * 1.4 + 400)
-    weight = routing_weight(params.night_mode, params.include_hills)
+    weight = easy_route_weight(routing_weight(params.night_mode, params.include_hills))
 
     best: Course | None = None
     best_key: tuple | None = None
@@ -174,9 +214,14 @@ def generate_course(params: CourseParams) -> Course:
         points = [(g.nodes[n]["lat"], g.nodes[n]["lon"]) for n in path]
         fac_hits, fac_total = facility_requirement_score(points, params.need_facilities)
         # Prefer in-tolerance loops with the highest RFS; flat mode also
-        # rewards low cumulative ascent. Otherwise: least distance error.
+        # rewards low cumulative ascent. A hidden followability penalty keeps
+        # the selected course from becoming a maze of tiny bends.
         ascent_per_km = ascent / (length / 1000.0) if length else 0.0
-        quality = -summary["score"] + (0.0 if params.include_hills else 2.0 * ascent_per_km)
+        quality = (
+            -summary["score"]
+            + (0.0 if params.include_hills else 2.0 * ascent_per_km)
+            + followability_penalty(points, length)
+        )
         missing_facilities = fac_total - fac_hits
         key = (
             err > DISTANCE_TOLERANCE,
