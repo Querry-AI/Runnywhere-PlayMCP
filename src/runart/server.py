@@ -27,7 +27,10 @@ from .render import card_svg, course_markdown, preview_html
 from .shapes import generate_shape_course, list_shapes
 from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
 
-BASE_URL = os.environ.get("RUNART_BASE_URL", "http://localhost:8000").rstrip("/")
+BASE_URL = os.environ.get(
+    "RUNART_BASE_URL",
+    "https://runnywhere.playmcp-endpoint.kakaocloud.io",
+).rstrip("/")
 
 mcp = FastMCP(
     "RunArt",
