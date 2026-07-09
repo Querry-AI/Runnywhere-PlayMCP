@@ -10,6 +10,7 @@ The API key never appears in logs, responses, or errors (PRD §8).
 import functools
 import json
 import os
+import re
 import ssl
 import urllib.parse
 import urllib.request
@@ -20,6 +21,14 @@ _LOCAL_SEARCH_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 _ADDRESS_SEARCH_URL = "https://dapi.kakao.com/v2/local/search/address.json"
 _TIMEOUT_S = 1.0
 _SEOUL_BOUNDS = (37.4, 37.72, 126.76, 127.19)
+_SEOUL_DISTRICTS = (
+    "강남구", "강동구", "강북구", "강서구", "관악구", "광진구", "구로구", "금천구",
+    "노원구", "도봉구", "동대문구", "동작구", "마포구", "서대문구", "서초구", "성동구",
+    "성북구", "송파구", "양천구", "영등포구", "용산구", "은평구", "종로구", "중구", "중랑구",
+)
+_ROAD_DISTRICT_HINTS = {
+    "테헤란로": "강남구",
+}
 
 try:
     import certifi
@@ -128,6 +137,39 @@ def _address_search(query: str) -> tuple[float, float, str] | None:
     return None
 
 
+def _address_query_variants(query: str) -> list[str]:
+    """Natural Korean address variants for Kakao address search.
+
+    Users often omit "서울특별시 강남구" or type road-name suffixes with a
+    space ("테헤란로 8길 8"). Kakao address search is stricter, so we try a
+    small deterministic set of safer Seoul-prefixed variants.
+    """
+    q = " ".join(query.strip().split())
+    if not q:
+        return []
+    compact_road = re.sub(r"([가-힣]+(?:로|길))\s+(\d+(?:로|길))", r"\1\2", q)
+    compact_road = re.sub(r"([가-힣]+(?:로|길)\d+(?:로|길))\s+(\d+)", r"\1 \2", compact_road)
+
+    variants = [q, compact_road]
+    has_seoul = q.startswith(("서울 ", "서울시", "서울특별시"))
+    has_district = any(d in q for d in _SEOUL_DISTRICTS)
+    for road, district in _ROAD_DISTRICT_HINTS.items():
+        if road in compact_road and not has_district:
+            variants.append(f"{district} {compact_road}")
+            variants.append(f"서울특별시 {district} {compact_road}")
+            break
+    if not has_seoul:
+        variants.append(f"서울특별시 {compact_road}")
+
+    out = []
+    seen = set()
+    for v in variants:
+        if v and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
 def resolve_location(location: str | None, lat: float | None, lon: float | None,
                      ) -> tuple[float, float, str]:
     if lat is not None and lon is not None:
@@ -142,9 +184,10 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
         hit = _keyword_search(location.strip())
         if hit:
             return hit
-        hit = _address_search(location.strip())
-        if hit:
-            return hit
+        for query in _address_query_variants(location):
+            hit = _address_search(query)
+            if hit:
+                return hit
         known = "시청, 강남역, 여의도한강공원, 서울숲, 석촌호수, 올림픽공원, 서울시 중구 세종대로 110"
         raise CourseError(
             f"'{location}' 위치를 찾지 못했어요. 좌표(위도/경도)로 알려주시거나 "

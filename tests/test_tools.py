@@ -1,6 +1,7 @@
 """Tool-level tests: call the underlying functions the MCP tools wrap."""
 
 from runart import server
+from runart.geocode import _address_query_variants
 from runart.models import CourseParams, encode_course_id
 
 CITY_HALL = dict(location="시청")
@@ -23,6 +24,13 @@ def test_requested_facility_is_reflected_in_course():
                                          need_facilities=["restroom"])
     assert "경유:" in out
     assert "화장실" in out
+
+
+def test_short_address_variants_expand_to_full_seoul_address():
+    variants = _address_query_variants("테헤란로 8길 8")
+    assert "테헤란로8길 8" in variants
+    assert "강남구 테헤란로8길 8" in variants
+    assert "서울특별시 강남구 테헤란로8길 8" in variants
 
 
 def test_animal_course_includes_share_link():
