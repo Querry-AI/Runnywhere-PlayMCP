@@ -15,6 +15,8 @@ from .models import encode_course_id, encode_shape_token
 from .rfs import COMPONENT_LABELS_KO, edge_rfs
 from .shapes import SHAPES
 
+PREVIEW_FACILITY_TYPES = {"convenience_store", "restroom"}
+
 
 def course_markdown(course: Course, base_url: str, facilities: list[dict]) -> str:
     p = course.params
@@ -139,28 +141,36 @@ def _score_breakdown_html(course: Course) -> str:
     if not comps or not weights:
         return ""
     rows = []
-    for key in ("sidewalk", "slope", "lighting", "cctv", "park", "crossing"):
+    order = ("slope", "crossing", "lighting", "sidewalk", "cctv", "park")
+    for key in order:
         value = float(comps.get(key, 0.5))
         weight = float(weights.get(key, 0.0))
+        label = "훈련 언덕" if key == "slope" and course.params.include_hills else COMPONENT_LABELS_KO[key]
         rows.append(
             f'<div class="metric">'
-            f'<div class="metric-top"><span>{COMPONENT_LABELS_KO[key]}</span>'
+            f'<div class="metric-top"><span>{label}</span>'
             f'<span>{round(value * 100)}점 · {round(weight * 100)}%</span></div>'
             f'<div class="bar"><i style="width:{max(3, round(value * 100))}%"></i></div>'
             f'</div>'
         )
-    return '<section class="panel"><h3>러닝 친화도 산정</h3>' + "".join(rows) + "</section>"
+    return (
+        '<section class="panel"><h3>러닝 친화도 산정</h3>'
+        '<p class="hint">경사가 낮고 보행 신호가 적을수록 점수가 높아집니다. '
+        '야간 코스는 가로등과 안심 요소의 비중을 더 크게 봅니다.</p>'
+        + "".join(rows) + "</section>"
+    )
 
 
 def _course_fact_html(course: Course, facilities: list[dict]) -> str:
     signals = infra_count_along(course.points, "pedestrian_signal")
     streetlights = infra_count_along(course.points, "streetlight")
-    restroom_count = sum(1 for f in facilities if f["type"] == "restroom")
-    convenience_count = sum(1 for f in facilities if f["type"] == "convenience_store")
+    preview_facilities = [f for f in facilities if f["type"] in PREVIEW_FACILITY_TYPES]
+    restroom_count = sum(1 for f in preview_facilities if f["type"] == "restroom")
+    convenience_count = sum(1 for f in preview_facilities if f["type"] == "convenience_store")
     light_gap = round(course.length_m / streetlights) if streetlights else None
     light_text = f"약 {light_gap}m마다" if light_gap else "정보 없음"
     items = [
-        ("횡단 신호", f"{signals}개"),
+        ("보행 신호", f"{signals}개"),
         ("가로등 간격", light_text),
         ("편의점", f"{convenience_count}개"),
         ("화장실", f"{restroom_count}개"),
@@ -172,12 +182,13 @@ def _course_fact_html(course: Course, facilities: list[dict]) -> str:
     return (
         '<section class="panel"><h3>러너 체크포인트</h3>'
         f'<div class="facts">{cells}</div>'
-        '<p class="hint">코스 100m 반경의 서울시/OSM 시설 포인트 기준입니다.</p>'
+        '<p class="hint">코스 100m 반경 기준입니다. 편의점과 화장실만 집계하며 음수대와 공원은 제외합니다.</p>'
         '</section>'
     )
 
 
 def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
+    facilities = [f for f in facilities if f["type"] in PREVIEW_FACILITY_TYPES]
     p = course.params
     cid = encode_course_id(p)
     shape = SHAPES.get(p.shape) if p.shape else None
@@ -186,7 +197,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
     )
     og_desc = html.escape(
         f"러닝 친화도 {course.rfs['score']}/100 · 누적 오르막 {course.ascent_m:.0f}m"
-        f" · {p.location_name or '서울'} — RunArt(런아트)"
+        f" · {p.location_name or '서울'} — 러니웨어"
     )
     segments = json.dumps(_segments_with_rfs(course))
     km_markers = json.dumps(_km_markers(course))
@@ -209,8 +220,8 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
     )
     return f"""<!DOCTYPE html><html lang="ko"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RunArt — {title}</title>
-<meta property="og:title" content="RunArt — {title}">
+<title>러니웨어 — {title}</title>
+<meta property="og:title" content="러니웨어 — {title}">
 <meta property="og:description" content="{og_desc}">
 <meta property="og:image" content="{base_url}/c/{cid}/card.svg">
 <meta property="og:type" content="website">
@@ -264,7 +275,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
   실거리 {course.length_km:.2f}km · 누적 오르막 {course.ascent_m:.0f}m ({course.grade_label}) ·
   예상 {course.duration_range_min[0]}~{course.duration_range_min[1]}분
  </div>
- <p class="legend">초록 구간일수록 보도·경사·조명·안심 요소가 좋은 길입니다.</p>
+ <p class="legend">초록 구간일수록 경사가 낮고 보행 신호가 적으며, 조명·보도·안심 요소가 좋은 길입니다.</p>
  {profile_svg}
  <div>
   <a class="btn" href="{base_url}/c/{cid}.gpx">⬇️ GPX 다운로드</a>
@@ -273,13 +284,13 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
 </div>
 {course_facts}
 {score_breakdown}
-<section class="panel"><h3>코스 주변 편의시설</h3>
+<section class="panel"><h3>코스 주변 편의점·화장실</h3>
  <div class="facility-list">
-  {''.join(f'<span class="chip">{LABELS_KO[f["type"]]} · {f["at_km"]:g}km</span>' for f in facilities[:10]) or '<span class="chip">100m 반경 편의시설 없음</span>'}
+  {''.join(f'<span class="chip">{LABELS_KO[f["type"]]} · {f["at_km"]:g}km</span>' for f in facilities[:10]) or '<span class="chip">100m 반경 편의점·화장실 없음</span>'}
  </div>
 </section>
 </div>
-<footer>RunArt(런아트) · 데이터: OpenStreetMap, SRTM, 서울열린데이터광장 (스냅숏 기준) ·
+<footer>러니웨어 · 데이터: OpenStreetMap, SRTM, 서울열린데이터광장 (스냅숏 기준) ·
 위치 정보는 저장되지 않습니다</footer>
 <script>
  const segs = {segments};

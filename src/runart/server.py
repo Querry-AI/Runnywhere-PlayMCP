@@ -296,7 +296,7 @@ async def preview(request: Request) -> Response:
         name = (params.location_name or "RunArt") + f" {course.length_km:.1f}km"
         return Response(to_gpx(name, course.points), media_type="application/gpx+xml",
                         headers={"Content-Disposition": f'attachment; filename="runart-{cid[:12]}.gpx"'})
-    facs = facilities_along(course.points, None, limit=80)
+    facs = facilities_along(course.points, ["convenience_store", "restroom"], limit=80)
     return HTMLResponse(preview_html(course, facs, BASE_URL))
 
 

@@ -28,11 +28,11 @@ HILL_SWEET_LO, HILL_SWEET_HI = 3.0, 8.0
 
 COMPONENT_LABELS_KO = {
     "sidewalk": "보도 넓음",
-    "slope": "평탄함",
+    "slope": "낮은 경사",
     "lighting": "조명 양호",
     "cctv": "안심 CCTV",
-    "park": "공원·강변길",
-    "crossing": "횡단 적음",
+    "park": "녹지·강변길",
+    "crossing": "보행 신호 적음",
 }
 
 
@@ -89,7 +89,7 @@ def route_rfs_summary(
     highlights = [COMPONENT_LABELS_KO[k] for k, v in top if v >= 0.6]
     park_ratio = park_len / total_len
     if park_ratio >= 0.3:
-        highlights.insert(0, f"공원·강변길 {park_ratio:.0%}")
+        highlights.insert(0, f"녹지·강변길 {park_ratio:.0%}")
         highlights = [h for h in highlights if h != COMPONENT_LABELS_KO["park"]]
     score01 = score_len / total_len
     return {
