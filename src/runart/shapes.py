@@ -44,7 +44,7 @@ FALLBACK_SCALES = (0.75, 0.85, 0.65, 0.95, 0.55, 1.05, 1.15, 0.45, 1.25)
 # Numeric "cute & simple" spec (user-provided targets):
 MAX_SHAPE_DISTANCE_ERROR = 0.10   # 목표 거리 오차 ±10%
 MIN_ANCHORS = 8                   # authored feature corners; routing may add smooth outline guides
-MAX_ANCHORS = 48                  # reference similarity now wins over the old 12-point cap
+MAX_ANCHORS = 32                  # fewer anchors = fewer forced corners = straighter strokes
 BACKTRACK_MAX_FRAC = 0.20         # 왕복(같은 도로 되짚기) 구간 20% 이하
 OUTLINE_MIN_FRAC = 0.70           # 전체 루트의 70% 이상은 큰 외곽선(완만한 구간)
 SHARP_TURN_DEG = 100.0            # 이보다 큰 방향 전환은 "꺾는 곳"(귀/꼬리/다리 코너)으로 취급
@@ -105,47 +105,45 @@ SHAPES: dict[str, ShapeSpec] = {
         # the shape diameter deep, like the reference GPS-art routes.
         ShapeSpec(
             "rabbit", "토끼", "🐰", 3.0,
-            # Two wide, fully separated ears (notch ~36% of height), round
-            # plump body, short face and feet.
-            _closed([(0.0, 2.6), (0.5, 3.6), (1.4, 3.9), (1.2, 6.6),
-                     (2.0, 6.7), (2.1, 4.2), (2.7, 6.5), (3.5, 6.3),
-                     (3.2, 3.8), (4.2, 3.2), (4.0, 2.0), (4.4, 0.0),
-                     (3.0, 0.1), (1.2, 0.0), (0.3, 1.2)]),
+            # Blocky reference style: one rectangular body/head block with two
+            # tall rectangular ears. Every segment is axis-aligned so the
+            # route runs straight along whole streets instead of staircasing.
+            _closed([(0.0, 0.0), (3.4, 0.0), (3.4, 4.2), (2.9, 4.2),
+                     (2.9, 7.0), (2.1, 7.0), (2.1, 4.2), (1.3, 4.2),
+                     (1.3, 7.0), (0.5, 7.0), (0.5, 4.2), (0.0, 4.2)]),
         ),
         ShapeSpec(
             "cat", "고양이", "🐱", 3.0,
-            # Reference standing side profile: oversized round head on the
-            # left, two separated triangle ears, long low body, three short
-            # legs and an exaggerated tail rising at the far right.
-            _closed([(0.4, 4.2), (0.6, 5.7), (1.3, 5.0), (2.0, 5.8),
-                     (2.3, 4.7), (3.0, 4.4), (6.6, 4.4), (7.0, 4.8),
-                     (7.8, 6.0), (8.4, 5.6), (7.8, 4.0), (7.2, 3.7),
-                     (7.2, 0.0), (6.3, 0.0), (6.3, 2.0), (5.4, 2.0),
-                     (5.3, 0.0), (4.4, 0.0), (4.4, 2.0), (3.4, 2.0),
-                     (3.3, 0.0), (2.4, 0.0), (2.4, 2.2), (1.8, 2.7),
-                     (0.5, 3.0), (0.0, 3.5)]),
+            # Blocky reference style: big square head with two rectangular
+            # ears, one rectangular body, two short legs and an L-shaped
+            # raised tail. Fully axis-aligned — diagonal ear/tail strokes
+            # staircase across Seoul's grid and destroy the silhouette.
+            _closed([(0.0, 2.2), (0.0, 6.8), (0.9, 6.8), (0.9, 5.4),
+                     (2.1, 5.4), (2.1, 6.8), (3.0, 6.8), (3.0, 4.0),
+                     (6.8, 4.0), (6.8, 5.9), (7.8, 5.9), (7.8, 0.0),
+                     (6.8, 0.0), (6.8, 1.8), (4.2, 1.8), (4.2, 0.0),
+                     (3.2, 0.0), (3.2, 2.2)]),
         ),
         ShapeSpec(
             "dog", "강아지", "🐶", 5.0,
-            # Reference-like puppy, read as one clean outer silhouette:
-            # oversized round head at left, unmistakable short muzzle and
-            # one ear, a broad low body, two short legs and a compact raised
-            # tail. The head is deliberately almost as large as the torso;
-            # extra anatomical detail only creates street-grid zigzags.
-            _closed([(7.2, 4.4), (7.8, 5.0), (8.5, 5.8), (8.4, 4.6),
-                     (7.6, 4.1), (4.0, 4.5), (3.4, 5.0), (3.0, 6.2),
-                     (2.1, 5.9), (2.2, 5.0), (1.3, 4.9), (0.6, 4.5),
-                     (0.0, 3.9), (0.2, 3.3), (1.1, 3.1), (1.6, 2.5),
-                     (3.0, 2.4), (3.1, 0.5), (4.0, 0.4), (4.1, 2.3),
-                     (6.2, 2.2), (6.3, 0.4), (7.2, 0.5), (7.3, 2.5)]),
+            # Reference GPS-art dog: big blocky head on the left, one tall
+            # ear, a broad rectangular body, two short legs and a raised tail.
+            # Keep it as a simple outer contour; small anatomy makes map
+            # routes jagged and less like the supplied reference.
+            _closed([(0.2, 3.1), (0.2, 4.6), (1.4, 4.8), (1.7, 6.2),
+                     (2.3, 4.9), (3.2, 4.8), (3.0, 3.6), (5.9, 3.7),
+                     (6.4, 4.6), (7.0, 4.0), (6.1, 3.2), (6.2, 1.6),
+                     (5.2, 1.6), (5.2, 0.5), (4.4, 0.5), (4.3, 1.7),
+                     (2.7, 1.7), (2.7, 0.5), (1.9, 0.5), (1.8, 1.8),
+                     (0.8, 2.0), (0.8, 3.0)]),
         ),
         ShapeSpec(
             "whale", "고래", "🐳", 3.0,
-            # Long oval body, narrow tail stock and an oversized V fluke
-            # (each lobe ~45% of body height).
-            _closed([(0.0, 1.4), (0.4, 3.0), (3.6, 3.5), (6.2, 2.9),
-                     (6.9, 2.3), (8.3, 4.0), (8.0, 2.1), (9.3, 0.9),
-                     (7.1, 1.2), (5.0, 0.3), (1.8, 0.0), (0.3, 0.5)]),
+            # Blocky reference style: one long body block, narrow tail stock
+            # and an oversized V fluke — 10 points, mostly straight strokes.
+            _closed([(0.0, 0.4), (0.4, 3.0), (5.8, 3.0), (6.4, 1.9),
+                     (8.2, 3.6), (7.8, 1.7), (9.0, 0.2), (6.8, 1.0),
+                     (5.4, 0.0), (0.6, 0.0)]),
         ),
         ShapeSpec(
             "giraffe", "기린", "🦒", 6.0,
@@ -168,17 +166,19 @@ SHAPE_STYLES: dict[str, ShapeStyle] = {
     "cat": ShapeStyle(
         rotations=SIDE_PROFILE_ROTATIONS,
         scales=(0.9, 1.0, 0.85, 0.8, 1.1, 0.75),
-        similarity_gate=0.78,
+        # Slightly lower than dog: the L-shaped tail and rear leg share street
+        # columns, which costs a few similarity points even on clean grids.
+        similarity_gate=0.72,
         outline_min_frac=0.66,
-        max_sharp_turns=5,
+        max_sharp_turns=6,
         corridor_frac=0.075,
-        aspect_min=1.20,
-        aspect_max=2.20,
-        simplicity_weight=0.030,
-        zigzag_weight=0.050,
+        aspect_min=1.05,
+        aspect_max=2.00,
+        simplicity_weight=0.040,
+        zigzag_weight=0.070,
     ),
     "dog": ShapeStyle(
-        rotations=(0, 15, 345, 30, 330, 45, 315),
+        rotations=SIDE_PROFILE_ROTATIONS,
         scales=(0.9, 0.85, 1.0, 0.8, 1.1, 0.75),
         similarity_gate=0.78,
         outline_min_frac=0.72,
@@ -196,24 +196,24 @@ SHAPE_STYLES: dict[str, ShapeStyle] = {
         outline_min_frac=0.66,
         max_sharp_turns=5,
         corridor_frac=0.075,
-        aspect_min=0.45,
-        aspect_max=0.95,
-        simplicity_weight=0.032,
-        zigzag_weight=0.050,
+        aspect_min=0.35,
+        aspect_max=0.75,
+        simplicity_weight=0.040,
+        zigzag_weight=0.070,
     ),
-    # Whale can be tilted like the references: a simple body + V tail reads
-    # even when rotated, and it fits rivers/large roads better with freedom.
+    # Whale keeps a little tilt freedom: a simple body + V fluke still reads
+    # rotated, and it fits rivers/large roads better with shallow diagonals.
     "whale": ShapeStyle(
-        rotations=DIAGONAL_ROTATIONS,
+        rotations=(0, 15, 345, 30, 330),
         scales=(0.9, 1.0, 0.85, 0.8, 1.1, 0.75, 1.15),
         similarity_gate=0.76,
         outline_min_frac=0.75,
         max_sharp_turns=4,
         corridor_frac=0.09,
         aspect_min=1.70,
-        aspect_max=3.00,
-        simplicity_weight=0.028,
-        zigzag_weight=0.045,
+        aspect_max=3.20,
+        simplicity_weight=0.040,
+        zigzag_weight=0.065,
     ),
     "giraffe": ShapeStyle(
         rotations=(0, 10, 350, 15, 345),
@@ -646,6 +646,12 @@ def main_road_cost(attrs: dict) -> float:
     return factor
 
 
+def _road_weight(u, v, attrs) -> float:
+    """Dijkstra weight that prefers broad main streets over alleys, so the
+    silhouette strokes run straight along big walkable roads."""
+    return attrs["length"] * main_road_cost(attrs)
+
+
 def main_road_badness(g, path: list) -> float:
     """Length-weighted penalty for alley-like streets in the final trace."""
     total = 0.0
@@ -811,7 +817,7 @@ def _snap_shape_anchors(g, anchors_xy: list[tuple[float, float]],
 def _densify_route_guides(g, major_nodes: list,
                           major_anchors: list[tuple[float, float]],
                           major_snaps: list[float], lat0: float, lon0: float,
-                          step_m: float = 80.0
+                          step_m: float = 95.0
                           ) -> tuple[list, list[tuple[float, float]], list[float]]:
     """Add hidden road-following guides along long silhouette edges.
 
@@ -866,7 +872,9 @@ def _corridor_route(g, node_xy, a, b, seg_a, seg_b, corridor_m: float) -> list:
         d = (lateral(node_xy[u]) + lateral(node_xy[v])) * 0.5
         if d > ribbon:
             return None  # hidden edge — stay inside the ribbon
-        return attrs["length"] * (1.0 + 16.0 * (d / ribbon) ** 2)
+        # Main-road preference inside the ribbon: given several streets that
+        # trace the same silhouette stroke, take the broad straight one.
+        return attrs["length"] * main_road_cost(attrs) * (1.0 + 16.0 * (d / ribbon) ** 2)
 
     return nx.bidirectional_dijkstra(g, a, b, weight=weight)[1]
 
@@ -894,7 +902,7 @@ def _route_loop(g, nodes: list, anchors_xy: list, node_xy: dict | None,
             # must not kill the whole candidate: route just that segment
             # freely and keep the rest of the outline corridor-following.
         if seg is None:
-            seg = nx.bidirectional_dijkstra(g, a, b, weight="length")[1]
+            seg = nx.bidirectional_dijkstra(g, a, b, weight=_road_weight)[1]
         path.extend(seg if not path else seg[1:])
     return _strip_backtracks(path)
 
@@ -957,7 +965,7 @@ def _evaluate(g, params: CourseParams, path: list, anchors_xy: list,
         sim
         - style.simplicity_weight * follow
         - style.zigzag_weight * zigzag_badness
-        - 0.06 * road_badness
+        - 0.12 * road_badness
     )
     key = (
         self_intersects,
@@ -1010,9 +1018,9 @@ def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
         aspect_min=0.75,
         aspect_max=2.50,
     )
-    # 18-28 outline samples preserve the same simple authored silhouette while
-    # preventing long edges from being replaced by arbitrary street shortcuts.
-    n_anchor = max(18, min(MAX_ANCHORS, int(target_m / 220)))
+    # Sparse outline samples keep long back/belly strokes as single straight
+    # road segments; corridor routing (not extra anchors) protects the shape.
+    n_anchor = max(14, min(MAX_ANCHORS, int(target_m / 260)))
     source = outline or spec.outline
     template = _resample_keep_corners(source, n_anchor)
     base_scale = target_m / _outline_length(list(source) + [source[0]])

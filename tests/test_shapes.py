@@ -119,33 +119,35 @@ def test_templates_keep_species_ratio_contracts():
         return max(xs) - min(xs), max(ys) - min(ys)
 
     cat_w, cat_h = bbox("cat")
-    assert 0.10 <= (5.8 - 5.0) / cat_h <= 0.25    # ear notch depth
-    assert 0.12 <= (8.4 - 7.0) / cat_w <= 0.25    # raised tail reach
-    assert 0.22 <= 2.4 / cat_w <= 0.35             # oversized head width
+    assert 0.10 <= (6.8 - 5.4) / cat_h <= 0.30    # ear notch depth
+    assert 0.12 <= (5.9 - 4.0) / cat_h <= 0.35    # raised tail height
+    assert 0.25 <= 3.0 / cat_w <= 0.45             # oversized head width
 
     dog_w, dog_h = bbox("dog")
-    assert 0.25 <= 1.9 / dog_h <= 0.45            # short leg depth
-    assert 0.10 <= 1.1 / dog_w <= 0.20            # short muzzle reach
-    assert 0.15 <= (6.2 - 5.0) / dog_h <= 0.30    # compact ear height
-    assert 0.30 <= 3.0 / dog_w <= 0.42            # oversized head width
+    assert 0.18 <= 1.3 / dog_h <= 0.35            # short leg depth
+    assert 0.30 <= 2.8 / dog_w <= 0.50            # oversized blocky head
+    assert 0.20 <= (6.2 - 4.9) / dog_h <= 0.35    # tall reference-like ear
+    assert 0.35 <= (5.9 - 3.0) / dog_w <= 0.55    # broad rectangular body
 
     whale_w, whale_h = bbox("whale")
     assert 0.35 <= whale_h / whale_w <= 0.50
-    assert 0.30 <= (4.0 - 2.1) / whale_h <= 0.60  # fluke lobe depth
+    assert 0.30 <= (3.6 - 1.7) / whale_h <= 0.60  # fluke lobe depth
 
     rabbit_w, rabbit_h = bbox("rabbit")
-    assert 0.30 <= (6.7 - 4.2) / rabbit_h <= 0.50  # ear separation depth
-    assert 0.12 <= (2.0 - 1.2) / rabbit_w <= 0.30  # each ear is a wide loop
+    assert 0.30 <= (7.0 - 4.2) / rabbit_h <= 0.50  # ear separation depth
+    assert 0.12 <= (1.3 - 0.5) / rabbit_w <= 0.30  # each ear is a wide loop
 
 
 def test_dog_prioritizes_simple_reference_outline():
     dog = SHAPE_STYLES["dog"]
     cat = SHAPE_STYLES["cat"]
 
-    assert dog.simplicity_weight > cat.simplicity_weight
-    assert dog.zigzag_weight > cat.zigzag_weight
-    assert 30 in dog.rotations and 45 in dog.rotations
-    assert len(SHAPES["dog"].outline) <= 26
+    assert dog.simplicity_weight >= cat.simplicity_weight
+    assert dog.zigzag_weight >= cat.zigzag_weight
+    # Blocky axis-aligned templates must stay near-upright: steep tilts turn
+    # straight strokes into staircases on Seoul's mostly axis-aligned grid.
+    assert all(r in (0, 15, 345) for r in dog.rotations)
+    assert len(SHAPES["dog"].outline) <= 24
 
 
 def test_small_zigzag_penalty_detects_staircase_noise():
