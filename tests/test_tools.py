@@ -8,6 +8,7 @@ from runart.geocode import (
 )
 from runart.stations import SEOUL_METRO_STATIONS
 from runart.models import CourseParams, encode_course_id
+from runart.shapes import SHAPES, SHAPE_STYLES, find_min_clean_course
 
 CITY_HALL = dict(location="시청")
 
@@ -106,7 +107,27 @@ def test_chosen_animal_without_distance_uses_verified_minimum():
         assert "/s/whale-" in out
 
 
+def test_survey_result_is_reused_when_user_selects_animal(monkeypatch):
+    server._animal_recommendation_cache.clear()
+    lat, lon, name = resolve_location("시청", None, None)
+    course = find_min_clean_course(CourseParams(
+        lat=lat, lon=lon, location_name=name,
+        distance_km=SHAPES["whale"].min_km, shape="whale"),
+        per_try_s=1.5, total_budget_s=8.0)
+    assert course is not None
+    server._cache_animal_recommendation(course)
+
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("cached recommendation should avoid regeneration")
+
+    monkeypatch.setattr(server, "_offload", should_not_run)
+    out = server.generate_animal_course(shape="whale", **CITY_HALL)
+    assert "11km 이내 최상 코스" in out
+
+
 def test_animal_timeout_returns_actionable_guidance(monkeypatch):
+    server._animal_recommendation_cache.clear()
+
     def timeout(*args, **kwargs):
         raise server._GenerationTimeout
 
@@ -117,6 +138,17 @@ def test_animal_timeout_returns_actionable_guidance(monkeypatch):
     assert "불가능" not in out
     assert "한 번 더 시도" in out
     assert "동물 코스 추천" in out
+
+
+def test_bounded_animal_generation_falls_back_when_pool_is_unavailable(monkeypatch):
+    monkeypatch.setattr(server, "_get_pool", lambda: None)
+    lat, lon, name = resolve_location("강남역", None, None)
+    params = CourseParams(lat=lat, lon=lon, location_name=name,
+                          distance_km=SHAPES["whale"].min_km, shape="whale")
+    course = server._offload(
+        find_min_clean_course, params, timeout_s=server.ANIMAL_RESPONSE_BUDGET_S)
+    assert course is not None
+    assert course.shape_similarity >= SHAPE_STYLES["whale"].similarity_gate
 
 
 def test_forced_short_animal_returns_choice_survey_not_blob():

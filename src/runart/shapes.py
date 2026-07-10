@@ -1219,8 +1219,13 @@ def _relaxed_style(style: ShapeStyle) -> ShapeStyle:
 def _course_is_usable(params: CourseParams, course: Course | None) -> bool:
     if course is None:
         return False
+    if not course.path or course.path[0] != course.path[-1]:
+        return False
     target_m = params.distance_km * 1000.0
     if abs(course.length_m - target_m) / target_m > MAX_SHAPE_DISTANCE_ERROR:
+        return False
+    g = graphmod.get_graph()
+    if backtrack_fraction(g, course.path) > BACKTRACK_MAX_FRAC:
         return False
     xy = [to_xy(lat, lon, params.lat, params.lon) for lat, lon in course.points]
     return count_self_intersections(xy) == 0
@@ -1308,6 +1313,45 @@ MIN_CLEAN_DISTANCE_STEP_KM = 1.0
 MIN_CLEAN_TRY_BUDGET_S = 0.7
 MIN_CLEAN_TOTAL_BUDGET_S = 2.2  # hard cap across all probed distances
 _MIN_CLEAN_CACHE: dict[tuple, Course | None] = {}
+_MIN_CLEAN_SUCCESS_CACHE: dict[tuple, Course] = {}
+_DISTANCE_SUCCESS_CACHE: dict[tuple, tuple[Course, float]] = {}
+
+# Each silhouette has a scale at which its characteristic features usually
+# survive snapping to Seoul's road grid. Start near that scale instead of
+# spending the whole response budget walking upward from the minimum. The
+# full 3..11km range remains available, and every returned course still has
+# to clear the exact same shape, loop, distance and intersection gates.
+PREFERRED_ANIMAL_DISTANCE_KM = {
+    "dog": 9.0,
+    "cat": 8.0,
+    "whale": 5.0,
+    "rabbit": 8.0,
+}
+
+
+def _distance_probe_order(spec: ShapeSpec, start_km: float) -> list[float]:
+    """Probe likely clean scales first, then cover the remaining range.
+
+    This is an anytime ordering only; it does not relax quality or remove any
+    legal distance from a complete search.
+    """
+    steps = int(round((MAX_ANIMAL_ART_KM - start_km) /
+                      MIN_CLEAN_DISTANCE_STEP_KM))
+    distances = [
+        round(start_km + idx * MIN_CLEAN_DISTANCE_STEP_KM, 1)
+        for idx in range(steps + 1)
+    ]
+    preferred = max(start_km, PREFERRED_ANIMAL_DISTANCE_KM.get(spec.key, start_km))
+    return sorted(distances, key=lambda distance: (abs(distance - preferred), distance))
+
+
+def _search_success_key(params: CourseParams, spec: ShapeSpec,
+                        start_km: float) -> tuple:
+    return (
+        round(params.lat, 4), round(params.lon, 4), spec.key,
+        params.include_hills, params.night_mode,
+        tuple(sorted(params.need_facilities)), round(start_km, 1),
+    )
 
 
 def find_min_clean_course(params: CourseParams,
@@ -1327,13 +1371,15 @@ def find_min_clean_course(params: CourseParams,
     if style is None:
         return None
     start_km = max(spec.min_km, params.distance_km or 0.0)
-    # total_budget_s is part of the key: a short-budget survey probe that finds
-    # nothing must not poison the fuller-budget single-animal lookup for the
-    # same location (they would otherwise share an entry and cache a stale None).
+    success_key = _search_success_key(params, spec, start_km)
+    success = _MIN_CLEAN_SUCCESS_CACHE.get(success_key)
+    if success is not None:
+        return success
+    # Keep budget-specific memoization for completed searches. A timed-out
+    # search is deliberately not cached as None: it proves only that this
+    # attempt ran out of time, not that the road network cannot draw the animal.
     cache_key = (
-        round(params.lat, 4), round(params.lon, 4), spec.key,
-        params.include_hills, params.night_mode,
-        tuple(sorted(params.need_facilities)), round(start_km, 1),
+        *success_key,
         round(per_try_s, 1), round(total_budget_s, 1),
     )
     if cache_key in _MIN_CLEAN_CACHE:
@@ -1341,22 +1387,28 @@ def find_min_clean_course(params: CourseParams,
     if start_km > MAX_ANIMAL_ART_KM:
         _MIN_CLEAN_CACHE[cache_key] = None
         return None
-    steps = int(round((MAX_ANIMAL_ART_KM - start_km) / MIN_CLEAN_DISTANCE_STEP_KM))
     hard_deadline = time.perf_counter() + total_budget_s
     best: Course | None = None
     best_sim = -1.0
-    for idx in range(steps + 1):
+    completed = True
+    for dist in _distance_probe_order(spec, start_km):
         if time.perf_counter() > hard_deadline:
+            completed = False
             break
-        dist = round(start_km + idx * MIN_CLEAN_DISTANCE_STEP_KM, 1)
         probe = params.model_copy(update={"distance_km": dist})
-        course, sim = _search_shape(
-            spec, probe,
-            deadline=min(time.perf_counter() + per_try_s, hard_deadline),
-            rotations=style.rotations, scales=style.scales, style=style)
+        distance_key = (*success_key[:-1], round(dist, 1))
+        cached_distance = _DISTANCE_SUCCESS_CACHE.get(distance_key)
+        if cached_distance is None:
+            course, sim = _search_shape(
+                spec, probe,
+                deadline=min(time.perf_counter() + per_try_s, hard_deadline),
+                rotations=style.rotations, scales=style.scales, style=style)
+        else:
+            course, sim = cached_distance
         if (course is not None and sim >= style.similarity_gate
                 and course.length_km <= MAX_ANIMAL_ART_KM
                 and _course_is_usable(probe, course)):
+            _DISTANCE_SUCCESS_CACHE[distance_key] = (course, sim)
             # Shape clarity is primary. If two candidates are visually close,
             # prefer the shorter one so the recommendation still feels runnable.
             if (sim > best_sim + 0.015
@@ -1368,7 +1420,11 @@ def find_min_clean_course(params: CourseParams,
             # longer distance — stop sweeping instead of burning the budget.
             if best_sim >= GOOD_ENOUGH:
                 break
-    _MIN_CLEAN_CACHE[cache_key] = best
+    if best is not None:
+        _MIN_CLEAN_SUCCESS_CACHE[success_key] = best
+        _MIN_CLEAN_CACHE[cache_key] = best
+    elif completed:
+        _MIN_CLEAN_CACHE[cache_key] = None
     return best
 
 

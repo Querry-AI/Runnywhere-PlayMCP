@@ -60,6 +60,7 @@ _RO = dict(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWo
 # re-asking for an impossible shape answers instantly instead of re-searching.
 _course_cache: dict[str, "Course | CourseError"] = {}
 _CACHE_MAX = 512
+_animal_recommendation_cache: dict[tuple, Course] = {}
 
 
 # ---------- CPU offload (PlayMCP p99 <= 3s) ----------
@@ -126,10 +127,13 @@ def _offload(fn, *args, timeout_s: float | None = None):
                 _POOL = None
         except Exception:  # noqa: BLE001 — pickling/other — degrade to inline
             pass
-    if timeout_s is not None:
-        # A bounded MCP response is more useful than silently falling back to
-        # an unbounded inline search when the process pool is unavailable.
+    if timeout_s is not None and not _intrinsically_bounded(fn):
+        # Never run an unbounded fallback inside an MCP request.
         raise _GenerationTimeout
+    # The course generators enforce their own tighter anytime deadlines. If
+    # the process pool is unavailable (container semaphore limit, transient
+    # worker crash), running these bounded functions inline is preferable to
+    # failing every animal request without attempting a single candidate.
     return fn(*args)
 
 
@@ -162,8 +166,24 @@ def _offload_map(fn, items: dict, timeout_s: float | None = None) -> dict:
         except Exception:  # noqa: BLE001
             pass
     if timeout_s is not None:
-        return {k: _TIMED_OUT for k in items}
+        if not _intrinsically_bounded(fn):
+            return {k: _TIMED_OUT for k in items}
+        deadline = time.monotonic() + timeout_s
+        out = {}
+        for key, value in items.items():
+            if time.monotonic() >= deadline:
+                out[key] = _TIMED_OUT
+                continue
+            out[key] = _inline_or_none(fn, value)
+        return out
     return {k: _inline_or_none(fn, v) for k, v in items.items()}
+
+
+def _intrinsically_bounded(fn) -> bool:
+    """Whether fn has an internal wall-clock deadline below the MCP cap."""
+    while isinstance(fn, functools.partial):
+        fn = fn.func
+    return fn in {generate_course, generate_shape_course, find_min_clean_course}
 
 
 def _inline_or_none(fn, arg):
@@ -214,6 +234,20 @@ def _cache_put(cid: str, value) -> None:
     if len(_course_cache) >= _CACHE_MAX:
         _course_cache.pop(next(iter(_course_cache)))
     _course_cache[cid] = value
+
+
+def _animal_recommendation_key(params: CourseParams) -> tuple:
+    return (
+        round(params.lat, 4), round(params.lon, 4), params.shape,
+        params.include_hills, params.night_mode,
+        tuple(sorted(params.need_facilities)),
+    )
+
+
+def _cache_animal_recommendation(course: Course) -> None:
+    if len(_animal_recommendation_cache) >= _CACHE_MAX:
+        _animal_recommendation_cache.pop(next(iter(_animal_recommendation_cache)))
+    _animal_recommendation_cache[_animal_recommendation_key(course.params)] = course
 
 
 def _build_params(location, lat, lon, distance_km, duration_min, include_hills,
@@ -324,6 +358,7 @@ def _animal_survey(lat: float, lon: float, name: str,
         found_any = True
         cid = encode_course_id(course.params)
         _cache_put(cid, course)
+        _cache_animal_recommendation(course)
         lines.append(
             f"- {spec.emoji} {spec.name_ko}: **추천 {course.length_km:.1f}km** · "
             f"{REFERENCE_FEATURES[key]} · "
@@ -416,12 +451,21 @@ def generate_animal_course(
                              distance_km=SHAPES[shape].min_km, shape=shape,
                              include_hills=include_hills, night_mode=night_mode,
                              need_facilities=need_facilities or [])
+        cached = _animal_recommendation_cache.get(
+            _animal_recommendation_key(probe))
+        if cached is not None:
+            spec = SHAPES[shape]
+            note = (f"{spec.emoji} {spec.name_ko} 모양이 가장 깔끔하게 완성되는 "
+                    f"11km 이내 최상 코스 {cached.length_km:.1f}km로 그렸어요. "
+                    f"{REFERENCE_FEATURES.get(shape, '')}\n")
+            return _serve_course(cached, note)
         try:
             course = _offload(
                 find_min_clean_course, probe, timeout_s=remaining())
         except _GenerationTimeout:
             return _animal_timeout_message(name, shape)
         if course is not None:
+            _cache_animal_recommendation(course)
             spec = SHAPES[shape]
             note = (f"{spec.emoji} {spec.name_ko} 모양이 가장 깔끔하게 완성되는 "
                     f"11km 이내 최상 코스 {course.length_km:.1f}km로 그렸어요. "

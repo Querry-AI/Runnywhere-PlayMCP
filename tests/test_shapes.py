@@ -20,6 +20,7 @@ from runart.shapes import (
     list_shapes,
     ordered_similarity,
     outline_fraction,
+    _distance_probe_order,
     small_zigzag_penalty,
 )
 
@@ -80,6 +81,21 @@ def test_shape_course_prefers_simple_closed_non_intersecting_loop(shape):
     assert MIN_ANCHORS <= len(anchors) <= MAX_ANCHORS
     assert outline_fraction(anchors) >= SHAPE_STYLES[shape].outline_min_frac
     assert backtrack_fraction(graphmod.get_graph(), course.path) <= BACKTRACK_MAX_FRAC
+
+
+def test_final_usable_gate_rejects_open_or_backtracking_route():
+    from runart.course import Course
+    from runart.shapes import _course_is_usable
+
+    g = graphmod.get_graph()
+    a = next(iter(g.nodes))
+    b = next(iter(g.neighbors(a)))
+    params = CourseParams(**CITY_HALL, distance_km=1.0, shape="whale")
+    points = [(g.nodes[n]["lat"], g.nodes[n]["lon"]) for n in (a, b, a)]
+    route = Course(params=params, path=[a, b, a], points=points,
+                   length_m=1000.0, ascent_m=0.0, rfs=50.0,
+                   shape_similarity=1.0)
+    assert not _course_is_usable(params, route)
 
 
 def test_templates_are_full_body_silhouettes():
@@ -152,6 +168,16 @@ def test_dog_prioritizes_simple_reference_outline():
     # straight strokes into staircases on Seoul's mostly axis-aligned grid.
     assert all(r in (0, 15, 345) for r in dog.rotations)
     assert len(SHAPES["dog"].outline) <= 24
+
+
+def test_animal_distance_search_starts_near_feature_preserving_scale():
+    expected_first = {"dog": 9.0, "cat": 8.0, "whale": 5.0, "rabbit": 8.0}
+    for key, expected in expected_first.items():
+        order = _distance_probe_order(SHAPES[key], SHAPES[key].min_km)
+        assert order[0] == expected
+        assert sorted(order) == sorted(set(order))
+        assert min(order) == SHAPES[key].min_km
+        assert max(order) <= 11.0
 
 
 def test_small_zigzag_penalty_detects_staircase_noise():
