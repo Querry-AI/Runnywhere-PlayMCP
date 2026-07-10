@@ -143,6 +143,32 @@ def nearest_node(lat: float, lon: float):
     return best, math.sqrt(best_d2) if best is not None else math.inf
 
 
+def nearby_nodes(lat: float, lon: float, *, limit: int = 6,
+                 max_distance_m: float = 800.0) -> list[tuple[object, float]]:
+    """Nearest node candidates for shape-preserving anchor snapping.
+
+    Ordinary course generation only needs one nearest node. GPS art needs a
+    small choice set: the absolutely nearest intersection can collapse an ear
+    tip or a short leg onto the preceding anchor, while the next intersection
+    preserves the silhouette much better.
+    """
+    buckets = _node_index()
+    ci, cj = _cell(lat, lon)
+    klon = m_per_deg_lon(lat)
+    cell_m = min(_CELL_DEG * M_PER_DEG_LAT, _CELL_DEG * klon)
+    radius = max(1, min(15, int(math.ceil(max_distance_m / max(cell_m, 1.0))) + 1))
+    found: list[tuple[float, object]] = []
+    max_d2 = max_distance_m * max_distance_m
+    for i in range(ci - radius, ci + radius + 1):
+        for j in range(cj - radius, cj + radius + 1):
+            for nlat, nlon, node in buckets.get((i, j), ()):
+                d2 = ((nlat - lat) * M_PER_DEG_LAT) ** 2 + ((nlon - lon) * klon) ** 2
+                if d2 <= max_d2:
+                    found.append((d2, node))
+    found.sort(key=lambda item: item[0])
+    return [(node, math.sqrt(d2)) for d2, node in found[:limit]]
+
+
 def subgraph_around(lat: float, lon: float, radius_m: float):
     """Subgraph view of nodes within a bbox around (lat, lon). Keeps Dijkstra
     local — the whole-Seoul graph is never searched per request (PRD §7.1)."""

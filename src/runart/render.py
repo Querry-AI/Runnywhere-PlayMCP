@@ -11,7 +11,7 @@ from . import graph as graphmod
 from .course import Course, smooth_series
 from .facilities import LABELS_KO
 from .geo import haversine_m, to_xy
-from .infrastructure import infra_count_along
+from .infrastructure import infra_count_along, infra_count_crossed_by_path
 from .models import encode_course_id, encode_shape_token
 from .rfs import COMPONENT_LABELS_KO, edge_rfs
 from .shapes import SHAPES
@@ -35,8 +35,6 @@ def course_markdown(course: Course, base_url: str, facilities: list[dict]) -> st
         f"- 러닝 친화도 {course.rfs['score']}/100 (서울 전체 상위 {course.rfs.get('top_percent', 50)}%)"
         + (" — " + " · ".join(course.rfs["highlights"]) if course.rfs["highlights"] else ""),
     ]
-    if course.shape_similarity is not None:
-        lines.append(f"- 모양 완성도 {course.shape_similarity:.0%}")
     if facilities:
         f_str = ", ".join(
             f"{LABELS_KO[f['type']]}({f['at_km']:g}km)" for f in facilities[:4]
@@ -195,25 +193,8 @@ def _rdp(points_xy: list[tuple[float, float]], keep: list[int], lo: int, hi: int
 
 
 def _shape_only_route(course: Course) -> list[list[float]]:
-    """Display-only simplification for the cute shape view.
-
-    The exact road-following points remain in GPX and guide mode; this layer
-    only removes tiny street wiggles that make GPS art look noisy at a glance.
-    """
-    points = course.points
-    if len(points) <= 3:
-        return [[round(lat, 6), round(lon, 6)] for lat, lon in points]
-    lat0, lon0 = points[0]
-    xy = [to_xy(lat, lon, lat0, lon0) for lat, lon in points]
-    keep = [0, len(points) - 1]
-    tolerance = 35.0 if course.shape_similarity is None else 55.0
-    _rdp(xy, keep, 0, len(points) - 1, tolerance)
-    keep = sorted(set(keep))
-    # Keep the simplified visual cute, but not so sparse that the animal vanishes.
-    if len(keep) < 12 and len(points) > 12:
-        step = max(1, len(points) // 12)
-        keep = sorted(set(keep + list(range(0, len(points), step)) + [len(points) - 1]))
-    return [[round(points[i][0], 6), round(points[i][1], 6)] for i in keep]
+    """The clean view must be the same route as guide mode, just without UI."""
+    return [[round(lat, 6), round(lon, 6)] for lat, lon in course.points]
 
 
 def _score_breakdown_html(course: Course) -> str:
@@ -243,16 +224,15 @@ def _score_breakdown_html(course: Course) -> str:
 
 
 def _course_fact_html(course: Course, facilities: list[dict]) -> str:
-    signals = infra_count_along(course.points, "pedestrian_signal")
+    g = graphmod.get_graph()
+    signals = infra_count_crossed_by_path(g, course.path, "pedestrian_signal")
     streetlights = infra_count_along(course.points, "streetlight")
     preview_facilities = [f for f in facilities if f["type"] in PREVIEW_FACILITY_TYPES]
     restroom_count = sum(1 for f in preview_facilities if f["type"] == "restroom")
     convenience_count = sum(1 for f in preview_facilities if f["type"] == "convenience_store")
-    light_gap = round(course.length_m / streetlights) if streetlights else None
-    light_text = f"약 {light_gap}m마다" if light_gap else "정보 없음"
     items = [
         ("보행 신호", f"{signals}개"),
-        ("가로등 간격", light_text),
+        ("가로등", f"{streetlights}개"),
         ("편의점", f"{convenience_count}개"),
         ("화장실", f"{restroom_count}개"),
     ]
@@ -263,7 +243,7 @@ def _course_fact_html(course: Course, facilities: list[dict]) -> str:
     return (
         '<section class="panel"><h3>러너 체크포인트</h3>'
         f'<div class="facts">{cells}</div>'
-        '<p class="hint">코스 100m 반경 기준입니다. 편의점과 화장실만 집계하며 음수대와 공원은 제외합니다.</p>'
+        '<p class="hint">보행 신호는 실제 경로 선분 1m 이내 기준, 가로등·편의점·화장실은 코스 100m 반경 기준입니다.</p>'
         '</section>'
     )
 
@@ -293,10 +273,6 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
         for f in facilities
     ])
     highlights = html.escape(" · ".join(course.rfs.get("highlights", [])))
-    sim = (
-        f' · 모양 완성도 {course.shape_similarity:.0%}'
-        if course.shape_similarity is not None else ""
-    )
     return f"""<!DOCTYPE html><html lang="ko"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>러니웨어 — {title}</title>
@@ -372,7 +348,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  <h2>{title}</h2>
  <div class="stat">
   <span class="score">러닝 친화도 {course.rfs["score"]}/100</span>
-  · 서울 전체 상위 {course.rfs.get("top_percent", 50)}%{sim}<br>
+  · 서울 전체 상위 {course.rfs.get("top_percent", 50)}%<br>
   {highlights}<br>
   실거리 {course.length_km:.2f}km · 누적 오르막 {course.ascent_m:.0f}m ({course.grade_label}) ·
   예상 {course.duration_range_min[0]}~{course.duration_range_min[1]}분

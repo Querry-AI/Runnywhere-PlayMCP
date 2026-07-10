@@ -5,7 +5,7 @@ import os
 import pickle
 from pathlib import Path
 
-from .geo import haversine_m
+from .geo import haversine_m, to_xy
 
 
 def _data_path(filename: str) -> Path:
@@ -59,5 +59,40 @@ def infra_count_along(points: list[tuple[float, float]], kind: str,
             for j in (cj - 1, cj, cj + 1):
                 for plat, plon in buckets.get((i, j), ()):
                     if haversine_m(lat, lon, plat, plon) <= radius_m:
+                        seen.add((round(plat, 6), round(plon, 6)))
+    return len(seen)
+
+
+def _point_segment_distance_m(p: tuple[float, float],
+                              a: tuple[float, float],
+                              b: tuple[float, float]) -> float:
+    px, py = to_xy(p[0], p[1], a[0], a[1])
+    bx, by = to_xy(b[0], b[1], a[0], a[1])
+    denom = bx * bx + by * by
+    t = 0.0 if denom == 0 else max(0.0, min(1.0, (px * bx + py * by) / denom))
+    return ((px - t * bx) ** 2 + (py - t * by) ** 2) ** 0.5
+
+
+def infra_count_crossed_by_path(graph, path: list, kind: str,
+                                radius_m: float = 1.0) -> int:
+    """Unique infra points close to the actual route edges.
+
+    Used for pedestrian signals: this avoids counting every signal merely
+    near sampled route points and instead approximates signals the runner
+    actually crosses/passes on the route geometry.
+    """
+    buckets = _infra_buckets().get(kind, {})
+    seen = set()
+    for u, v in zip(path, path[1:]):
+        a = (graph.nodes[u]["lat"], graph.nodes[u]["lon"])
+        b = (graph.nodes[v]["lat"], graph.nodes[v]["lon"])
+        lat_min, lat_max = sorted((a[0], b[0]))
+        lon_min, lon_max = sorted((a[1], b[1]))
+        ci0, ci1 = int(lat_min / _CELL) - 1, int(lat_max / _CELL) + 1
+        cj0, cj1 = int(lon_min / _CELL) - 1, int(lon_max / _CELL) + 1
+        for i in range(ci0, ci1 + 1):
+            for j in range(cj0, cj1 + 1):
+                for plat, plon in buckets.get((i, j), ()):
+                    if _point_segment_distance_m((plat, plon), a, b) <= radius_m:
                         seen.add((round(plat, 6), round(plon, 6)))
     return len(seen)

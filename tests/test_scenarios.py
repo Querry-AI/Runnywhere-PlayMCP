@@ -36,10 +36,10 @@ def test_p2_trainer_hills():
 
 # P3 재미/SNS: 동물 모양 + 공유
 def test_p3_gps_art_share():
-    out = server.generate_animal_course(shape="whale", location="강남역",
-                                        distance_km=5)
+    out = server.generate_animal_course(shape="whale", location="강남역")
     assert _is_course(out)
-    assert "/s/whale-5k" in out and "모양 완성도" in out
+    assert "/s/whale-" in out
+    assert "모양 완성도" not in out
 
 
 # P4 야간 러너: 야간 안전 모드

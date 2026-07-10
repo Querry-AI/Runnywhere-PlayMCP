@@ -25,6 +25,7 @@ WEIGHTS_NIGHT = {
 
 FLAT_MAX_SLOPE_PCT = 3.0
 HILL_SWEET_LO, HILL_SWEET_HI = 3.0, 8.0
+SCORE_FLOOR = 0.25
 
 COMPONENT_LABELS_KO = {
     "sidewalk": "보도 넓음",
@@ -57,7 +58,11 @@ def edge_rfs(attrs: dict, night_mode: bool = False, include_hills: bool = False)
         "park": attrs.get("park_score", 0.0),
         "crossing": attrs.get("crossing_score", 0.5),
     }
-    return sum(w[k] * v for k, v in components.items())
+    raw = sum(w[k] * v for k, v in components.items())
+    # Seoul open-data coverage is patchy by segment. Keep relative ordering,
+    # but avoid presenting otherwise runnable routes as harshly low-scored
+    # just because one component has sparse or conservative source data.
+    return SCORE_FLOOR + (1.0 - SCORE_FLOOR) * raw
 
 
 def route_rfs_summary(
@@ -128,9 +133,9 @@ def weight_value(attrs: dict, night_mode: bool, include_hills: bool) -> float:
     so equal-length friendlier edges win (PRD §5.3). Flat mode adds an
     explicit grade penalty — the RFS slope term alone is too soft to steer a
     loop around a hill."""
-    cost = 1.0 + 1.5 * (1.0 - edge_rfs(attrs, night_mode, include_hills))
+    cost = 1.0 + 1.0 * (1.0 - edge_rfs(attrs, night_mode, include_hills))
     if not include_hills:
-        cost += 0.35 * max(0.0, attrs.get("slope_pct", 2.0) - 1.0)
+        cost += 0.22 * max(0.0, attrs.get("slope_pct", 2.0) - 1.0)
     return attrs["length"] * cost
 
 
