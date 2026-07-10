@@ -158,4 +158,19 @@ def test_no_kakao_in_tool_names():
         assert t.annotations.readOnlyHint is True
         assert t.annotations.destructiveHint is False
         assert len(t.description) <= 1024
-        assert "RunArt" in t.description
+        assert "Runnywhere" in t.description
+
+
+def test_mcp_tools_match_playmcp_required_annotations():
+    import asyncio
+    tools = asyncio.run(server.mcp.list_tools())
+    names = [tool.name for tool in tools]
+    assert len(names) == len(set(names))
+    assert 3 <= len(names) <= 10
+    for tool in tools:
+        assert 1 <= len(tool.name) <= 128
+        assert all(c.isascii() and (c.isalnum() or c in "_-") for c in tool.name)
+        assert tool.inputSchema
+        assert tool.annotations.title
+        assert tool.annotations.openWorldHint is False
+        assert tool.annotations.idempotentHint is True

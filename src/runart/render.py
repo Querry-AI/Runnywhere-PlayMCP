@@ -295,6 +295,10 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
  body{{margin:0;font-family:-apple-system,'Apple SD Gothic Neo',sans-serif;color:#17201b;background:#f5f7f3}}
+ .brand{{height:54px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;
+      background:#fff;border-bottom:1px solid #e2e7df;box-sizing:border-box}}
+ .brand strong{{font-size:18px;color:#142018}}
+ .brand span{{font-size:12px;color:#66726a}}
  #map{{height:58vh;min-height:380px;background:#e8ece5}}
  .leaflet-control-attribution{{font-size:10px}}
  .map-hud{{position:absolute;z-index:500;left:14px;right:14px;top:14px;display:flex;gap:8px;flex-wrap:wrap;pointer-events:none}}
@@ -303,6 +307,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  .run-panel{{position:absolute;z-index:520;left:14px;right:14px;bottom:16px;display:flex;gap:8px;align-items:center;pointer-events:none}}
  .run-panel button,.run-status{{pointer-events:auto;border-radius:8px;box-shadow:0 4px 18px rgba(0,0,0,.14)}}
  .run-panel button{{border:0;background:#142018;color:#fff;padding:11px 14px;font-size:14px;font-weight:800}}
+ .run-panel button:disabled{{background:#6f7972;cursor:not-allowed}}
  .run-panel button.on{{background:#0a7d43}}
  .run-status{{background:rgba(255,255,255,.96);border:1px solid rgba(20,35,25,.08);padding:10px 12px;
       color:#243028;font-size:13px;font-weight:700;line-height:1.35;min-width:128px}}
@@ -320,6 +325,10 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  .legend{{font-size:12px;color:#6b746d;margin:10px 0 0}}
  .btn{{display:inline-block;margin:6px 8px 0 0;padding:10px 13px;border-radius:8px;
       background:#142018;color:#fff;text-decoration:none;font-size:14px;font-weight:700}}
+ .actions{{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}}
+ .actions .btn{{margin:0}}
+ details.panel summary{{cursor:pointer;font-size:15px;font-weight:800;color:#344238}}
+ details.panel[open] summary{{margin-bottom:10px}}
  .metric{{margin:10px 0}}
  .metric-top{{display:flex;justify-content:space-between;gap:12px;font-size:13px;color:#445048;margin-bottom:5px}}
  .bar{{height:8px;background:#e8ede6;border-radius:999px;overflow:hidden}}
@@ -340,16 +349,19 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  .user-dot{{width:18px;height:18px;background:#1677ff;border:3px solid #fff;border-radius:999px;
       box-shadow:0 0 0 8px rgba(22,119,255,.18),0 2px 10px rgba(0,0,0,.25)}}
  footer{{color:#7b857d;font-size:12px;padding:8px 20px 20px;text-align:center}}
- @media (max-width:560px){{.facts{{grid-template-columns:repeat(2,1fr)}} #map{{height:54vh;min-height:320px}}}}
+ @media (max-width:560px){{.brand span{{font-size:11px}} .facts{{grid-template-columns:repeat(2,1fr)}}
+      #map{{height:54vh;min-height:320px}} .actions{{display:grid;grid-template-columns:1fr 1fr}}
+      .actions .btn{{text-align:center;padding:12px 8px}}}}
 </style></head><body>
+<header class="brand"><strong>Runnywhere · 러니웨어</strong><span>어디서든 러닝 코스 짜기!</span></header>
 <div id="map"><div class="map-hud">
  <span class="pill">{course.length_km:.2f}km</span>
  <span class="pill">오르막 {course.ascent_m:.0f}m</span>
  <span class="pill">RFS {course.rfs["score"]}/100</span>
  <span class="pill">{course.grade_label}</span>
 </div><div class="run-panel">
- <button id="runStart" type="button">러닝 시작</button>
- <div id="runStatus" class="run-status">위치 추적 대기</div>
+ <button id="runStart" type="button">내 위치 보기</button>
+ <div id="runStatus" class="run-status" role="status" aria-live="polite">GPS 안내 대기</div>
 </div><div class="view-toggle" aria-label="지도 보기 전환">
  <button id="shapeView" type="button">코스만</button>
  <button id="guideView" type="button" class="active">안내 포함</button>
@@ -366,19 +378,19 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  </div>
  <p class="legend">초록 구간일수록 경사가 낮고 보행 신호가 적으며, 조명·보도·안심 요소가 좋은 길입니다.</p>
  {profile_svg}
- <div>
-  <a class="btn" href="{base_url}/c/{cid}.gpx">⬇️ GPX 다운로드</a>
-  <a class="btn" href="{base_url}/c/{cid}/card.svg">🖼️ 공유 카드</a>
+ <div class="actions">
+  <a class="btn" href="{base_url}/c/{cid}.gpx">GPX 다운로드</a>
+  <a class="btn" href="{base_url}/c/{cid}/card.svg">공유 카드</a>
  </div>
 </div>
-<section class="panel"><h3>GPX 사용 방법</h3>
+<details class="panel"><summary>카카오맵 GPX 불러오기 방법</summary>
  <ol class="steps">
   <li>GPX 다운로드를 눌러 코스 파일을 저장합니다.</li>
-  <li>카카오맵에서 파일 열기/공유 대상으로 카카오맵이 보이면 선택합니다.</li>
-  <li>카카오맵에 GPX 가져오기 메뉴가 보이지 않으면 직접 등록이 제한된 환경입니다.</li>
-  <li>그때는 이 페이지의 러닝 시작을 쓰거나, GPX를 지원하는 러닝 앱에서 파일을 엽니다.</li>
+  <li>카카오맵 앱 실행 후 우측 상단 길찾기 버튼을 누르세요.</li>
+  <li>이동수단을 자전거로 선택한 뒤, 도착지 입력 화면 우측 하단의 GPX를 선택하세요.</li>
+  <li>저장해 둔 GPX 파일을 찾아 선택하고 완료 후, 화면 우측 하단의 주행 시작을 눌러 안내를 받으세요.</li>
  </ol>
-</section>
+</details>
 {course_facts}
 {score_breakdown}
 <section class="panel"><h3>코스 주변 편의점·화장실</h3>
@@ -487,31 +499,42 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
    setStatus(guide);
  }};
  const locationError = err => {{
-   const msg = err.code === 1 ? '위치 권한이 필요해요' : '현재 위치를 가져오지 못했어요';
+   const msg = err.code === 1 ? '브라우저 설정에서 위치 권한을 허용해 주세요'
+     : err.code === 2 ? 'GPS 신호가 약해 위치를 찾지 못했어요'
+     : '위치 확인 시간이 초과됐어요';
    setStatus(msg);
    startBtn.classList.remove('on');
-   startBtn.textContent = '러닝 시작';
+   startBtn.textContent = '다시 시도';
+   watchId = null;
  }};
  startBtn.addEventListener('click', () => {{
+   if (!window.isSecureContext) {{
+     setStatus('위치 기능은 HTTPS에서만 사용할 수 있어요');
+     return;
+   }}
    if (!navigator.geolocation) {{
-     setStatus('이 브라우저는 위치 추적을 지원하지 않아요');
+     setStatus('이 브라우저는 위치 기능을 지원하지 않아요');
      return;
    }}
    if (watchId !== null) {{
      navigator.geolocation.clearWatch(watchId);
      watchId = null;
      startBtn.classList.remove('on');
-     startBtn.textContent = '러닝 시작';
-     setStatus('위치 추적 일시정지');
+     startBtn.textContent = '내 위치 보기';
+     setStatus('GPS 안내 중지');
      return;
    }}
-   setStatus('위치 권한 확인 중');
+   setStatus('GPS 위치 확인 중');
    startBtn.classList.add('on');
    startBtn.textContent = '추적 중지';
    watchId = navigator.geolocation.watchPosition(updatePosition, locationError, {{
      enableHighAccuracy:true, maximumAge:3000, timeout:12000
    }});
  }});
+ if (!window.isSecureContext || !navigator.geolocation) {{
+   startBtn.disabled = true;
+   setStatus(!window.isSecureContext ? 'HTTPS 연결에서 위치 기능을 사용할 수 있어요' : '이 브라우저는 위치 기능을 지원하지 않아요');
+ }}
 </script></body></html>"""
 
 
@@ -546,7 +569,7 @@ def card_svg(course: Course) -> str:
  <text x="40" y="180" font-size="20" fill="#aaa"
    font-family="-apple-system,sans-serif">러닝 친화도 {course.rfs['score']}/100 · 오르막 {course.ascent_m:.0f}m</text>
  <text x="40" y="{h - 44}" font-size="18" fill="#666"
-   font-family="-apple-system,sans-serif">RunArt(런아트) — 대화로 그리는 러닝 코스</text>
+   font-family="-apple-system,sans-serif">Runnywhere(러니웨어) — 어디서든 러닝 코스 짜기!</text>
  <polyline points="{pts}" fill="none" stroke="#e0533d" stroke-width="5"
    stroke-linejoin="round" stroke-linecap="round"/>
 </svg>"""

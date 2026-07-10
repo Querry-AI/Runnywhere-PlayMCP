@@ -1,4 +1,4 @@
-"""RunArt MCP server — Agentic Player 10 (PlayMCP).
+"""Runnywhere MCP server — Agentic Player 10 (PlayMCP).
 
 - Streamable HTTP, stateless (PRD §9): course ids are self-contained parameter
   tokens; the in-process cache is a performance layer only.
@@ -40,9 +40,10 @@ BASE_URL = os.environ.get(
 ).rstrip("/")
 
 mcp = FastMCP(
-    "RunArt",
+    "Runnywhere",
     instructions=(
-        "RunArt(런아트) designs running courses in Seoul through conversation: "
+        "Runnywhere(러니웨어) — 어디서든 러닝 코스 짜기! "
+        "It designs running courses in Seoul through conversation: "
         "loop courses by distance, animal-shaped GPS-art courses, hill/flat "
         "preference, night-safety routing, and nearby facilities."
     ),
@@ -348,7 +349,7 @@ def generate_running_course(
     night_mode: Annotated[bool, Field(description="Prefer well-lit streets with safety CCTV coverage for night runs")] = False,
     need_facilities: Annotated[list[str] | None, Field(description="Facility types the course should pass: convenience_store, restroom, water, park")] = None,
 ) -> str:
-    """Generates a loop running course in Seoul from RunArt(런아트), snapped to
+    """Generates a loop running course in Seoul from Runnywhere(러니웨어), snapped to
     real pedestrian roads and scored with the Running Friendliness Score built
     from Seoul open data (sidewalk width, slope, lighting, safety CCTV, parks).
     Safe, runner-friendly streets are preferred by default. Provide a start
@@ -376,7 +377,7 @@ def generate_animal_course(
 ) -> str:
     """Generates a GPS-art running course shaped like an animal (cat, dog,
     rabbit, whale) snapped to real pedestrian roads in Seoul, from
-    RunArt(런아트). Shape quality decides the distance: call WITHOUT a shape
+    Runnywhere(러니웨어). Shape quality decides the distance: call WITHOUT a shape
     to get, for each animal, the shortest distance at which it completes as
     a clean reference-like silhouette at this location, so the user can
     choose. Call with a shape and no distance to draw that animal at its own
@@ -468,8 +469,8 @@ def generate_animal_course(
 
 def list_available_shapes() -> str:
     """Lists animal shapes available for GPS-art running courses in
-    RunArt(런아트), with the minimum recommended distance for each shape."""
-    lines = ["RunArt에서 그릴 수 있는 모양:"]
+    Runnywhere(러니웨어), with the minimum recommended distance for each shape."""
+    lines = ["러니웨어에서 그릴 수 있는 모양:"]
     for s in list_shapes():
         lines.append(f"- {s['emoji']} {s['name_ko']} (`{s['shape']}`) — {s['min_km']:g}km 이상 권장")
     lines.append("출발 위치와 함께 동물 모양을 요청하면, 각 동물이 가장 깔끔하게 "
@@ -482,7 +483,7 @@ def find_facilities_near_course(
     facility_types: Annotated[list[str] | None, Field(description="Filter: convenience_store, restroom, water, park")] = None,
 ) -> str:
     """Lists convenience stores, restrooms, drinking fountains, and parks
-    within 10m of a RunArt(런아트) course line, with the km mark where the
+    within 10m of a Runnywhere(러니웨어) course line, with the km mark where the
     course passes each one."""
     try:
         params = decode_course_id(course_id)
@@ -508,7 +509,7 @@ def refine_course(
     location: Annotated[str | None, Field(description="New start place name")] = None,
     need_facilities: Annotated[list[str] | None, Field(description="New facility requirements")] = None,
 ) -> str:
-    """Regenerates an existing RunArt(런아트) course with changed conditions
+    """Regenerates an existing Runnywhere(러니웨어) course with changed conditions
     (distance, hills, night mode, shape, start location, facilities) —
     conversational iteration on a course the user already received."""
     try:
@@ -540,7 +541,7 @@ def refine_course(
 def get_course_status(
     course_id: Annotated[str, Field(description="Course id from a previously generated course")],
 ) -> str:
-    """Retrieves an existing RunArt(런아트) course by id and re-issues its
+    """Retrieves an existing Runnywhere(러니웨어) course by id and re-issues its
     summary, map preview link, GPX download link, and shape share link."""
     try:
         params = decode_course_id(course_id)
@@ -570,7 +571,7 @@ for _fn, _title in (
 
 @mcp.custom_route("/healthz", methods=["GET"])
 async def healthz(_: Request) -> Response:
-    return JSONResponse({"ok": True, "service": "runart"})
+    return JSONResponse({"ok": True, "service": "runnywhere"})
 
 
 @mcp.custom_route("/c/{course_id}/card.svg", methods=["GET"])
@@ -596,9 +597,9 @@ async def preview(request: Request) -> Response:
     except Exception:
         return PlainTextResponse("잘못된 코스 링크입니다.", status_code=404)
     if is_gpx:
-        name = (params.location_name or "RunArt") + f" {course.length_km:.1f}km"
+        name = (params.location_name or "Runnywhere") + f" {course.length_km:.1f}km"
         return Response(to_gpx(name, route_points(course)), media_type="application/gpx+xml",
-                        headers={"Content-Disposition": f'attachment; filename="runart-{cid[:12]}.gpx"'})
+                        headers={"Content-Disposition": f'attachment; filename="runnywhere-{cid[:12]}.gpx"'})
     facs = facilities_along(route_points(course), ["convenience_store", "restroom"], limit=80)
     return HTMLResponse(preview_html(course, facs, BASE_URL))
 
@@ -613,10 +614,11 @@ async def share_shape(request: Request) -> Response:
         return PlainTextResponse("잘못된 공유 링크입니다.", status_code=404)
     prompt = f"내 위치에서 {dist:g}km {shape} 모양 러닝 코스 만들어줘 (shape_token: {token})"
     return HTMLResponse(f"""<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>RunArt 모양 공유</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>러니웨어 모양 공유</title>
 <style>body{{font-family:-apple-system,'Apple SD Gothic Neo',sans-serif;max-width:560px;
 margin:48px auto;padding:0 20px;line-height:1.7}}</style></head><body>
 <h2>🐾 친구가 {dist:g}km '{shape}' 모양 코스를 공유했어요</h2>
+<p><b>러니웨어</b> · 어디서든 러닝 코스 짜기!</p>
 <p>AI 채팅에 아래 문장을 붙여넣으면, 같은 모양이 <b>내 동네 도로망</b>에 그려져요.</p>
 <pre style="background:#f4f4f4;padding:14px;border-radius:10px;white-space:pre-wrap">{prompt}</pre>
 </body></html>""")
@@ -637,6 +639,18 @@ class _TokenBucketMiddleware:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
+
+        async def send_with_security_headers(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers.extend([
+                    (b"x-content-type-options", b"nosniff"),
+                    (b"x-frame-options", b"DENY"),
+                    (b"referrer-policy", b"no-referrer"),
+                    (b"permissions-policy", b"geolocation=(self), camera=(), microphone=()"),
+                ])
+                message["headers"] = headers
+            await send(message)
         client = (scope.get("client") or ("?",))[0]
         import time as _t
         now = _t.monotonic()
@@ -644,11 +658,11 @@ class _TokenBucketMiddleware:
         tokens = min(self.burst, tokens + (now - ts) * self.rps)
         if tokens < 1.0:
             from starlette.responses import PlainTextResponse as _P
-            return await _P("rate limit exceeded", status_code=429)(scope, receive, send)
+            return await _P("rate limit exceeded", status_code=429)(scope, receive, send_with_security_headers)
         if len(self.buckets) > 10_000:  # bound memory
             self.buckets.clear()
         self.buckets[client] = (tokens - 1.0, now)
-        return await self.app(scope, receive, send)
+        return await self.app(scope, receive, send_with_security_headers)
 
 
 def _warm() -> None:

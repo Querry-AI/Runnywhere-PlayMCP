@@ -1,7 +1,7 @@
 [project]
 name = "runart"
 version = "0.1.0"
-description = "RunArt(런아트) — AI running course designer MCP server for Agentic Player 10"
+description = "Runnywhere(러니웨어) — 어디서든 러닝 코스 짜기!"
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=1.9",

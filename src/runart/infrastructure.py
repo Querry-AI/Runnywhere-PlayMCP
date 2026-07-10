@@ -75,16 +75,20 @@ def pedestrian_signals_crossed(graph, path: list,
                                radius_m: float = CROSSING_SIGNAL_RADIUS_M,
                                straight_max_deg: float = STRAIGHT_THROUGH_MAX_DEG,
                                ) -> int:
-    """Signals at intersections the route actually CROSSES.
+    """Signalized crossing points the route actually CROSSES.
 
     Merely running past a signal pole must not count. On a centerline graph a
     crossing happens when the route passes straight through an intersection
     (degree >= 3): the runner traverses the transverse street's crosswalk and
     waits for its signal. Turning at the corner keeps the runner on the same
     block edge, so signals there are excluded.
+
+    The source data stores individual signal poles. Several poles can belong
+    to one crosswalk/intersection, but the UI should report the crossing event,
+    not every pole around that event.
     """
     buckets = _infra_buckets().get("pedestrian_signal", {})
-    seen: set[tuple[float, float]] = set()
+    crossed_nodes: set = set()
     n = len(path)
     if n < 3:
         return 0
@@ -110,9 +114,17 @@ def pedestrian_signals_crossed(graph, path: list,
         if math.degrees(math.acos(cos_t)) > straight_max_deg:
             continue
         ci, cj = int(nb["lat"] / _CELL), int(nb["lon"] / _CELL)
+        has_signal = False
         for gi in (ci - 1, ci, ci + 1):
             for gj in (cj - 1, cj, cj + 1):
                 for plat, plon in buckets.get((gi, gj), ()):
                     if haversine_m(nb["lat"], nb["lon"], plat, plon) <= radius_m:
-                        seen.add((round(plat, 6), round(plon, 6)))
-    return len(seen)
+                        has_signal = True
+                        break
+                if has_signal:
+                    break
+            if has_signal:
+                break
+        if has_signal:
+            crossed_nodes.add(b)
+    return len(crossed_nodes)

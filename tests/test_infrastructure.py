@@ -42,6 +42,19 @@ def test_signal_counted_when_route_crosses_straight_through(monkeypatch):
     assert infrastructure.pedestrian_signals_crossed(g, ["s", "c", "n"]) == 1
 
 
+def test_multiple_signal_poles_at_one_crossing_count_once(monkeypatch):
+    g, lat0, lon0 = _cross_graph()
+    poles = [
+        to_latlon(12.0, 12.0, lat0, lon0),
+        to_latlon(-12.0, 12.0, lat0, lon0),
+        to_latlon(12.0, -12.0, lat0, lon0),
+        to_latlon(-12.0, -12.0, lat0, lon0),
+    ]
+    _patch_signals(monkeypatch, poles)
+
+    assert infrastructure.pedestrian_signals_crossed(g, ["s", "c", "n"]) == 1
+
+
 def test_signal_not_counted_when_route_turns_at_corner(monkeypatch):
     g, lat0, lon0 = _cross_graph()
     at_corner = to_latlon(12.0, 12.0, lat0, lon0)

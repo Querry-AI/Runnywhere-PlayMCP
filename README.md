@@ -1,4 +1,4 @@
-# RunArt(런아트) — AI 러닝 코스 생성 MCP 서버
+# Runnywhere(러니웨어) — 어디서든 러닝 코스 짜기!
 
 카카오 PlayMCP **Agentic Player 10** 공모전 출품작. AI 채팅에 *"시청에서 5km, 오르막 없이, 고래 모양으로"* 라고 말하면 서울 보행 도로망 위에 뛸 수 있는 코스를 생성한다.
 서울시 경사도(표고·등고선), 보행자 신호등, 가로등 위치 데이터를 러닝 친화도 점수(RFS)에 반영해 평지 우선·밤안심 코스를 제공한다. 서울시 공중화장실과 OSM 편의점 데이터도 반영해 "화장실/편의점 지나가게" 같은 요청을 코스 후보 선택에 활용한다.
@@ -46,8 +46,8 @@ RUNART_ETL_LOCAL_ONLY=1 python etl/build_rfs.py
 ## 배포 (PlayMCP in KC)
 
 ```bash
-docker build -t runart .
-docker run -p 8000:8000 -e RUNART_BASE_URL=https://<kc-endpoint> runart
+docker build -t runnywhere .
+docker run -p 8000:8000 -e RUNART_BASE_URL=https://<kc-endpoint> runnywhere
 ```
 
 MCP Endpoint: `https://<kc-endpoint>/mcp` — PlayMCP 등록 전 [MCP Inspector](https://github.com/modelcontextprotocol/inspector)로 검증할 것.

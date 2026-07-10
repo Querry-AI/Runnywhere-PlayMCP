@@ -1,4 +1,4 @@
-# RunArt MCP server — PlayMCP in KC container image (PRD §10)
+# Runnywhere MCP server — PlayMCP in KC container image (PRD §10)
 FROM python:3.12-slim
 
 WORKDIR /app
