@@ -24,7 +24,8 @@ from .gpx import to_gpx
 from .models import (CourseParams, DEFAULT_PACE_MIN_PER_KM, decode_course_id,
                      decode_shape_token, encode_course_id)
 from .render import card_svg, course_markdown, preview_html
-from .shapes import generate_shape_course, list_shapes
+from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
+                     generate_shape_course, list_shapes)
 from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
 
 BASE_URL = os.environ.get(
@@ -64,6 +65,11 @@ def _get_course(params: CourseParams) -> Course:
     try:
         course = generate_shape_course(params) if params.shape else generate_course(params)
     except CourseError as e:
+        if params.shape in SHAPES:
+            recovered = find_min_clean_course(params)
+            if recovered is not None:
+                _cache_put(cid, recovered)
+                return recovered
         _cache_put(cid, e)
         raise
     _cache_put(cid, course)
@@ -103,6 +109,58 @@ def _run(params: CourseParams, note: str = "") -> str:
         return note + course_markdown(course, BASE_URL, facs)
     except CourseError as e:
         return f"⚠️ {e}"
+
+
+def _serve_course(course, note: str = "") -> str:
+    """Render an already-generated course and keep it warm in the cache."""
+    _cache_put(encode_course_id(course.params), course)
+    facs = facilities_along(course.points, course.params.need_facilities or None)
+    return note + course_markdown(course, BASE_URL, facs)
+
+
+# Quality-first suggestion order requested for the survey (PRD §5.4 동물 4종).
+SURVEY_SHAPES = ("dog", "cat", "whale", "rabbit")
+REFERENCE_FEATURES = {
+    "dog": "큰 머리·짧은 주둥이·넓은 몸통·짧은 다리·올라간 꼬리",
+    "cat": "큰 머리·뾰족 귀 2개·긴 몸통·짧은 다리·길게 올라간 꼬리",
+    "whale": "큰 타원 몸통·둥근 머리·좁은 꼬리목·갈라진 V 꼬리",
+    "rabbit": "통통한 몸통·작은 머리·분리된 긴 귀 2개·작은 꼬리",
+}
+
+
+def _animal_survey(lat: float, lon: float, name: str) -> str:
+    """Per-animal shortest clean-completion distance at this start point.
+
+    The reference GPS-art routes look good because the shape picks its own
+    size; forcing a requested distance is how courses stop reading as
+    animals. So instead of drawing anything yet, tell the user at which
+    minimal distance each animal completes cleanly and let them choose.
+    """
+    lines = [f"📍 {name} 출발 기준, 11km 이내에서 가장 또렷한 동물 코스예요:"]
+    found_any = False
+    for key in SURVEY_SHAPES:
+        spec = SHAPES[key]
+        probe = CourseParams(lat=lat, lon=lon, location_name=name,
+                             distance_km=spec.min_km, shape=key)
+        course = find_min_clean_course(probe)
+        if course is None:
+            lines.append(f"- {spec.emoji} {spec.name_ko}: 이 근처 도로망에서는 "
+                         f"{MAX_ANIMAL_ART_KM:g}km 이내에 적절한 코스가 없어요")
+            continue
+        found_any = True
+        cid = encode_course_id(course.params)
+        _cache_put(cid, course)
+        lines.append(
+            f"- {spec.emoji} {spec.name_ko}: **추천 {course.length_km:.1f}km** · "
+            f"{REFERENCE_FEATURES[key]} · "
+            f"미리보기 {BASE_URL}/c/{cid}"
+        )
+    if found_any:
+        lines.append("어떤 동물로 뛸까요? 동물만 골라주시면 위 최상 코스로 확정해 드려요. "
+                     "(더 길게 뛰고 싶으면 거리도 함께 말씀해 주세요)")
+    else:
+        lines.append("강남·잠실처럼 길이 바둑판인 동네나 큰 공원 근처 출발점에서 성공률이 높아요.")
+    return "\n".join(lines)
 
 
 @mcp.tool(
@@ -149,24 +207,72 @@ def generate_animal_course(
 ) -> str:
     """Generates a GPS-art running course shaped like an animal (cat, dog,
     giraffe, rabbit, whale) snapped to real pedestrian roads in Seoul, from
-    RunArt(런아트). If the shape cannot be drawn well on the local road
-    network, alternative shapes are suggested instead of returning a bad
-    course. Accepts a shape_token from a shared link to recreate a friend's
-    shape in this user's neighborhood."""
+    RunArt(런아트). Shape quality decides the distance: call WITHOUT a shape
+    to get, for each animal, the shortest distance at which it completes as
+    a clean reference-like silhouette at this location, so the user can
+    choose. Call with a shape and no distance to draw that animal at its own
+    shortest clean distance. If a forced distance cannot be drawn well,
+    alternatives are suggested instead of returning a bad course. Accepts a
+    shape_token from a shared link to recreate a friend's shape here."""
     if shape_token and not shape:
         try:
             shape, distance_km = decode_shape_token(shape_token)
         except (ValueError, KeyError):
             return "⚠️ 공유 토큰 형식이 올바르지 않아요. 예: whale-5k"
     if not shape:
-        opts = ", ".join(s["shape"] for s in list_shapes())
-        return f"⚠️ 어떤 동물 모양으로 뛸까요? 가능한 모양: {opts}"
+        # No shape yet → survey: shortest clean-completion distance per
+        # animal, so the user picks a shape knowing what it will cost.
+        try:
+            rlat, rlon, name = resolve_location(location, lat, lon)
+        except CourseError as e:
+            return f"⚠️ {e}"
+        return _animal_survey(rlat, rlon, name)
+    if distance_km is None and duration_min is None and shape in SHAPES:
+        # Shape chosen, distance left open → quality-first: draw at the
+        # shortest distance where the silhouette completes cleanly.
+        try:
+            rlat, rlon, name = resolve_location(location, lat, lon)
+        except CourseError as e:
+            return f"⚠️ {e}"
+        probe = CourseParams(lat=rlat, lon=rlon, location_name=name,
+                             distance_km=SHAPES[shape].min_km, shape=shape,
+                             include_hills=include_hills, night_mode=night_mode,
+                             need_facilities=need_facilities or [])
+        course = find_min_clean_course(probe)
+        if course is not None:
+            spec = SHAPES[shape]
+            note = (f"{spec.emoji} {spec.name_ko} 모양이 가장 깔끔하게 완성되는 "
+                    f"11km 이내 최상 코스 {course.length_km:.1f}km로 그렸어요. "
+                    f"{REFERENCE_FEATURES.get(shape, '')}\n")
+            return _serve_course(course, note)
+        # No clean fit in the sweep — fall through to the normal pipeline at
+        # the shape's minimum distance, which fails with honest guidance.
+        distance_km = SHAPES[shape].min_km
     try:
         params, note = _build_params(location, lat, lon, distance_km, duration_min,
                                      include_hills, night_mode, need_facilities, shape=shape)
     except CourseError as e:
         return f"⚠️ {e}"
-    return _run(params, note)
+    if shape in SHAPES and distance_km is not None:
+        # A forced short distance is the common blob-producing path. Discover
+        # the location-specific clean minimum first and skip generation when
+        # the request is below it; show all four verified choices instead.
+        baseline = params.model_copy(update={"distance_km": SHAPES[shape].min_km})
+        minimum = find_min_clean_course(baseline)
+        if minimum is not None and distance_km < minimum.params.distance_km:
+            spec = SHAPES[shape]
+            return (
+                f"⚠️ {params.location_name}에서 {distance_km:g}km로는 "
+                f"{spec.name_ko}의 레퍼런스 특징이 충분히 분리되지 않아요. "
+                f"검증된 최소 요청 거리는 {minimum.params.distance_km:g}km"
+                f"(실거리 약 {minimum.length_km:.1f}km)예요.\n\n"
+                + _animal_survey(params.lat, params.lon, params.location_name)
+            )
+    out = _run(params, note)
+    if shape in SHAPES:
+        if out.startswith("⚠️"):
+            out += "\n\n" + _animal_survey(params.lat, params.lon, params.location_name)
+    return out
 
 
 @mcp.tool(
@@ -178,7 +284,8 @@ def list_available_shapes() -> str:
     lines = ["RunArt에서 그릴 수 있는 모양:"]
     for s in list_shapes():
         lines.append(f"- {s['emoji']} {s['name_ko']} (`{s['shape']}`) — {s['min_km']:g}km 이상 권장")
-    lines.append("예: \"시청에서 5km 고래 모양으로 짜줘\"")
+    lines.append("출발 위치와 함께 동물 모양을 요청하면, 각 동물이 가장 깔끔하게 "
+                 "완성되는 최단 거리를 먼저 보여드려요. 예: \"경복궁역에서 동물 모양 코스 추천해줘\"")
     return "\n".join(lines)
 
 

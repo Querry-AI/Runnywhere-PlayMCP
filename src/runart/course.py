@@ -25,7 +25,23 @@ N_WAYPOINTS = 4
 BEARINGS = (0, 45, 90, 135, 180, 225, 270, 315)
 MAX_RESCALES = 5
 PACE_MIN_PER_KM = 6.5
-FOLLOW_EDGE_PENALTY_M = 8.0
+FOLLOW_EDGE_PENALTY_M = 12.0
+HIGHWAY_COST_FACTOR = {
+    "primary": 0.84,
+    "primary_link": 0.90,
+    "secondary": 0.88,
+    "secondary_link": 0.92,
+    "tertiary": 0.94,
+    "tertiary_link": 0.98,
+    "unclassified": 1.00,
+    "residential": 1.15,
+    "living_street": 1.20,
+    "service": 1.30,
+    "footway": 1.24,
+    "path": 1.28,
+    "pedestrian": 1.16,
+    "steps": 1.55,
+}
 # "평지" 판정: 누적 상승 < 8m/km. SRTM 30m 고도의 현실적 잡음 수준을 반영한
 # 기준 (러닝 앱 통념상 10m/km 이하면 평지 취급).
 FLAT_CUM_GAIN_PER_KM = 8.0
@@ -108,7 +124,16 @@ def easy_route_weight(base_weight: str):
     fragments while keeping the existing RFS/length weighting dominant.
     """
     def _weight(_u, _v, attrs):
-        return attrs.get(base_weight, attrs["length"]) + FOLLOW_EDGE_PENALTY_M
+        highway = attrs.get("highway")
+        if isinstance(highway, (list, tuple)):
+            highway = highway[0] if highway else None
+        factor = HIGHWAY_COST_FACTOR.get(str(highway), 1.06)
+        sidewalk = float(attrs.get("sidewalk_score", 0.5))
+        if sidewalk >= 0.85:
+            factor *= 0.90
+        elif sidewalk < 0.55:
+            factor *= 1.12
+        return attrs.get(base_weight, attrs["length"]) * factor + FOLLOW_EDGE_PENALTY_M
     return _weight
 
 

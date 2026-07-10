@@ -33,16 +33,32 @@ def test_short_address_variants_expand_to_full_seoul_address():
     assert "서울특별시 강남구 테헤란로8길 8" in variants
 
 
-def test_animal_course_includes_share_link():
-    out = server.generate_animal_course(shape="whale", **CITY_HALL, distance_km=5.0)
+def test_animal_request_surveys_verified_minimum_distances_first():
+    out = server.generate_animal_course(**CITY_HALL)
+    assert out.index("강아지") < out.index("고양이") < out.index("고래") < out.index("토끼")
+    assert "11km 이내" in out
+    assert "추천" in out
+    assert "어떤 동물" in out
+    assert "모양 완성도" not in out
+
+
+def test_chosen_animal_without_distance_uses_verified_minimum():
+    out = server.generate_animal_course(shape="whale", **CITY_HALL)
     assert "고래" in out
-    assert "/s/whale-5k" in out
-    assert "모양 완성도" in out
+    assert "11km 이내 최상 코스" in out
+    assert "/s/whale-" in out
+
+
+def test_forced_short_animal_returns_choice_survey_not_blob():
+    out = server.generate_animal_course(shape="dog", **CITY_HALL, distance_km=3.0)
+    assert out.startswith("⚠️")
+    assert "11km 이내" in out
+    assert "강아지" in out and "고양이" in out and "고래" in out and "토끼" in out
 
 
 def test_shape_token_recreates_shape():
     out = server.generate_animal_course(shape_token="whale-5k", **CITY_HALL)
-    assert "고래" in out
+    assert "고래" in out or "최단" in out
 
 
 def test_refine_and_status_roundtrip():
