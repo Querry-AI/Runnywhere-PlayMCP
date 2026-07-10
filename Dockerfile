@@ -12,6 +12,6 @@ RUN pip install --no-cache-dir .
 
 ENV PORT=8000
 # Deploy-time env (PlayMCP in KC): RUNART_BASE_URL=<public endpoint>,
-# WEB_CONCURRENCY=<vCPU count>, optional KAKAO_REST_API_KEY.
+# WEB_CONCURRENCY=1, RUNART_POOL_WORKERS=2, optional KAKAO_REST_API_KEY.
 EXPOSE 8000
 CMD ["python", "-m", "runart.server"]

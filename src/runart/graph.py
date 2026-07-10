@@ -218,6 +218,14 @@ def path_points(g, path: list) -> list[tuple[float, float]]:
     return out or [(g.nodes[path[0]]["lat"], g.nodes[path[0]]["lon"])]
 
 
+def warmup() -> bool:
+    """Load the graph + spatial index in this process (used to pre-warm each
+    process-pool worker so the first real request there is not slow)."""
+    get_graph()
+    _node_index()
+    return True
+
+
 def coverage_bounds() -> tuple[float, float, float, float]:
     idx = _node_index()
     lats = [p[0] for p in idx]

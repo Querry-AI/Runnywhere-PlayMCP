@@ -50,15 +50,15 @@ OUTLINE_MIN_FRAC = 0.70           # 전체 루트의 70% 이상은 큰 외곽선
 SHARP_TURN_DEG = 100.0            # 이보다 큰 방향 전환은 "꺾는 곳"(귀/꼬리/다리 코너)으로 취급
 SIMILARITY_TOLERANCE_FRAC = 0.085  # 평균 점수로 사라진 귀/꼬리를 숨기지 않도록 엄격히 비교
 
-# Anytime cutoffs (PRD §7.1). Shape quality is the product here, so the
-# budget favors finishing corridor refinement over raw latency; screening may
-# use at most SCREEN_BUDGET_FRAC of the remaining budget so refinement always
-# gets its share.
-TIME_BUDGET_S = 12.0  # nearby-center screening + corridor refinement
-FALLBACK_BUDGET_S = 6.0
-SCREEN_BUDGET_FRAC = 0.45
-PROBE_BUDGET_S = 0.4
-GOOD_ENOUGH = 0.80  # early exit — no need to keep searching past this
+# Anytime cutoffs (PRD §7.1). PlayMCP requires p99 <= 3s per tool call, so the
+# budget is speed-first: a single animal must finish well under ~1.5s even on a
+# cold cache. Quality is deliberately traded for latency here — fewer rotations,
+# scales and placements, and a short corridor-refinement window.
+TIME_BUDGET_S = 1.6  # nearby-center screening + corridor refinement
+FALLBACK_BUDGET_S = 0.8
+SCREEN_BUDGET_FRAC = 0.5
+PROBE_BUDGET_S = 0.3
+GOOD_ENOUGH = 0.70  # early exit — no need to keep searching past this
 
 
 @dataclass(frozen=True)
@@ -157,7 +157,7 @@ SHAPE_STYLES: dict[str, ShapeStyle] = {
     # tried first because the supplied references mostly lie about 45 degrees.
     "cat": ShapeStyle(
         rotations=SIDE_PROFILE_ROTATIONS,
-        scales=(0.9, 1.0, 0.85, 0.8, 1.1, 0.75),
+        scales=(0.9, 1.0, 0.8),
         # Lower than dog: the L-shaped tail and rear leg share street
         # columns, which costs a few similarity points even on clean grids
         # (Gangnam peaks around 0.72-0.78 depending on the time budget).
@@ -172,19 +172,21 @@ SHAPE_STYLES: dict[str, ShapeStyle] = {
     ),
     "dog": ShapeStyle(
         rotations=SIDE_PROFILE_ROTATIONS,
-        scales=(0.9, 0.85, 1.0, 0.8, 1.1, 0.75),
-        similarity_gate=0.78,
-        outline_min_frac=0.72,
-        max_sharp_turns=5,
+        scales=(0.9, 0.85, 1.0),
+        # Speed-first gate: the reduced candidate search rarely reaches the old
+        # 0.78, so accept a slightly looser dog silhouette to keep latency low.
+        similarity_gate=0.68,
+        outline_min_frac=0.70,
+        max_sharp_turns=6,
         corridor_frac=0.065,
         aspect_min=1.05,
-        aspect_max=1.55,
+        aspect_max=1.60,
         simplicity_weight=0.045,
         zigzag_weight=0.070,
     ),
     "rabbit": ShapeStyle(
         rotations=SIDE_PROFILE_ROTATIONS,
-        scales=(0.9, 0.85, 1.0, 0.8, 1.1, 0.75),
+        scales=(0.9, 0.85, 1.0),
         similarity_gate=0.70,
         outline_min_frac=0.66,
         max_sharp_turns=5,
@@ -197,9 +199,9 @@ SHAPE_STYLES: dict[str, ShapeStyle] = {
     # Whale keeps a little tilt freedom: a simple body + V fluke still reads
     # rotated, and it fits rivers/large roads better with shallow diagonals.
     "whale": ShapeStyle(
-        rotations=(0, 15, 345, 30, 330),
-        scales=(0.9, 1.0, 0.85, 0.8, 1.1, 0.75, 1.15),
-        similarity_gate=0.76,
+        rotations=(0, 15, 345),
+        scales=(0.9, 1.0, 0.85),
+        similarity_gate=0.72,
         outline_min_frac=0.75,
         max_sharp_turns=4,
         corridor_frac=0.09,
@@ -609,25 +611,30 @@ def backtrack_fraction(g, path: list) -> float:
 CORRIDOR_FRAC = 0.09       # ribbon half-width as fraction of shape diameter
 CORRIDOR_MIN_M = 70.0
 CORRIDOR_MAX_M = 180.0
-REFINE_TOP_K = 8           # screening candidates that get corridor refinement
-SNAP_CANDIDATES = 5
-SNAP_BEAM_WIDTH = 18
+REFINE_TOP_K = 4           # speed: only the very best screening candidates
+SNAP_CANDIDATES = 4
+SNAP_BEAM_WIDTH = 10
 MAIN_ROAD_EDGE_PENALTY_M = 14.0
+# Big-road preference is intentionally strong (user: "큰길 위주"). Broad named
+# arterials are cheap; alleys, service roads and tiny footpaths are expensive,
+# so the silhouette strokes run straight along whole main streets.
 HIGHWAY_COST_FACTOR = {
-    "primary": 0.82,
-    "primary_link": 0.88,
-    "secondary": 0.86,
-    "secondary_link": 0.90,
-    "tertiary": 0.92,
-    "tertiary_link": 0.96,
-    "unclassified": 1.00,
-    "residential": 1.18,
-    "living_street": 1.22,
-    "service": 1.34,
-    "footway": 1.28,
-    "path": 1.30,
-    "pedestrian": 1.18,
-    "steps": 1.55,
+    "primary": 0.70,
+    "primary_link": 0.78,
+    "secondary": 0.74,
+    "secondary_link": 0.82,
+    "tertiary": 0.86,
+    "tertiary_link": 0.92,
+    "trunk": 0.74,
+    "trunk_link": 0.82,
+    "unclassified": 1.05,
+    "residential": 1.30,
+    "living_street": 1.40,
+    "service": 1.60,
+    "footway": 1.45,
+    "path": 1.55,
+    "pedestrian": 1.20,
+    "steps": 1.90,
 }
 
 
@@ -1078,11 +1085,10 @@ def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
         return ok / max(len(anchors), 1)
 
     # The reference routes are drawn where the shape fits, not exactly on the
-    # runner's doorstep. Search nearby placements up to ~600 m away.
-    OFFSETS = ((0.0, 0.0), (250.0, 0.0), (-250.0, 0.0), (0.0, 250.0),
-               (0.0, -250.0), (250.0, 250.0), (-250.0, 250.0),
-               (250.0, -250.0), (-250.0, -250.0), (500.0, 0.0),
-               (-500.0, 0.0), (0.0, 500.0), (0.0, -500.0))
+    # runner's doorstep. Search a few nearby placements. Speed-first: a small
+    # cardinal set instead of the full 13-offset grid.
+    OFFSETS = ((0.0, 0.0), (250.0, 0.0), (-250.0, 0.0),
+               (0.0, 250.0), (0.0, -250.0))
 
     best: Course | None = None
     best_sim = -1.0
@@ -1110,7 +1116,7 @@ def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
                 ([(x + ox, y + oy) for x, y in base_anchors]
                  for ox, oy in OFFSETS),
                 key=_placement_coverage, reverse=True)
-            for anchors_xy in placements[:4]:
+            for anchors_xy in placements[:2]:
                 if time.perf_counter() > screen_deadline:
                     break
                 if _placement_coverage(anchors_xy) < 0.9:
@@ -1295,13 +1301,18 @@ def generate_shape_course(params: CourseParams) -> Course:
 # produced blob courses. Sweep up to the user-facing animal-art cap and keep
 # the strongest silhouette; over the cap, say there is no good animal course.
 MAX_ANIMAL_ART_KM = 11.0
-MIN_CLEAN_DISTANCE_STEP_KM = 0.5
-MIN_CLEAN_TRY_BUDGET_S = 2.0
+# Speed-first sweep: coarse 1km steps and a hard wall-clock cap so the whole
+# search fits the PlayMCP p99 <= 3s budget. Fewer probe distances means a lower
+# chance of finding the theoretically best size, which is the quality we trade.
+MIN_CLEAN_DISTANCE_STEP_KM = 1.0
+MIN_CLEAN_TRY_BUDGET_S = 0.7
+MIN_CLEAN_TOTAL_BUDGET_S = 2.2  # hard cap across all probed distances
 _MIN_CLEAN_CACHE: dict[tuple, Course | None] = {}
 
 
 def find_min_clean_course(params: CourseParams,
                           per_try_s: float = MIN_CLEAN_TRY_BUDGET_S,
+                          total_budget_s: float = MIN_CLEAN_TOTAL_BUDGET_S,
                           ) -> Course | None:
     """Best animal-art course under the 11km cap whose silhouette clears gate.
 
@@ -1316,10 +1327,14 @@ def find_min_clean_course(params: CourseParams,
     if style is None:
         return None
     start_km = max(spec.min_km, params.distance_km or 0.0)
+    # total_budget_s is part of the key: a short-budget survey probe that finds
+    # nothing must not poison the fuller-budget single-animal lookup for the
+    # same location (they would otherwise share an entry and cache a stale None).
     cache_key = (
         round(params.lat, 4), round(params.lon, 4), spec.key,
         params.include_hills, params.night_mode,
-        tuple(sorted(params.need_facilities)), round(start_km, 1), round(per_try_s, 1),
+        tuple(sorted(params.need_facilities)), round(start_km, 1),
+        round(per_try_s, 1), round(total_budget_s, 1),
     )
     if cache_key in _MIN_CLEAN_CACHE:
         return _MIN_CLEAN_CACHE[cache_key]
@@ -1327,13 +1342,17 @@ def find_min_clean_course(params: CourseParams,
         _MIN_CLEAN_CACHE[cache_key] = None
         return None
     steps = int(round((MAX_ANIMAL_ART_KM - start_km) / MIN_CLEAN_DISTANCE_STEP_KM))
+    hard_deadline = time.perf_counter() + total_budget_s
     best: Course | None = None
     best_sim = -1.0
     for idx in range(steps + 1):
+        if time.perf_counter() > hard_deadline:
+            break
         dist = round(start_km + idx * MIN_CLEAN_DISTANCE_STEP_KM, 1)
         probe = params.model_copy(update={"distance_km": dist})
         course, sim = _search_shape(
-            spec, probe, deadline=time.perf_counter() + per_try_s,
+            spec, probe,
+            deadline=min(time.perf_counter() + per_try_s, hard_deadline),
             rotations=style.rotations, scales=style.scales, style=style)
         if (course is not None and sim >= style.similarity_gate
                 and course.length_km <= MAX_ANIMAL_ART_KM

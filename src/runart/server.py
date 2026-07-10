@@ -7,8 +7,14 @@
 - Preview pages / GPX / shape share links are served by the same app (§5.6).
 """
 
+import concurrent.futures
+import functools
+import multiprocessing
 import os
+import threading
+import time
 
+import anyio
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from typing import Annotated
@@ -55,7 +61,132 @@ _course_cache: dict[str, "Course | CourseError"] = {}
 _CACHE_MAX = 512
 
 
-def _get_course(params: CourseParams) -> Course:
+# ---------- CPU offload (PlayMCP p99 <= 3s) ----------
+#
+# Course generation is CPU-bound (networkx Dijkstra). Running it inline blocks
+# the event loop, so health/readiness probes fail and the gateway returns
+# "no healthy upstream" 503s under any load. A small spawn-based process pool
+# keeps the CPU work out of the web process: the event loop stays free, and a
+# single 1-vCPU web worker + 2 pool workers uses ~3 graph copies (~1.7GB)
+# instead of 8 web workers (~4.5GB) that previously risked OOM crashes.
+_POOL: "concurrent.futures.ProcessPoolExecutor | None" = None
+_POOL_LOCK = threading.Lock()
+_POOL_BROKEN = False
+ANIMAL_RESPONSE_BUDGET_S = 2.7
+
+
+class _GenerationTimeout(RuntimeError):
+    """The search did not finish before the MCP response deadline."""
+
+
+_TIMED_OUT = object()
+
+
+def _get_pool() -> "concurrent.futures.ProcessPoolExecutor | None":
+    global _POOL, _POOL_BROKEN
+    if _POOL_BROKEN:
+        return None
+    if _POOL is None:
+        with _POOL_LOCK:
+            if _POOL is None and not _POOL_BROKEN:
+                try:
+                    workers = max(1, int(os.environ.get("RUNART_POOL_WORKERS", "2")))
+                    ctx = multiprocessing.get_context("spawn")
+                    _POOL = concurrent.futures.ProcessPoolExecutor(
+                        max_workers=workers, mp_context=ctx)
+                except Exception:  # noqa: BLE001 — never let pool setup crash a request
+                    _POOL_BROKEN = True
+                    _POOL = None
+    return _POOL
+
+
+def _offload(fn, *args, timeout_s: float | None = None):
+    """Run a CPU-bound generator in the process pool, blocking the calling
+    worker thread (not the event loop). Falls back to in-process execution if
+    the pool is unavailable or broken, so a pool failure degrades latency
+    rather than breaking the tool."""
+    global _POOL, _POOL_BROKEN
+    pool = _get_pool()
+    if pool is not None:
+        try:
+            future = pool.submit(fn, *args)
+            try:
+                return future.result(timeout=timeout_s)
+            except concurrent.futures.TimeoutError as exc:
+                future.cancel()
+                raise _GenerationTimeout from exc
+        except _GenerationTimeout:
+            raise
+        except CourseError:
+            raise  # a real generation error — propagate as-is
+        except concurrent.futures.process.BrokenProcessPool:
+            with _POOL_LOCK:
+                _POOL_BROKEN = True
+                _POOL = None
+        except Exception:  # noqa: BLE001 — pickling/other — degrade to inline
+            pass
+    if timeout_s is not None:
+        # A bounded MCP response is more useful than silently falling back to
+        # an unbounded inline search when the process pool is unavailable.
+        raise _GenerationTimeout
+    return fn(*args)
+
+
+def _offload_map(fn, items: dict, timeout_s: float | None = None) -> dict:
+    """Run fn over several inputs in parallel across the pool (used by the
+    animal survey so four animals generate concurrently, not 4x sequentially)."""
+    pool = _get_pool()
+    if pool is not None:
+        try:
+            futures = {k: pool.submit(fn, v) for k, v in items.items()}
+            done, pending = concurrent.futures.wait(
+                futures.values(), timeout=timeout_s)
+            for fut in pending:
+                fut.cancel()
+            out = {}
+            for k, fut in futures.items():
+                if fut not in done:
+                    out[k] = _TIMED_OUT
+                    continue
+                try:
+                    out[k] = fut.result()
+                except CourseError:
+                    out[k] = None
+            return out
+        except concurrent.futures.process.BrokenProcessPool:
+            global _POOL, _POOL_BROKEN
+            with _POOL_LOCK:
+                _POOL_BROKEN = True
+                _POOL = None
+        except Exception:  # noqa: BLE001
+            pass
+    if timeout_s is not None:
+        return {k: _TIMED_OUT for k in items}
+    return {k: _inline_or_none(fn, v) for k, v in items.items()}
+
+
+def _inline_or_none(fn, arg):
+    try:
+        return fn(arg)
+    except CourseError:
+        return None
+
+
+def offloaded(fn):
+    """Run a sync MCP tool body in a worker thread so the event loop stays free
+    for health/readiness probes while the tool blocks (it waits on the process
+    pool, or on the Kakao geocoding call). FastMCP calls sync tools directly on
+    the event loop; wrapping them as async + to_thread is what keeps a single
+    web worker responsive under load. functools.wraps preserves the signature
+    FastMCP introspects for the input schema."""
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        return await anyio.to_thread.run_sync(
+            functools.partial(fn, *args, **kwargs))
+    return wrapper
+
+
+def _get_course(params: CourseParams, timeout_s: float | None = None) -> Course:
     cid = encode_course_id(params)
     hit = _course_cache.get(cid)
     if isinstance(hit, Course):
@@ -63,10 +194,12 @@ def _get_course(params: CourseParams) -> Course:
     if isinstance(hit, CourseError):
         raise hit
     try:
-        course = generate_shape_course(params) if params.shape else generate_course(params)
+        course = _offload(
+            generate_shape_course if params.shape else generate_course, params,
+            timeout_s=timeout_s)
     except CourseError as e:
-        if params.shape in SHAPES:
-            recovered = find_min_clean_course(params)
+        if params.shape in SHAPES and timeout_s is None:
+            recovered = _offload(find_min_clean_course, params)
             if recovered is not None:
                 _cache_put(cid, recovered)
                 return recovered
@@ -102,9 +235,10 @@ def _build_params(location, lat, lon, distance_km, duration_min, include_hills,
     return params, note
 
 
-def _run(params: CourseParams, note: str = "") -> str:
+def _run(params: CourseParams, note: str = "",
+         timeout_s: float | None = None) -> str:
     try:
-        course = _get_course(params)
+        course = _get_course(params, timeout_s=timeout_s)
         facs = facilities_along(route_points(course), params.need_facilities or None)
         return note + course_markdown(course, BASE_URL, facs)
     except CourseError as e:
@@ -118,6 +252,27 @@ def _serve_course(course, note: str = "") -> str:
     return note + course_markdown(course, BASE_URL, facs)
 
 
+def _animal_help(name: str) -> str:
+    """Fast, generation-free guidance shown when a chosen animal can't be drawn
+    here. Re-running the full four-animal survey inline would double the tool
+    latency past the p99 3s budget, so point the user at the survey instead."""
+    return (
+        f"동물 이름 없이 \"{name}에서 동물 코스 추천해줘\"라고 하시면, "
+        "이 근처에서 또렷하게 완성되는 동물만 골라서 보여드릴게요. "
+        "강남·잠실처럼 길이 바둑판인 동네나 큰 공원 근처에서 성공률이 높아요."
+    )
+
+
+def _animal_timeout_message(name: str, shape: str) -> str:
+    spec = SHAPES[shape]
+    return (
+        f"⏱️ {name}에서 3초 안에 또렷한 {spec.name_ko} 코스를 찾지 못했어요. "
+        "도로망 후보가 많아 이번 탐색은 여기서 멈췄습니다. "
+        f'같은 요청을 한 번 더 시도하거나, "{name}에서 동물 코스 추천해줘"라고 '
+        "말하면 더 빨리 완성되는 모양을 확인할 수 있어요."
+    )
+
+
 # Quality-first suggestion order requested for the survey (PRD §5.4 동물 4종).
 SURVEY_SHAPES = ("dog", "cat", "whale", "rabbit")
 REFERENCE_FEATURES = {
@@ -128,7 +283,8 @@ REFERENCE_FEATURES = {
 }
 
 
-def _animal_survey(lat: float, lon: float, name: str) -> str:
+def _animal_survey(lat: float, lon: float, name: str,
+                   timeout_s: float | None = None) -> str:
     """Per-animal shortest clean-completion distance at this start point.
 
     The reference GPS-art routes look good because the shape picks its own
@@ -138,11 +294,28 @@ def _animal_survey(lat: float, lon: float, name: str) -> str:
     """
     lines = [f"📍 {name} 출발 기준, 11km 이내에서 가장 또렷한 동물 코스예요:"]
     found_any = False
+    timed_out_any = False
+    # All four animals are generated in parallel across the process pool, so the
+    # survey stays within the p99 3s budget instead of taking 4x sequentially.
+    probes = {
+        key: CourseParams(lat=lat, lon=lon, location_name=name,
+                          distance_km=SHAPES[key].min_km, shape=key)
+        for key in SURVEY_SHAPES
+    }
+    # Survey is a quick preview: four animals share two pool workers (two
+    # rounds), so give each a tighter budget to keep the whole call under the
+    # p99 3s cap. A user who then picks one animal gets the fuller budget.
+    survey_fn = functools.partial(find_min_clean_course, total_budget_s=1.3)
+    courses = _offload_map(survey_fn, probes, timeout_s=timeout_s)
     for key in SURVEY_SHAPES:
         spec = SHAPES[key]
-        probe = CourseParams(lat=lat, lon=lon, location_name=name,
-                             distance_km=spec.min_km, shape=key)
-        course = find_min_clean_course(probe)
+        course = courses.get(key)
+        if course is _TIMED_OUT:
+            timed_out_any = True
+            lines.append(
+                f"- {spec.emoji} {spec.name_ko}: 3초 안에 후보 확인을 마치지 못했어요"
+            )
+            continue
         if course is None:
             lines.append(f"- {spec.emoji} {spec.name_ko}: 이 근처 도로망에서는 "
                          f"{MAX_ANIMAL_ART_KM:g}km 이내에 적절한 코스가 없어요")
@@ -158,14 +331,13 @@ def _animal_survey(lat: float, lon: float, name: str) -> str:
     if found_any:
         lines.append("어떤 동물로 뛸까요? 동물만 골라주시면 위 최상 코스로 확정해 드려요. "
                      "(더 길게 뛰고 싶으면 거리도 함께 말씀해 주세요)")
+    elif timed_out_any:
+        lines.append("도로망 후보가 많아 탐색을 멈췄어요. 원하는 동물 하나를 골라 다시 요청해 주세요.")
     else:
         lines.append("강남·잠실처럼 길이 바둑판인 동네나 큰 공원 근처 출발점에서 성공률이 높아요.")
     return "\n".join(lines)
 
 
-@mcp.tool(
-    annotations=ToolAnnotations(title="Generate running course", **_RO),
-)
 def generate_running_course(
     location: Annotated[str | None, Field(description="Start place name in Seoul, e.g. '시청', '광화문'")] = None,
     lat: Annotated[float | None, Field(ge=37.4, le=37.72, description="Start latitude (alternative to location; Seoul area)")] = None,
@@ -190,9 +362,6 @@ def generate_running_course(
     return _run(params, note)
 
 
-@mcp.tool(
-    annotations=ToolAnnotations(title="Generate animal-shaped course", **_RO),
-)
 def generate_animal_course(
     shape: Annotated[str | None, Field(description="Animal shape key: cat, dog, rabbit, whale. See list_available_shapes")] = None,
     location: Annotated[str | None, Field(description="Start place name in Seoul")] = None,
@@ -214,11 +383,19 @@ def generate_animal_course(
     shortest clean distance. If a forced distance cannot be drawn well,
     alternatives are suggested instead of returning a bad course. Accepts a
     shape_token from a shared link to recreate a friend's shape here."""
+    started = time.monotonic()
+
+    def remaining() -> float:
+        return max(0.01, ANIMAL_RESPONSE_BUDGET_S - (time.monotonic() - started))
+
     if shape_token and not shape:
         try:
             shape, distance_km = decode_shape_token(shape_token)
         except (ValueError, KeyError):
             return "⚠️ 공유 토큰 형식이 올바르지 않아요. 예: whale-5k"
+    if shape and shape not in SHAPES:
+        available = ", ".join(SHAPES)
+        return f"⚠️ 가능한 모양은 {available}예요. 이 중 하나를 골라 주세요."
     if not shape:
         # No shape yet → survey: shortest clean-completion distance per
         # animal, so the user picks a shape knowing what it will cost.
@@ -226,7 +403,7 @@ def generate_animal_course(
             rlat, rlon, name = resolve_location(location, lat, lon)
         except CourseError as e:
             return f"⚠️ {e}"
-        return _animal_survey(rlat, rlon, name)
+        return _animal_survey(rlat, rlon, name, timeout_s=remaining())
     if distance_km is None and duration_min is None and shape in SHAPES:
         # Shape chosen, distance left open → quality-first: draw at the
         # shortest distance where the silhouette completes cleanly.
@@ -238,16 +415,24 @@ def generate_animal_course(
                              distance_km=SHAPES[shape].min_km, shape=shape,
                              include_hills=include_hills, night_mode=night_mode,
                              need_facilities=need_facilities or [])
-        course = find_min_clean_course(probe)
+        try:
+            course = _offload(
+                find_min_clean_course, probe, timeout_s=remaining())
+        except _GenerationTimeout:
+            return _animal_timeout_message(name, shape)
         if course is not None:
             spec = SHAPES[shape]
             note = (f"{spec.emoji} {spec.name_ko} 모양이 가장 깔끔하게 완성되는 "
                     f"11km 이내 최상 코스 {course.length_km:.1f}km로 그렸어요. "
                     f"{REFERENCE_FEATURES.get(shape, '')}\n")
             return _serve_course(course, note)
-        # No clean fit in the sweep — fall through to the normal pipeline at
-        # the shape's minimum distance, which fails with honest guidance.
-        distance_km = SHAPES[shape].min_km
+        # No clean fit at this location. Return fast guidance instead of
+        # re-running a full survey (which would push latency past p99 3s).
+        spec = SHAPES[shape]
+        return (
+            f"⚠️ {name}에서는 {spec.name_ko} 실루엣이 11km 이내에 또렷하게 "
+            f"완성되지 않았어요. " + _animal_help(name)
+        )
     try:
         params, note = _build_params(location, lat, lon, distance_km, duration_min,
                                      include_hills, night_mode, need_facilities, shape=shape)
@@ -258,7 +443,11 @@ def generate_animal_course(
         # the location-specific clean minimum first and skip generation when
         # the request is below it; show all four verified choices instead.
         baseline = params.model_copy(update={"distance_km": SHAPES[shape].min_km})
-        minimum = find_min_clean_course(baseline)
+        try:
+            minimum = _offload(
+                find_min_clean_course, baseline, timeout_s=remaining())
+        except _GenerationTimeout:
+            return _animal_timeout_message(params.location_name, shape)
         if minimum is not None and distance_km < minimum.params.distance_km:
             spec = SHAPES[shape]
             return (
@@ -268,16 +457,15 @@ def generate_animal_course(
                 f"(실거리 약 {minimum.length_km:.1f}km)예요.\n\n"
                 + _animal_survey(params.lat, params.lon, params.location_name)
             )
-    out = _run(params, note)
-    if shape in SHAPES:
-        if out.startswith("⚠️"):
-            out += "\n\n" + _animal_survey(params.lat, params.lon, params.location_name)
+    try:
+        out = _run(params, note, timeout_s=remaining())
+    except _GenerationTimeout:
+        return _animal_timeout_message(params.location_name, shape)
+    if shape in SHAPES and out.startswith("⚠️"):
+        out += " " + _animal_help(params.location_name)
     return out
 
 
-@mcp.tool(
-    annotations=ToolAnnotations(title="List available shapes", **_RO),
-)
 def list_available_shapes() -> str:
     """Lists animal shapes available for GPS-art running courses in
     RunArt(런아트), with the minimum recommended distance for each shape."""
@@ -289,9 +477,6 @@ def list_available_shapes() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool(
-    annotations=ToolAnnotations(title="Find facilities near course", **_RO),
-)
 def find_facilities_near_course(
     course_id: Annotated[str, Field(description="Course id from a previously generated course")],
     facility_types: Annotated[list[str] | None, Field(description="Filter: convenience_store, restroom, water, park")] = None,
@@ -314,9 +499,6 @@ def find_facilities_near_course(
     return "\n".join(lines)
 
 
-@mcp.tool(
-    annotations=ToolAnnotations(title="Refine course", **_RO),
-)
 def refine_course(
     course_id: Annotated[str, Field(description="Course id to modify")],
     distance_km: Annotated[float | None, Field(ge=1, le=42.195, description="New target distance")] = None,
@@ -355,9 +537,6 @@ def refine_course(
     return _run(params.model_copy(update=updates))
 
 
-@mcp.tool(
-    annotations=ToolAnnotations(title="Get course status", **_RO),
-)
 def get_course_status(
     course_id: Annotated[str, Field(description="Course id from a previously generated course")],
 ) -> str:
@@ -368,6 +547,23 @@ def get_course_status(
     except Exception:
         return "⚠️ course_id가 올바르지 않아요. 코스 응답에 있는 지도 링크의 id를 사용해 주세요."
     return _run(params)
+
+
+# Register each tool as an async offloaded wrapper (frees the event loop for
+# health checks) while keeping the sync functions above directly callable by
+# tests. offloaded() preserves the signature/docstring FastMCP needs.
+for _fn, _title in (
+    (generate_running_course, "Generate running course"),
+    (generate_animal_course, "Generate animal-shaped course"),
+    (list_available_shapes, "List available shapes"),
+    (find_facilities_near_course, "Find facilities near course"),
+    (refine_course, "Refine course"),
+    (get_course_status, "Get course status"),
+):
+    mcp.add_tool(
+        offloaded(_fn), name=_fn.__name__,
+        annotations=ToolAnnotations(title=_title, **_RO),
+    )
 
 
 # ---------- Preview web (same server, PRD §5.6) ----------
@@ -457,21 +653,50 @@ class _TokenBucketMiddleware:
 
 def _warm() -> None:
     """Load the graph, spatial index, and precomputed weights before traffic;
+    pre-warm the process-pool workers (each must load its own graph copy) and
     prime the cache with a representative course (PRD §7.1 cache warming)."""
     try:
         from . import graph as graphmod
         graphmod.get_graph()
         graphmod._node_index()
+        # Pre-load the graph inside each pool worker so the first real animal
+        # request is not stuck behind a cold ~2.5s graph load per process.
+        pool = _get_pool()
+        if pool is not None:
+            try:
+                workers = getattr(pool, "_max_workers", 2)
+                warms = [pool.submit(graphmod.warmup) for _ in range(workers * 2)]
+                for w in warms:
+                    w.result()
+            except Exception:  # noqa: BLE001 — pool warm is best-effort
+                pass
         _get_course(CourseParams(lat=37.5665, lon=126.9780,
                                  location_name="시청", distance_km=5.0))
     except Exception:  # noqa: BLE001 — warming must never block startup
         pass
 
 
+def _log_geocoding_status() -> None:
+    """One startup line so operators can see immediately whether address /
+    station lookups will work. The most common '위치를 찾지 못했어요' cause is a
+    missing KAKAO_REST_API_KEY in the deploy env — surface it loudly, but
+    never print the key itself (PRD §8)."""
+    import logging
+
+    log = logging.getLogger("runart")
+    if os.environ.get("KAKAO_REST_API_KEY"):
+        log.info("geocoding: Kakao Local API enabled (address/keyword search on)")
+    else:
+        log.warning(
+            "geocoding: KAKAO_REST_API_KEY not set — only the offline gazetteer "
+            "works; arbitrary addresses like '관철동 7-14' will fail. Set the env "
+            "var in the deploy to enable Kakao address/station lookups."
+        )
+
+
 def create_app():
     """App factory (uvicorn workers). Rate limit wraps the whole app."""
-    import threading
-
+    _log_geocoding_status()
     threading.Thread(target=_warm, daemon=True).start()
     app = mcp.streamable_http_app()
     return _TokenBucketMiddleware(app, rps=float(os.environ.get("RATE_LIMIT_RPS", "20")))
@@ -480,9 +705,12 @@ def create_app():
 def main() -> None:
     import uvicorn
 
-    # CPU-bound course generation → multiple workers; stateless + JSON
-    # responses make any worker interchangeable (PRD §9).
-    workers = int(os.environ.get("WEB_CONCURRENCY", str(min(8, os.cpu_count() or 4))))
+    # Memory-bounded by default: the ~560MB graph is loaded once per process.
+    # CPU-bound generation is offloaded to a spawn process pool (RUNART_POOL_
+    # WORKERS), so a single web worker keeps the event loop free for health
+    # checks while total RAM stays ~1.7GB (1 web + 2 pool) instead of the old
+    # 8 web workers (~4.5GB) that risked OOM crashes and 503 storms.
+    workers = int(os.environ.get("WEB_CONCURRENCY", "1"))
     uvicorn.run("runart.server:create_app", factory=True,
                 host=mcp.settings.host, port=mcp.settings.port, workers=workers,
                 log_level="info", access_log=False)  # no per-request URL logging (좌표 미기록)

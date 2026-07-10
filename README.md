@@ -14,7 +14,7 @@ pytest                            # 테스트 (시나리오 수용 테스트 포
 python scripts/loadtest.py 200 10 # 부하 테스트 (규격: 평균 100ms / p99 3s)
 ```
 
-환경변수: `PORT`(기본 8000) · `RUNART_BASE_URL`(미리보기 링크 도메인) · `WEB_CONCURRENCY`(워커 수, 기본 4) · `RATE_LIMIT_RPS`(IP당, 기본 20) · `KAKAO_REST_API_KEY`(지오코딩, 선택) · `RUNART_ETL_LOCAL_ONLY=1`(기존 OSM 속성은 보존하고 로컬 경사도/신호등/가로등만 재반영)
+환경변수: `PORT`(기본 8000) · `RUNART_BASE_URL`(미리보기 링크 도메인) · `WEB_CONCURRENCY`(웹 워커 수, 기본 1) · `RUNART_POOL_WORKERS`(코스 탐색 프로세스 수, 기본 2) · `RATE_LIMIT_RPS`(IP당, 기본 20) · `KAKAO_REST_API_KEY`(지오코딩, 선택) · `RUNART_ETL_LOCAL_ONLY=1`(기존 OSM 속성은 보존하고 로컬 경사도/신호등/가로등만 재반영)
 
 실그래프(`data/seoul_graph.pkl`)가 없으면 **서울 시청 일대 데모 그리드**로 구동된다(전체 파이프라인 동작 확인용). 공모전 제출 전 반드시 ETL 실행:
 

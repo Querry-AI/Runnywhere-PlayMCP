@@ -32,7 +32,11 @@ _CLEAN_COURSES = {}
 def _clean_course(shape):
     if shape not in _CLEAN_COURSES:
         params = CourseParams(**GANGNAM, distance_km=SHAPES[shape].min_km, shape=shape)
-        _CLEAN_COURSES[shape] = find_min_clean_course(params, per_try_s=2.0)
+        # Correctness test (not a latency test): give the sweep a generous
+        # budget so it is deterministic on slow CI. Production uses the fast
+        # speed-first defaults (find_min_clean_course's own smaller budgets).
+        _CLEAN_COURSES[shape] = find_min_clean_course(
+            params, per_try_s=1.5, total_budget_s=12.0)
     course = _CLEAN_COURSES[shape]
     assert course is not None, f"no clean {shape} course found in survey range"
     return course
