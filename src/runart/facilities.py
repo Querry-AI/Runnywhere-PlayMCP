@@ -13,7 +13,7 @@ import pickle
 from pathlib import Path
 
 from . import graph as graphmod
-from .geo import haversine_m
+from .geo import densify_points, haversine_m
 from .models import FACILITY_TYPES
 
 def _data_path(filename: str) -> Path:
@@ -32,7 +32,7 @@ def _data_path(filename: str) -> Path:
 
 
 FACILITIES_PATH = _data_path("facilities.pkl")
-NEAR_COURSE_M = 100.0  # PRD: within 100m of the course
+NEAR_COURSE_M = 10.0  # right on the course: within 10m of the route line
 
 LABELS_KO = {
     "convenience_store": "편의점",
@@ -67,7 +67,8 @@ def _demo_facilities() -> list[dict]:
     return out
 
 
-# ~110m cells: one ring around a course point covers the 100m search radius.
+# ~110m cells: one ring around a course point comfortably covers the search
+# radius (course points are densified to 10m spacing before lookup).
 _CELL = 0.001
 
 
@@ -87,6 +88,7 @@ def facilities_along(points: list[tuple[float, float]], types: list[str] | None 
     O(points x facilities) — this runs on every tool call."""
     wanted = set(types) & set(FACILITY_TYPES) if types else set(FACILITY_TYPES)
     buckets = _facility_buckets()
+    points = densify_points(points, NEAR_COURSE_M)
     cum = 0.0
     best: dict[int, tuple[float, float]] = {}  # id(fac) -> (dist, km)
     seen: dict[int, dict] = {}

@@ -145,14 +145,6 @@ SHAPES: dict[str, ShapeSpec] = {
                      (8.2, 3.6), (7.8, 1.7), (9.0, 0.2), (6.8, 1.0),
                      (5.4, 0.0), (0.6, 0.0)]),
         ),
-        ShapeSpec(
-            "giraffe", "기린", "🦒", 6.0,
-            # 짧은 다리 + 긴 목 하나 + 작은 머리(오씨콘 돌기)
-            _closed([(0.0, 0.0), (0.0, 0.9), (0.9, 0.9), (0.9, 0.0),
-                     (1.8, 0.0), (1.8, 0.9), (2.3, 3.2), (2.0, 4.6),
-                     (2.6, 5.4), (2.9, 4.9), (2.6, 3.5), (1.0, 2.6),
-                     (0.2, 0.9)]),
-        ),
     )
 }
 
@@ -166,9 +158,10 @@ SHAPE_STYLES: dict[str, ShapeStyle] = {
     "cat": ShapeStyle(
         rotations=SIDE_PROFILE_ROTATIONS,
         scales=(0.9, 1.0, 0.85, 0.8, 1.1, 0.75),
-        # Slightly lower than dog: the L-shaped tail and rear leg share street
-        # columns, which costs a few similarity points even on clean grids.
-        similarity_gate=0.72,
+        # Lower than dog: the L-shaped tail and rear leg share street
+        # columns, which costs a few similarity points even on clean grids
+        # (Gangnam peaks around 0.72-0.78 depending on the time budget).
+        similarity_gate=0.70,
         outline_min_frac=0.66,
         max_sharp_turns=6,
         corridor_frac=0.075,
@@ -192,7 +185,7 @@ SHAPE_STYLES: dict[str, ShapeStyle] = {
     "rabbit": ShapeStyle(
         rotations=SIDE_PROFILE_ROTATIONS,
         scales=(0.9, 0.85, 1.0, 0.8, 1.1, 0.75),
-        similarity_gate=0.76,
+        similarity_gate=0.70,
         outline_min_frac=0.66,
         max_sharp_turns=5,
         corridor_frac=0.075,
@@ -214,16 +207,6 @@ SHAPE_STYLES: dict[str, ShapeStyle] = {
         aspect_max=3.20,
         simplicity_weight=0.040,
         zigzag_weight=0.065,
-    ),
-    "giraffe": ShapeStyle(
-        rotations=(0, 10, 350, 15, 345),
-        scales=(0.9, 1.0, 0.85, 0.8, 1.1),
-        similarity_gate=0.54,
-        outline_min_frac=0.62,
-        max_sharp_turns=5,
-        corridor_frac=0.10,
-        aspect_min=0.45,
-        aspect_max=1.40,
     ),
 }
 
@@ -563,20 +546,38 @@ def _segments_cross(p1, p2, p3, p4) -> bool:
 def count_self_intersections(ring_xy: list[tuple[float, float]]) -> int:
     """True crossings in a closed ring (shared-vertex touches at road
     intersections are NOT counted — only segments that actually cross).
-    "self-intersection 금지" is enforced using this."""
+    "self-intersection 금지" is enforced using this.
+
+    Bounding-box sweep along x: routed rings have thousands of short
+    segments, so only the handful whose x-ranges overlap are ever compared —
+    same count as the all-pairs check at a fraction of the cost."""
     n = len(ring_xy)
     if n < 4:
         return 0
     segs = [(ring_xy[i], ring_xy[(i + 1) % n]) for i in range(n)]
+    order = sorted(range(n), key=lambda i: min(segs[i][0][0], segs[i][1][0]))
+    # active: (index, max_x, min_y, max_y) of segments whose x-range may
+    # still overlap upcoming segments.
+    active: list[tuple[int, float, float, float]] = []
     count = 0
-    for i in range(len(segs)):
-        a, b = segs[i]
-        for j in range(i + 2, len(segs)):
-            if i == 0 and j == len(segs) - 1:
-                continue  # adjacent to the closing edge
-            c, d = segs[j]
-            if _segments_cross(a, b, c, d):
+    for idx in order:
+        a, b = segs[idx]
+        min_x, max_x = min(a[0], b[0]), max(a[0], b[0])
+        min_y, max_y = min(a[1], b[1]), max(a[1], b[1])
+        remaining = []
+        for entry in active:
+            j, j_max_x, j_min_y, j_max_y = entry
+            if j_max_x < min_x:
+                continue  # ends before this segment starts — drop forever
+            remaining.append(entry)
+            if j_max_y < min_y or j_min_y > max_y:
+                continue
+            if (idx - j) % n in (1, n - 1):
+                continue  # consecutive segments share a vertex
+            if _segments_cross(a, b, *segs[j]):
                 count += 1
+        active = remaining
+        active.append((idx, max_x, min_y, max_y))
     return count
 
 
@@ -999,6 +1000,34 @@ def _evaluate(g, params: CourseParams, path: list, anchors_xy: list,
     return course, sim, length_err, key
 
 
+# Search-area cache: the subgraph, projected node coordinates and the road
+# occupancy grid depend only on the center and footprint radius — not on the
+# shape, distance or rotation. A distance sweep re-enters _search_shape many
+# times for the same start point; rebuilding these each time used to dominate
+# the per-try cost. Radii are bucketed upward so nearby distances share one
+# entry (a slightly larger subgraph never removes routing options).
+_AREA_CACHE: dict[tuple, tuple] = {}
+_AREA_CACHE_MAX = 16
+_AREA_RADIUS_BUCKET_M = 500.0
+_OCCUPANCY_CELL_M = 130.0
+
+
+def _search_area(lat0: float, lon0: float, radius_m: float):
+    bucket = math.ceil(radius_m / _AREA_RADIUS_BUCKET_M) * _AREA_RADIUS_BUCKET_M
+    key = (round(lat0, 5), round(lon0, 5), bucket)
+    cached = _AREA_CACHE.get(key)
+    if cached is None:
+        g = graphmod.subgraph_around(lat0, lon0, bucket)
+        node_xy = {n: to_xy(g.nodes[n]["lat"], g.nodes[n]["lon"], lat0, lon0)
+                   for n in g.nodes}
+        occupied = {(int(x // _OCCUPANCY_CELL_M), int(y // _OCCUPANCY_CELL_M))
+                    for x, y in node_xy.values()}
+        if len(_AREA_CACHE) >= _AREA_CACHE_MAX:
+            _AREA_CACHE.clear()
+        cached = _AREA_CACHE[key] = (g, node_xy, occupied)
+    return cached
+
+
 def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
                   outline: tuple[tuple[float, float], ...] | None = None,
                   rotations=ROTATIONS, scales=SCALES,
@@ -1031,18 +1060,13 @@ def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
     lat0, lon0 = params.lat, params.lon
     cx = sum(xs) / len(xs)
     cy = sum(ys) / len(ys)
-    # Local subgraph bounded by the largest candidate footprint (PRD §7.1).
-    g = graphmod.subgraph_around(
+    # Local subgraph bounded by the largest candidate footprint (PRD §7.1),
+    # plus projected coordinates and the coarse road-occupancy grid used to
+    # prune placements on roadless blocks (palace grounds, rivers, parks).
+    # All three are location-cached and shared across the distance sweep.
+    g, node_xy, occupied = _search_area(
         lat0, lon0, diameter_units * base_scale * max(scales) * 0.7 + 1000)
-    # Shared across every (scale, rotation, offset) candidate — recomputing
-    # this per candidate used to dominate the whole search budget.
-    node_xy = {n: to_xy(g.nodes[n]["lat"], g.nodes[n]["lon"], lat0, lon0)
-               for n in g.nodes}
-    # Coarse road-occupancy grid: placements whose anchors fall on roadless
-    # blocks (palace grounds, rivers, parks) are pruned before the expensive
-    # snap, which buys a much wider placement search within the same budget.
-    cell = 130.0
-    occupied = {(int(x // cell), int(y // cell)) for x, y in node_xy.values()}
+    cell = _OCCUPANCY_CELL_M
 
     def _placement_coverage(anchors) -> float:
         ok = 0
@@ -1321,6 +1345,10 @@ def find_min_clean_course(params: CourseParams,
                         and (best is None or course.length_km < best.length_km))):
                 best = course
                 best_sim = sim
+            # A silhouette this clear will not get meaningfully better at a
+            # longer distance — stop sweeping instead of burning the budget.
+            if best_sim >= GOOD_ENOUGH:
+                break
     _MIN_CLEAN_CACHE[cache_key] = best
     return best
 

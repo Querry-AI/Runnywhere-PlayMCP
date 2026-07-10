@@ -38,9 +38,9 @@ def _clean_course(shape):
     return course
 
 
-def test_all_five_shapes_listed():
+def test_exactly_four_animals_listed():
     keys = {s["shape"] for s in list_shapes()}
-    assert {"cat", "dog", "giraffe", "rabbit", "whale"} <= keys
+    assert keys == {"cat", "dog", "rabbit", "whale"}
 
 
 @pytest.mark.parametrize("shape", ["cat", "dog", "rabbit", "whale"])
@@ -164,10 +164,19 @@ def test_small_zigzag_penalty_detects_staircase_noise():
 
 
 def test_shape_preview_matches_guided_route_points():
+    from runart.render import route_points
+
     course = _clean_course("dog")
     visual = _shape_only_route(course)
 
-    assert visual == [[round(lat, 6), round(lon, 6)] for lat, lon in course.points]
+    # The clean view must be the same street-following polyline as guide
+    # mode (real OSM way geometry), passing through every route node.
+    detailed = [[round(lat, 6), round(lon, 6)] for lat, lon in route_points(course)]
+    assert visual == detailed
+    node_points = [[round(lat, 6), round(lon, 6)] for lat, lon in course.points]
+    it = iter(visual)
+    assert all(p in it for p in node_points)  # ordered subsequence
+    assert len(visual) >= len(node_points)
 
 
 def test_forced_short_dog_is_rejected_instead_of_shipping_blob():
@@ -185,17 +194,9 @@ def test_ordered_similarity_rejects_feature_reordering():
     assert ordered_similarity(reordered, template, diameter) < 0.85
 
 
-def test_too_short_for_giraffe_suggests_alternatives():
-    # 3.5km: 토끼·고양이·고래(min 3km)는 가능, 기린(min 6km)은 불가 → 대안 제시
-    params = CourseParams(**CITY_HALL, distance_km=3.5, shape="giraffe")
-    with pytest.raises(CourseError) as e:
-        generate_shape_course(params)
-    assert "기린" in str(e.value)
-    assert "가능" in str(e.value)  # alternatives offered, not a bare refusal
-
-
-def test_unknown_shape_lists_options():
-    params = CourseParams(**CITY_HALL, distance_km=5.0, shape="dragon")
-    with pytest.raises(CourseError) as e:
-        generate_shape_course(params)
-    assert "cat" in str(e.value)
+def test_unknown_or_removed_shape_lists_options():
+    for bad_shape in ("dragon", "giraffe"):
+        params = CourseParams(**CITY_HALL, distance_km=5.0, shape=bad_shape)
+        with pytest.raises(CourseError) as e:
+            generate_shape_course(params)
+        assert "cat" in str(e.value)

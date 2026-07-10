@@ -11,7 +11,7 @@ from . import graph as graphmod
 from .course import Course, smooth_series
 from .facilities import LABELS_KO
 from .geo import haversine_m, to_xy
-from .infrastructure import infra_count_along, infra_count_crossed_by_path
+from .infrastructure import infra_count_along, pedestrian_signals_crossed
 from .models import encode_course_id, encode_shape_token
 from .rfs import COMPONENT_LABELS_KO, edge_rfs
 from .shapes import SHAPES
@@ -45,7 +45,7 @@ def course_markdown(course: Course, base_url: str, facilities: list[dict]) -> st
         missing = [LABELS_KO[t] for t in p.need_facilities
                    if t in LABELS_KO and t not in found_types]
         if missing:
-            lines.append(f"- 요청 시설 중 {', '.join(missing)}은 100m 반경 후보에서 찾지 못했어요")
+            lines.append(f"- 요청 시설 중 {', '.join(missing)}은 코스 10m 반경에서 찾지 못했어요")
     if p.night_mode:
         lines.append("- 🌙 야간 안전 모드: 조명·안심 CCTV가 좋은 길 위주예요")
     lines.append(f"- 🗺️ 지도 보기: {base_url}/c/{cid}  ⬇️ GPX: {base_url}/c/{cid}.gpx")
@@ -57,16 +57,25 @@ def course_markdown(course: Course, base_url: str, facilities: list[dict]) -> st
 
 # ---------- preview page data ----------
 
+def route_points(course: Course) -> list[tuple[float, float]]:
+    """The course polyline following real street geometry (OSM way shapes),
+    so the drawn route stays on pedestrian roads instead of cutting straight
+    chords through blocks/buildings between graph nodes."""
+    return graphmod.path_points(graphmod.get_graph(), course.path)
+
+
 def _segments_with_rfs(course: Course) -> list:
-    """[[lat1, lon1, lat2, lon2, rfs_0to1], ...] for the heatmap polyline."""
+    """[[lat1, lon1, lat2, lon2, rfs_0to1], ...] for the heatmap polyline.
+    Each graph edge is expanded into its real street-geometry sub-segments."""
     g = graphmod.get_graph()
     p = course.params
     out = []
     for u, v in zip(course.path, course.path[1:]):
-        a, b = g.nodes[u], g.nodes[v]
-        score = edge_rfs(g.edges[u, v], p.night_mode, p.include_hills)
-        out.append([round(a["lat"], 6), round(a["lon"], 6),
-                    round(b["lat"], 6), round(b["lon"], 6), round(score, 2)])
+        score = round(edge_rfs(g.edges[u, v], p.night_mode, p.include_hills), 2)
+        pts = graphmod.edge_points(g, u, v)
+        for (alat, alon), (blat, blon) in zip(pts, pts[1:]):
+            out.append([round(alat, 6), round(alon, 6),
+                        round(blat, 6), round(blon, 6), score])
     return out
 
 
@@ -111,12 +120,12 @@ def _profile_svg(profile: list) -> str:
     )
 
 
-def _km_markers(course: Course) -> list[dict]:
+def _km_markers(points: list[tuple[float, float]]) -> list[dict]:
     markers = []
     target = 1.0
     cum = 0.0
     prev = None
-    for lat, lon in course.points:
+    for lat, lon in points:
         if prev is None:
             prev = (lat, lon)
             continue
@@ -134,14 +143,14 @@ def _km_markers(course: Course) -> list[dict]:
     return markers
 
 
-def _direction_markers(course: Course) -> list[dict]:
+def _direction_markers(points: list[tuple[float, float]]) -> list[dict]:
     markers = []
-    if len(course.points) < 2:
+    if len(points) < 2:
         return markers
     target = 0.35
     cum = 0.0
-    prev = course.points[0]
-    for lat, lon in course.points[1:]:
+    prev = points[0]
+    for lat, lon in points[1:]:
         seg_km = haversine_m(prev[0], prev[1], lat, lon) / 1000.0
         while seg_km > 0 and cum + seg_km >= target:
             t = (target - cum) / seg_km
@@ -194,7 +203,7 @@ def _rdp(points_xy: list[tuple[float, float]], keep: list[int], lo: int, hi: int
 
 def _shape_only_route(course: Course) -> list[list[float]]:
     """The clean view must be the same route as guide mode, just without UI."""
-    return [[round(lat, 6), round(lon, 6)] for lat, lon in course.points]
+    return [[round(lat, 6), round(lon, 6)] for lat, lon in route_points(course)]
 
 
 def _score_breakdown_html(course: Course) -> str:
@@ -223,10 +232,11 @@ def _score_breakdown_html(course: Course) -> str:
     )
 
 
-def _course_fact_html(course: Course, facilities: list[dict]) -> str:
+def _course_fact_html(course: Course, facilities: list[dict],
+                      detailed_points: list[tuple[float, float]]) -> str:
     g = graphmod.get_graph()
-    signals = infra_count_crossed_by_path(g, course.path, "pedestrian_signal")
-    streetlights = infra_count_along(course.points, "streetlight")
+    signals = pedestrian_signals_crossed(g, course.path)
+    streetlights = infra_count_along(detailed_points, "streetlight")
     preview_facilities = [f for f in facilities if f["type"] in PREVIEW_FACILITY_TYPES]
     restroom_count = sum(1 for f in preview_facilities if f["type"] == "restroom")
     convenience_count = sum(1 for f in preview_facilities if f["type"] == "convenience_store")
@@ -243,7 +253,7 @@ def _course_fact_html(course: Course, facilities: list[dict]) -> str:
     return (
         '<section class="panel"><h3>러너 체크포인트</h3>'
         f'<div class="facts">{cells}</div>'
-        '<p class="hint">보행 신호는 실제 경로 선분 1m 이내 기준, 가로등·편의점·화장실은 코스 100m 반경 기준입니다.</p>'
+        '<p class="hint">보행 신호는 코스가 실제로 길을 건너는 지점 기준, 가로등·편의점·화장실은 코스 10m 반경 기준입니다.</p>'
         '</section>'
     )
 
@@ -260,13 +270,14 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
         f"러닝 친화도 {course.rfs['score']}/100 · 누적 오르막 {course.ascent_m:.0f}m"
         f" · {p.location_name or '서울'} — 러니웨어"
     )
+    detailed = route_points(course)
     segments = json.dumps(_segments_with_rfs(course))
     shape_route = json.dumps(_shape_only_route(course))
-    km_markers = json.dumps(_km_markers(course))
-    dir_markers = json.dumps(_direction_markers(course))
+    km_markers = json.dumps(_km_markers(detailed))
+    dir_markers = json.dumps(_direction_markers(detailed))
     profile_svg = _profile_svg(_elevation_profile(course))
     score_breakdown = _score_breakdown_html(course)
-    course_facts = _course_fact_html(course, facilities)
+    course_facts = _course_fact_html(course, facilities, detailed)
     markers = json.dumps([
         {"lat": f["lat"], "lon": f["lon"],
          "label": html.escape(f"{LABELS_KO[f['type']]} · {f['at_km']:g}km 지점")}
@@ -372,7 +383,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
 {score_breakdown}
 <section class="panel"><h3>코스 주변 편의점·화장실</h3>
  <div class="facility-list">
-  {''.join(f'<span class="chip">{LABELS_KO[f["type"]]} · {f["at_km"]:g}km</span>' for f in facilities[:10]) or '<span class="chip">100m 반경 편의점·화장실 없음</span>'}
+  {''.join(f'<span class="chip">{LABELS_KO[f["type"]]} · {f["at_km"]:g}km</span>' for f in facilities[:10]) or '<span class="chip">코스 10m 반경 편의점·화장실 없음</span>'}
  </div>
 </section>
 </div>
@@ -511,8 +522,9 @@ def card_svg(course: Course) -> str:
     shape = SHAPES.get(p.shape) if p.shape else None
     title = (f"{shape.emoji} {shape.name_ko} 모양" if shape else "🏃 러닝 코스")
     w, h = 800, 418
-    lats = [pt[0] for pt in course.points]
-    lons = [pt[1] for pt in course.points]
+    card_points = route_points(course)
+    lats = [pt[0] for pt in card_points]
+    lons = [pt[1] for pt in card_points]
     lat_c = (max(lats) + min(lats)) / 2
     span_lat = max(max(lats) - min(lats), 1e-6)
     span_lon = max(max(lons) - min(lons), 1e-6) * 0.79  # rough lon shrink at 37.5N
@@ -522,7 +534,7 @@ def card_svg(course: Course) -> str:
     pts = " ".join(
         f"{cx + (lon - (max(lons) + min(lons)) / 2) * scale * 0.79:.1f},"
         f"{cy - (lat - lat_c) * scale:.1f}"
-        for lat, lon in course.points
+        for lat, lon in card_points
     )
     where = html.escape(p.location_name or "서울")
     return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}">

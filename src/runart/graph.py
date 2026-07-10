@@ -187,6 +187,37 @@ def subgraph_around(lat: float, lon: float, radius_m: float):
     return g.subgraph(nodes)
 
 
+def edge_points(g, u, v) -> list[tuple[float, float]]:
+    """(lat, lon) polyline of the edge u->v following the real street.
+
+    Uses the OSM way geometry preserved by etl/build_graph.py when present;
+    falls back to the straight node-to-node chord for graphs built without
+    geometry (demo grid, older pickles)."""
+    a = (g.nodes[u]["lat"], g.nodes[u]["lon"])
+    b = (g.nodes[v]["lat"], g.nodes[v]["lon"])
+    geom = g.edges[u, v].get("geometry")
+    if not geom:
+        return [a, b]
+    pts = list(geom)
+    # The stored orientation follows the ETL's (u, v) insertion order, which
+    # an undirected graph does not preserve — orient by endpoint proximity.
+    if (abs(pts[0][0] - a[0]) + abs(pts[0][1] - a[1])
+            > abs(pts[-1][0] - a[0]) + abs(pts[-1][1] - a[1])):
+        pts.reverse()
+    return [a] + pts[1:-1] + [b]
+
+
+def path_points(g, path: list) -> list[tuple[float, float]]:
+    """(lat, lon) polyline of a node path, following real street geometry."""
+    if not path:
+        return []
+    out: list[tuple[float, float]] = []
+    for u, v in zip(path, path[1:]):
+        seg = edge_points(g, u, v)
+        out.extend(seg if not out else seg[1:])
+    return out or [(g.nodes[path[0]]["lat"], g.nodes[path[0]]["lon"])]
+
+
 def coverage_bounds() -> tuple[float, float, float, float]:
     idx = _node_index()
     lats = [p[0] for p in idx]

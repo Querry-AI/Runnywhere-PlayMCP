@@ -23,7 +23,7 @@ from .geocode import resolve_location
 from .gpx import to_gpx
 from .models import (CourseParams, DEFAULT_PACE_MIN_PER_KM, decode_course_id,
                      decode_shape_token, encode_course_id)
-from .render import card_svg, course_markdown, preview_html
+from .render import card_svg, course_markdown, preview_html, route_points
 from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
                      generate_shape_course, list_shapes)
 from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
@@ -105,7 +105,7 @@ def _build_params(location, lat, lon, distance_km, duration_min, include_hills,
 def _run(params: CourseParams, note: str = "") -> str:
     try:
         course = _get_course(params)
-        facs = facilities_along(course.points, params.need_facilities or None)
+        facs = facilities_along(route_points(course), params.need_facilities or None)
         return note + course_markdown(course, BASE_URL, facs)
     except CourseError as e:
         return f"⚠️ {e}"
@@ -114,7 +114,7 @@ def _run(params: CourseParams, note: str = "") -> str:
 def _serve_course(course, note: str = "") -> str:
     """Render an already-generated course and keep it warm in the cache."""
     _cache_put(encode_course_id(course.params), course)
-    facs = facilities_along(course.points, course.params.need_facilities or None)
+    facs = facilities_along(route_points(course), course.params.need_facilities or None)
     return note + course_markdown(course, BASE_URL, facs)
 
 
@@ -124,7 +124,7 @@ REFERENCE_FEATURES = {
     "dog": "큰 머리·짧은 주둥이·넓은 몸통·짧은 다리·올라간 꼬리",
     "cat": "큰 머리·뾰족 귀 2개·긴 몸통·짧은 다리·길게 올라간 꼬리",
     "whale": "큰 타원 몸통·둥근 머리·좁은 꼬리목·갈라진 V 꼬리",
-    "rabbit": "통통한 몸통·작은 머리·분리된 긴 귀 2개·작은 꼬리",
+    "rabbit": "네모 몸통·위로 솟은 긴 네모 귀 2개",
 }
 
 
@@ -194,7 +194,7 @@ def generate_running_course(
     annotations=ToolAnnotations(title="Generate animal-shaped course", **_RO),
 )
 def generate_animal_course(
-    shape: Annotated[str | None, Field(description="Animal shape key: cat, dog, giraffe, rabbit, whale. See list_available_shapes")] = None,
+    shape: Annotated[str | None, Field(description="Animal shape key: cat, dog, rabbit, whale. See list_available_shapes")] = None,
     location: Annotated[str | None, Field(description="Start place name in Seoul")] = None,
     lat: Annotated[float | None, Field(ge=37.4, le=37.72, description="Start latitude (alternative to location; Seoul area)")] = None,
     lon: Annotated[float | None, Field(ge=126.76, le=127.19, description="Start longitude (alternative to location; Seoul area)")] = None,
@@ -206,7 +206,7 @@ def generate_animal_course(
     shape_token: Annotated[str | None, Field(description="Share token like 'whale-5k' from a friend's course link; recreates the same shape at this user's location")] = None,
 ) -> str:
     """Generates a GPS-art running course shaped like an animal (cat, dog,
-    giraffe, rabbit, whale) snapped to real pedestrian roads in Seoul, from
+    rabbit, whale) snapped to real pedestrian roads in Seoul, from
     RunArt(런아트). Shape quality decides the distance: call WITHOUT a shape
     to get, for each animal, the shortest distance at which it completes as
     a clean reference-like silhouette at this location, so the user can
@@ -297,8 +297,8 @@ def find_facilities_near_course(
     facility_types: Annotated[list[str] | None, Field(description="Filter: convenience_store, restroom, water, park")] = None,
 ) -> str:
     """Lists convenience stores, restrooms, drinking fountains, and parks
-    within 100m of a RunArt(런아트) course, with the km mark where the course
-    passes each one."""
+    within 10m of a RunArt(런아트) course line, with the km mark where the
+    course passes each one."""
     try:
         params = decode_course_id(course_id)
         course = _get_course(params)
@@ -306,9 +306,9 @@ def find_facilities_near_course(
         return f"⚠️ {e}"
     except Exception:
         return "⚠️ course_id가 올바르지 않아요. 코스 응답에 있는 지도 링크의 id를 사용해 주세요."
-    facs = facilities_along(course.points, facility_types, limit=15)
+    facs = facilities_along(route_points(course), facility_types, limit=15)
     if not facs:
-        return "코스 100m 반경에서 해당 시설을 찾지 못했어요. 조건 없이 다시 조회해 보세요."
+        return "코스 10m 반경에서 해당 시설을 찾지 못했어요. 조건 없이 다시 조회해 보세요."
     lines = [f"🏃 {course.length_km:.1f}km 코스 주변 시설:"]
     lines += [f"- {f['at_km']:g}km 지점 · {LABELS_KO[f['type']]} ({f['dist_m']}m 옆)" for f in facs]
     return "\n".join(lines)
@@ -401,9 +401,9 @@ async def preview(request: Request) -> Response:
         return PlainTextResponse("잘못된 코스 링크입니다.", status_code=404)
     if is_gpx:
         name = (params.location_name or "RunArt") + f" {course.length_km:.1f}km"
-        return Response(to_gpx(name, course.points), media_type="application/gpx+xml",
+        return Response(to_gpx(name, route_points(course)), media_type="application/gpx+xml",
                         headers={"Content-Disposition": f'attachment; filename="runart-{cid[:12]}.gpx"'})
-    facs = facilities_along(course.points, ["convenience_store", "restroom"], limit=80)
+    facs = facilities_along(route_points(course), ["convenience_store", "restroom"], limit=80)
     return HTMLResponse(preview_html(course, facs, BASE_URL))
 
 

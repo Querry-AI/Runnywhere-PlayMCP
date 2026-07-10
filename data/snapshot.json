@@ -1,16 +1,16 @@
 {
-  "date": "2026-07-09",
+  "date": "2026-07-11",
   "sources": {
     "elevation": "srtm-30m-aws",
     "slope_gov": "seoul-oa22241 + srtm fallback",
-    "green": "preserved-existing",
-    "cctv": "preserved-existing",
+    "green": "osm-polygons",
+    "cctv": "osm-surveillance",
     "lighting": "seoul-oa22205",
     "sidewalk": "none (osm highway-class prior only)",
-    "facilities": "preserved-existing + seoul-public-restrooms",
+    "facilities": "osm-poi + seoul-public-restrooms",
     "crossing": "seoul-pedestrian-signals"
   },
-  "local_only": true,
+  "local_only": false,
   "counts": {
     "streetlight_points": 19316,
     "pedestrian_signal_points": 26769,

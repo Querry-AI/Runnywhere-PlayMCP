@@ -1,11 +1,12 @@
 """Streetlight and pedestrian-signal counts near a course."""
 
 import functools
+import math
 import os
 import pickle
 from pathlib import Path
 
-from .geo import haversine_m, to_xy
+from .geo import densify_points, haversine_m, to_xy
 
 
 def _data_path(filename: str) -> Path:
@@ -24,7 +25,7 @@ def _data_path(filename: str) -> Path:
 
 
 INFRA_PATH = _data_path("infra_points.pkl")
-NEAR_COURSE_M = 100.0
+NEAR_COURSE_M = 10.0  # right on the course: within 10m of the route line
 _CELL = 0.001
 
 
@@ -50,10 +51,11 @@ def _infra_buckets() -> dict[str, dict[tuple[int, int], list[tuple[float, float]
 
 def infra_count_along(points: list[tuple[float, float]], kind: str,
                       radius_m: float = NEAR_COURSE_M) -> int:
-    """Unique infrastructure points within radius_m of sampled route points."""
+    """Unique infrastructure points within radius_m of the route line
+    (points are densified so the small radius has no mid-block holes)."""
     buckets = _infra_buckets().get(kind, {})
     seen = set()
-    for lat, lon in points:
+    for lat, lon in densify_points(points, radius_m):
         ci, cj = int(lat / _CELL), int(lon / _CELL)
         for i in (ci - 1, ci, ci + 1):
             for j in (cj - 1, cj, cj + 1):
@@ -63,36 +65,54 @@ def infra_count_along(points: list[tuple[float, float]], kind: str,
     return len(seen)
 
 
-def _point_segment_distance_m(p: tuple[float, float],
-                              a: tuple[float, float],
-                              b: tuple[float, float]) -> float:
-    px, py = to_xy(p[0], p[1], a[0], a[1])
-    bx, by = to_xy(b[0], b[1], a[0], a[1])
-    denom = bx * bx + by * by
-    t = 0.0 if denom == 0 else max(0.0, min(1.0, (px * bx + py * by) / denom))
-    return ((px - t * bx) ** 2 + (py - t * by) ** 2) ** 0.5
+# A signalized crosswalk's poles stand at the curb corners, typically within
+# a few tens of meters of the road-centerline intersection node.
+CROSSING_SIGNAL_RADIUS_M = 25.0
+STRAIGHT_THROUGH_MAX_DEG = 45.0
 
 
-def infra_count_crossed_by_path(graph, path: list, kind: str,
-                                radius_m: float = 1.0) -> int:
-    """Unique infra points close to the actual route edges.
+def pedestrian_signals_crossed(graph, path: list,
+                               radius_m: float = CROSSING_SIGNAL_RADIUS_M,
+                               straight_max_deg: float = STRAIGHT_THROUGH_MAX_DEG,
+                               ) -> int:
+    """Signals at intersections the route actually CROSSES.
 
-    Used for pedestrian signals: this avoids counting every signal merely
-    near sampled route points and instead approximates signals the runner
-    actually crosses/passes on the route geometry.
+    Merely running past a signal pole must not count. On a centerline graph a
+    crossing happens when the route passes straight through an intersection
+    (degree >= 3): the runner traverses the transverse street's crosswalk and
+    waits for its signal. Turning at the corner keeps the runner on the same
+    block edge, so signals there are excluded.
     """
-    buckets = _infra_buckets().get(kind, {})
-    seen = set()
-    for u, v in zip(path, path[1:]):
-        a = (graph.nodes[u]["lat"], graph.nodes[u]["lon"])
-        b = (graph.nodes[v]["lat"], graph.nodes[v]["lon"])
-        lat_min, lat_max = sorted((a[0], b[0]))
-        lon_min, lon_max = sorted((a[1], b[1]))
-        ci0, ci1 = int(lat_min / _CELL) - 1, int(lat_max / _CELL) + 1
-        cj0, cj1 = int(lon_min / _CELL) - 1, int(lon_max / _CELL) + 1
-        for i in range(ci0, ci1 + 1):
-            for j in range(cj0, cj1 + 1):
-                for plat, plon in buckets.get((i, j), ()):
-                    if _point_segment_distance_m((plat, plon), a, b) <= radius_m:
+    buckets = _infra_buckets().get("pedestrian_signal", {})
+    seen: set[tuple[float, float]] = set()
+    n = len(path)
+    if n < 3:
+        return 0
+    closed = path[0] == path[-1]
+    # For a closed loop the shared start/end node is also a potential crossing.
+    indices = list(range(1, n - 1)) + ([0] if closed else [])
+    for i in indices:
+        b = path[i]
+        if graph.degree(b) < 3:
+            continue  # mid-block node, nothing to cross
+        a = path[i - 1] if i > 0 else path[-2]
+        c = path[i + 1]
+        na, nb, nc = graph.nodes[a], graph.nodes[b], graph.nodes[c]
+        ax, ay = to_xy(na["lat"], na["lon"], nb["lat"], nb["lon"])
+        cx, cy = to_xy(nc["lat"], nc["lon"], nb["lat"], nb["lon"])
+        m1, m2 = math.hypot(ax, ay), math.hypot(cx, cy)
+        if m1 < 1e-9 or m2 < 1e-9:
+            continue
+        # Direction change between incoming and outgoing legs: straight
+        # through = crossing the side street; a sharp turn = staying on the
+        # same corner without crossing anything.
+        cos_t = max(-1.0, min(1.0, (-ax * cx - ay * cy) / (m1 * m2)))
+        if math.degrees(math.acos(cos_t)) > straight_max_deg:
+            continue
+        ci, cj = int(nb["lat"] / _CELL), int(nb["lon"] / _CELL)
+        for gi in (ci - 1, ci, ci + 1):
+            for gj in (cj - 1, cj, cj + 1):
+                for plat, plon in buckets.get((gi, gj), ()):
+                    if haversine_m(nb["lat"], nb["lon"], plat, plon) <= radius_m:
                         seen.add((round(plat, 6), round(plon, 6)))
     return len(seen)

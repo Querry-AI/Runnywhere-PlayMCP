@@ -7,7 +7,6 @@ Order: ① direct coordinates ② offline gazetteer of Seoul running spots
 The API key never appears in logs, responses, or errors (PRD §8).
 """
 
-import functools
 import json
 import os
 import re
@@ -19,8 +18,13 @@ from .course import CourseError
 
 _LOCAL_SEARCH_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 _ADDRESS_SEARCH_URL = "https://dapi.kakao.com/v2/local/search/address.json"
-_TIMEOUT_S = 1.0
+# 1s was too tight for Kakao's p95 and made lookups fail intermittently.
+_TIMEOUT_S = 2.5
 _SEOUL_BOUNDS = (37.4, 37.72, 126.76, 127.19)
+# Kakao `rect` filter (lon,lat,lon,lat) covering all of Seoul. A center-point
+# `radius` filter cannot cover Seoul (max 20km) and silently dropped stations
+# near the city edge.
+_SEOUL_RECT = "126.76,37.4,127.19,37.72"
 _SEOUL_DISTRICTS = (
     "강남구", "강동구", "강북구", "강서구", "관악구", "광진구", "구로구", "금천구",
     "노원구", "도봉구", "동대문구", "동작구", "마포구", "서대문구", "서초구", "성동구",
@@ -87,60 +91,93 @@ def _in_seoul(lat: float, lon: float) -> bool:
     return lat_lo <= lat <= lat_hi and lon_lo <= lon <= lon_hi
 
 
-@functools.lru_cache(maxsize=1024)
-def _keyword_search(query: str) -> tuple[float, float, str] | None:
-    """Kakao Local keyword search. Returns None on any failure (fallback
-    chain continues); the key is read here and never leaves this function."""
+# Success-only caches. functools.lru_cache would also cache a None produced
+# by one transient timeout, permanently killing that query until restart.
+_SEARCH_CACHE: dict[tuple[str, str], tuple[float, float, str]] = {}
+_SEARCH_CACHE_MAX = 2048
+
+
+def _cache_get(kind: str, query: str):
+    return _SEARCH_CACHE.get((kind, query))
+
+
+def _cache_ok(kind: str, query: str, hit: tuple[float, float, str]) -> None:
+    if len(_SEARCH_CACHE) >= _SEARCH_CACHE_MAX:
+        _SEARCH_CACHE.clear()
+    _SEARCH_CACHE[(kind, query)] = hit
+
+
+def _kakao_get(url: str, params: dict) -> list[dict]:
+    """One Kakao Local API call with a single retry on transient failure.
+    The key is read here and never leaves this function."""
     key = os.environ.get("KAKAO_REST_API_KEY")
     if not key:
-        return None
-    params = urllib.parse.urlencode({
-        "query": query, "size": 3,
-        # Bias results to Seoul center; we still validate bounds after.
-        "x": "126.9780", "y": "37.5665", "radius": 20000,
-    })
+        return []
     req = urllib.request.Request(
-        f"{_LOCAL_SEARCH_URL}?{params}", headers={"Authorization": f"KakaoAK {key}"})
-    try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT_S, context=_SSL_CTX) as r:
-            docs = json.load(r).get("documents", [])
-    except Exception:  # noqa: BLE001 — timeout/HTTP/parse all fall through
-        return None
+        f"{url}?{urllib.parse.urlencode(params)}",
+        headers={"Authorization": f"KakaoAK {key}"})
+    for attempt in (0, 1):
+        try:
+            with urllib.request.urlopen(req, timeout=_TIMEOUT_S, context=_SSL_CTX) as r:
+                return json.load(r).get("documents", [])
+        except Exception:  # noqa: BLE001 — timeout/HTTP/parse all fall through
+            if attempt:
+                return []
+    return []
+
+
+def _keyword_search(query: str) -> tuple[float, float, str] | None:
+    """Kakao Local keyword search, restricted to Seoul via `rect`."""
+    hit = _cache_get("kw", query)
+    if hit:
+        return hit
+    docs = _kakao_get(_LOCAL_SEARCH_URL, {
+        "query": query, "size": 5, "rect": _SEOUL_RECT,
+    })
     for doc in docs:
         lat, lon = float(doc["y"]), float(doc["x"])
         if _in_seoul(lat, lon):
-            return lat, lon, doc.get("place_name") or query
+            found = (lat, lon, doc.get("place_name") or query)
+            _cache_ok("kw", query, found)
+            return found
     return None
 
 
-@functools.lru_cache(maxsize=1024)
 def _address_search(query: str) -> tuple[float, float, str] | None:
     """Kakao Local address search for user-entered current/home addresses.
 
-    Returns None on any failure and never exposes the API key. We only accept
-    Seoul-bound results because the route graph is Seoul-only.
+    analyze_type=similar lets partial inputs like '관철동 7-14' (no 구/시)
+    still resolve. Only Seoul-bound results are accepted because the route
+    graph is Seoul-only.
     """
-    key = os.environ.get("KAKAO_REST_API_KEY")
-    if not key:
-        return None
-    params = urllib.parse.urlencode({"query": query, "size": 3})
-    req = urllib.request.Request(
-        f"{_ADDRESS_SEARCH_URL}?{params}", headers={"Authorization": f"KakaoAK {key}"})
-    try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT_S, context=_SSL_CTX) as r:
-            docs = json.load(r).get("documents", [])
-    except Exception:  # noqa: BLE001 — timeout/HTTP/parse all fall through
-        return None
+    hit = _cache_get("addr", query)
+    if hit:
+        return hit
+    docs = _kakao_get(_ADDRESS_SEARCH_URL, {
+        "query": query, "size": 5, "analyze_type": "similar",
+    })
     for doc in docs:
         lat, lon = float(doc["y"]), float(doc["x"])
         if _in_seoul(lat, lon):
             name = (
-                doc.get("road_address", {}).get("address_name")
-                or doc.get("address", {}).get("address_name")
+                (doc.get("road_address") or {}).get("address_name")
+                or (doc.get("address") or {}).get("address_name")
                 or query
             )
-            return lat, lon, name
+            found = (lat, lon, name)
+            _cache_ok("addr", query, found)
+            return found
     return None
+
+
+# Address-shaped inputs (지번 '관철동 7-14', 도로명 '테헤란로8길 8', '~번지')
+# must hit the address API first: keyword search treats them as POI names and
+# often returns a similarly named shop — or nothing.
+_ADDRESS_LIKE = re.compile(r"(?:[가-힣]+(?:동|가|로|길)\s*\d|(?:\d+-\d+)|\d+\s*번지)")
+
+
+def _looks_like_address(query: str) -> bool:
+    return bool(_ADDRESS_LIKE.search(query))
 
 
 def _address_query_variants(query: str) -> list[str]:
@@ -176,6 +213,18 @@ def _address_query_variants(query: str) -> list[str]:
     return out
 
 
+def _run_keyword_search(location: str) -> tuple[float, float, str] | None:
+    return _keyword_search(location.strip())
+
+
+def _run_address_search(location: str) -> tuple[float, float, str] | None:
+    for query in _address_query_variants(location):
+        hit = _address_search(query)
+        if hit:
+            return hit
+    return None
+
+
 def resolve_location(location: str | None, lat: float | None, lon: float | None,
                      ) -> tuple[float, float, str]:
     if lat is not None and lon is not None:
@@ -184,22 +233,37 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
         return lat, lon, location or f"({lat:.4f}, {lon:.4f})"
     if location:
         key = location.replace(" ", "")
+        # ① exact offline gazetteer hit (no network, instant)
         for name, (glat, glon) in GAZETTEER.items():
             if name == key:
                 return glat, glon, name
-        for name, (glat, glon) in GAZETTEER.items():
-            if len(key) >= 2 and (name in key or key in name):
-                return glat, glon, name
-        hit = _keyword_search(location.strip())
-        if hit:
-            return hit
-        for query in _address_query_variants(location):
-            hit = _address_search(query)
+        # ② Kakao API. Address-shaped inputs (관철동 7-14, 테헤란로8길 8)
+        # go to the address API first — keyword search treats them as POI
+        # names; place-shaped inputs (station/landmark names) go keyword
+        # first. Each is the other's fallback.
+        is_address = _looks_like_address(location)
+        searches = (
+            [_run_address_search, _run_keyword_search] if is_address
+            else [_run_keyword_search, _run_address_search]
+        )
+        for search in searches:
+            hit = search(location)
             if hit:
                 return hit
+        # ③ fuzzy gazetteer LAST, and only for short place-like queries.
+        # Running it before the API resolved any address containing "강남"
+        # or "은평" to the wrong station.
+        if not is_address and 2 <= len(key) <= 10:
+            for name, (glat, glon) in GAZETTEER.items():
+                if name in key or key in name:
+                    return glat, glon, name
         known = "시청, 강남역, 여의도한강공원, 서울숲, 석촌호수, 올림픽공원, 서울시 중구 세종대로 110"
+        no_key_hint = (
+            "" if os.environ.get("KAKAO_REST_API_KEY")
+            else " (서버에 KAKAO_REST_API_KEY가 설정되지 않아 지도 검색 없이 동작 중이에요.)"
+        )
         raise CourseError(
             f"'{location}' 위치를 찾지 못했어요. 좌표(위도/경도)로 알려주시거나 "
-            f"더 잘 알려진 지명으로 시도해 주세요. 예: {known}"
+            f"더 잘 알려진 지명으로 시도해 주세요. 예: {known}{no_key_hint}"
         )
     raise CourseError("출발 위치가 필요해요. 지명(예: 시청, 강남역)이나 좌표를 알려주세요.")

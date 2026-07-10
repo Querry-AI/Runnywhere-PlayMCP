@@ -60,6 +60,16 @@ def main() -> None:
         highway = _first(d.get("highway")) or "unclassified"
         lit = _first(d.get("lit"))
         name = _first(d.get("name")) or ""
+        # osmnx simplify=True merges curved ways into one edge and stores the
+        # real street polyline in `geometry`. Keep it (as (lat, lon) tuples,
+        # oriented u->v): rendering/GPX must follow the actual road, otherwise
+        # node-to-node straight chords appear to cut through buildings.
+        geometry = None
+        geom = d.get("geometry")
+        if geom is not None:
+            coords = tuple((y, x) for x, y in geom.coords)
+            if len(coords) > 2:
+                geometry = coords
         attrs = {
             "length": length,
             "highway": highway,
@@ -74,6 +84,8 @@ def main() -> None:
             "slope_pct": 2.0,
             "rfs_coverage": 0.0,  # build_rfs raises this per joined dataset
         }
+        if geometry is not None:
+            attrs["geometry"] = geometry
         g.add_edge(u, v, **attrs)
 
     largest = max(nx.connected_components(g), key=len)
