@@ -229,4 +229,5 @@ def test_unknown_or_removed_shape_lists_options():
         params = CourseParams(**CITY_HALL, distance_km=5.0, shape=bad_shape)
         with pytest.raises(CourseError) as e:
             generate_shape_course(params)
-        assert "cat" in str(e.value)
+        assert "강아지, 고양이, 고래, 토끼" in str(e.value)
+        assert "추후 업데이트 예정" in str(e.value)

@@ -1234,8 +1234,10 @@ def _course_is_usable(params: CourseParams, course: Course | None) -> bool:
 def generate_shape_course(params: CourseParams) -> Course:
     spec = SHAPES.get(params.shape or "")
     if spec is None:
-        names = ", ".join(f"{s.emoji}{s.key}" for s in SHAPES.values())
-        raise CourseError(f"지원하지 않는 모양이에요. 가능한 모양: {names}")
+        raise CourseError(
+            "현재는 강아지, 고양이, 고래, 토끼 코스만 가능하며 "
+            "다른 동물 코스는 추후 업데이트 예정입니다. 죄송합니다."
+        )
     if params.distance_km < spec.min_km:
         alts = [s for s in SHAPES.values() if s.min_km <= params.distance_km]
         alt_msg = (

@@ -11,7 +11,7 @@ from . import graph as graphmod
 from .course import Course, smooth_series
 from .facilities import LABELS_KO
 from .geo import haversine_m, to_xy
-from .infrastructure import infra_count_along, pedestrian_signals_crossed
+from .infrastructure import pedestrian_signals_crossed
 from .models import encode_course_id, encode_shape_token
 from .rfs import COMPONENT_LABELS_KO, edge_rfs
 from .shapes import SHAPES
@@ -236,13 +236,11 @@ def _course_fact_html(course: Course, facilities: list[dict],
                       detailed_points: list[tuple[float, float]]) -> str:
     g = graphmod.get_graph()
     signals = pedestrian_signals_crossed(g, course.path)
-    streetlights = infra_count_along(detailed_points, "streetlight")
     preview_facilities = [f for f in facilities if f["type"] in PREVIEW_FACILITY_TYPES]
     restroom_count = sum(1 for f in preview_facilities if f["type"] == "restroom")
     convenience_count = sum(1 for f in preview_facilities if f["type"] == "convenience_store")
     items = [
         ("보행 신호", f"{signals}개"),
-        ("가로등", f"{streetlights}개"),
         ("편의점", f"{convenience_count}개"),
         ("화장실", f"{restroom_count}개"),
     ]
@@ -253,7 +251,7 @@ def _course_fact_html(course: Course, facilities: list[dict],
     return (
         '<section class="panel"><h3>러너 체크포인트</h3>'
         f'<div class="facts">{cells}</div>'
-        '<p class="hint">보행 신호는 코스가 실제로 길을 건너는 지점 기준, 가로등·편의점·화장실은 코스 10m 반경 기준입니다.</p>'
+        '<p class="hint">보행 신호는 코스가 실제로 길을 건너는 지점 기준이며, 편의점·화장실은 코스 10m 반경 기준입니다.</p>'
         '</section>'
     )
 

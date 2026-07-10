@@ -11,7 +11,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
 python -m runart.server           # http://localhost:8000/mcp (Streamable HTTP, JSON)
 pytest                            # 테스트 (시나리오 수용 테스트 포함)
-python scripts/loadtest.py 200 10 # 부하 테스트 (규격: 평균 100ms / p99 3s)
+python scripts/loadtest.py 1000 10 # 콜드 미스 포함 부하 테스트 (평균 100ms / p99 3s)
 ```
 
 환경변수: `PORT`(기본 8000) · `RUNART_BASE_URL`(미리보기 링크 도메인) · `WEB_CONCURRENCY`(웹 워커 수, 기본 1) · `RUNART_POOL_WORKERS`(코스 탐색 프로세스 수, 기본 2) · `RATE_LIMIT_RPS`(IP당, 기본 20) · `KAKAO_REST_API_KEY`(지오코딩, 선택) · `RUNART_ETL_LOCAL_ONLY=1`(기존 OSM 속성은 보존하고 로컬 경사도/신호등/가로등만 재반영)
@@ -25,7 +25,7 @@ RUNART_ETL_LOCAL_ONLY=1 python etl/build_rfs.py
 # 로컬 서울시 경사도 + 보행자 신호등 + 가로등 위치 + 공중화장실을 반영
 ```
 
-현재 스냅숏(`data/snapshot.json`, 2026-07-09): 서울 전역 보행 그래프 163,848 노드 / 232,006 엣지에 경사도 232,006개 엣지, 보행자 신호등 26,769개 포인트 기반 횡단 점수, 가로등 19,316개 포인트 기반 조명 점수를 반영했다. 편의시설은 편의점 6,693개, 화장실 4,985개, 공원 2,237개, 음수대 213개가 포함되어 있다.
+현재 스냅숏(`data/snapshot.json`, 2026-07-11): 서울 전역 보행 그래프 163,848 노드 / 232,006 엣지에 경사도 232,006개 엣지, 보행자 신호등 26,769개 포인트 기반 횡단 점수, 가로등 19,316개 포인트 기반 조명 점수를 반영했다. 편의시설은 편의점 6,693개, 화장실 4,985개, 공원 2,237개, 음수대 213개가 포함되어 있다.
 
 ## 구조
 
@@ -35,9 +35,11 @@ RUNART_ETL_LOCAL_ONLY=1 python etl/build_rfs.py
 | `src/runart/course.py` | RFS 가중 순환 코스 생성, ±5% 거리 허용 (§5.3) |
 | `src/runart/shapes.py` | 동물 모양 템플릿·스냅핑·유사도 게이트 0.7 (§5.4) |
 | `src/runart/rfs.py` | 러닝 친화도 점수 — 기본/야간 가중 프로파일 (§5.7) |
-| `src/runart/facilities.py` | 코스 100m 반경 편의시설 (§5.5) |
+| `src/runart/facilities.py` | 코스 10m 반경 편의시설 (§5.5) |
 | `src/runart/models.py` | 자기완결형 course_id — stateless (§5.1) |
-| `etl/` | 오프라인 데이터 파이프라인 — 런타임 외부 API 호출 없음 (§5.7) |
+| `etl/` | 오프라인 데이터 파이프라인 — 경로 생성 중 데이터 API 호출 없음 (§5.7) |
+
+경로·안전·시설 데이터는 컨테이너에 미리 적재되어 런타임에 외부로 조회하지 않는다. 단, 사용자가 입력한 임의의 서울 주소를 좌표로 바꾸는 지오코딩은 `KAKAO_REST_API_KEY`가 설정된 경우 Kakao Local API를 선택적으로 사용하며, 지하철역 289개와 주요 지명은 네트워크 없이 해석한다.
 
 ## 툴 (6개, 모두 read-only·idempotent)
 

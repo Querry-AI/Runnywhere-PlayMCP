@@ -6,7 +6,7 @@ import os
 import pickle
 from pathlib import Path
 
-from .geo import densify_points, haversine_m, to_xy
+from .geo import haversine_m, to_xy
 
 
 def _data_path(filename: str) -> Path:
@@ -25,7 +25,6 @@ def _data_path(filename: str) -> Path:
 
 
 INFRA_PATH = _data_path("infra_points.pkl")
-NEAR_COURSE_M = 10.0  # right on the course: within 10m of the route line
 _CELL = 0.001
 
 
@@ -34,7 +33,14 @@ def get_infra_points() -> dict[str, list[tuple[float, float]]]:
     if not INFRA_PATH.exists():
         return {"streetlight": [], "pedestrian_signal": []}
     with INFRA_PATH.open("rb") as f:
-        return pickle.load(f)
+        raw = pickle.load(f)
+    # Do not let one malformed projected-coordinate record silently poison
+    # nearest-point checks or appear as a Seoul streetlight at runtime.
+    return {
+        kind: [(lat, lon) for lat, lon in points
+               if 37.3 < lat < 37.8 and 126.6 < lon < 127.3]
+        for kind, points in raw.items()
+    }
 
 
 @functools.lru_cache(maxsize=1)
@@ -47,22 +53,6 @@ def _infra_buckets() -> dict[str, dict[tuple[int, int], list[tuple[float, float]
             buckets.setdefault(key, []).append((lat, lon))
         out[kind] = buckets
     return out
-
-
-def infra_count_along(points: list[tuple[float, float]], kind: str,
-                      radius_m: float = NEAR_COURSE_M) -> int:
-    """Unique infrastructure points within radius_m of the route line
-    (points are densified so the small radius has no mid-block holes)."""
-    buckets = _infra_buckets().get(kind, {})
-    seen = set()
-    for lat, lon in densify_points(points, radius_m):
-        ci, cj = int(lat / _CELL), int(lon / _CELL)
-        for i in (ci - 1, ci, ci + 1):
-            for j in (cj - 1, cj, cj + 1):
-                for plat, plon in buckets.get((i, j), ()):
-                    if haversine_m(lat, lon, plat, plon) <= radius_m:
-                        seen.add((round(plat, 6), round(plon, 6)))
-    return len(seen)
 
 
 # A signalized crosswalk's poles stand at the curb corners, typically within

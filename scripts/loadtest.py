@@ -2,6 +2,10 @@
 
 Usage: server running on localhost:8000, then
     .venv/bin/python scripts/loadtest.py [n_requests] [concurrency]
+
+The default 1,000-call run includes cold misses and enough steady-state traffic
+to measure the production cache rather than being dominated by 30 first-time
+animal/location combinations.
 """
 
 import asyncio
@@ -30,12 +34,16 @@ async def worker(n_calls: int, latencies: dict):
                 dist = random.choice([3, 4, 5, 5, 7, 10])
                 t0 = time.perf_counter()
                 if shape:
-                    await s.call_tool("generate_animal_course",
-                                      {"shape": shape, "location": loc,
-                                       "distance_km": max(dist, 3)})
+                    # Product contract: animal art chooses its own cleanest
+                    # distance under 11km; forcing random distances measures a
+                    # different and intentionally slower validation workflow.
+                    result = await s.call_tool(
+                        "generate_animal_course", {"shape": shape, "location": loc})
                 else:
-                    await s.call_tool("generate_running_course",
-                                      {"location": loc, "distance_km": dist})
+                    result = await s.call_tool(
+                        "generate_running_course", {"location": loc, "distance_km": dist})
+                if result.isError:
+                    raise RuntimeError(f"tool error during load test: {result.content}")
                 latencies["art" if shape else "course"].append(
                     (time.perf_counter() - t0) * 1000)
 
@@ -52,7 +60,7 @@ def _report(name: str, vals: list[float]):
 
 
 async def main():
-    n = int(sys.argv[1]) if len(sys.argv) > 1 else 200
+    n = int(sys.argv[1]) if len(sys.argv) > 1 else 1000
     conc = int(sys.argv[2]) if len(sys.argv) > 2 else 10
     latencies: dict = {"course": [], "art": []}
     per = max(1, n // conc)

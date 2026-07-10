@@ -340,8 +340,21 @@ def _animal_survey(lat: float, lon: float, name: str,
     # Survey is a quick preview: four animals share two pool workers (two
     # rounds), so give each a tighter budget to keep the whole call under the
     # p99 3s cap. A user who then picks one animal gets the fuller budget.
-    survey_fn = functools.partial(find_min_clean_course, total_budget_s=1.3)
-    courses = _offload_map(survey_fn, probes, timeout_s=timeout_s)
+    # Reuse recommendations already verified by a previous survey or by a
+    # direct animal request. Only missing animals enter the process pool; this
+    # makes repeated conversational turns sub-100ms without weakening gates.
+    courses = {}
+    missing = {}
+    for key, probe in probes.items():
+        cached = _animal_recommendation_cache.get(
+            _animal_recommendation_key(probe))
+        if cached is None:
+            missing[key] = probe
+        else:
+            courses[key] = cached
+    if missing:
+        survey_fn = functools.partial(find_min_clean_course, total_budget_s=1.3)
+        courses.update(_offload_map(survey_fn, missing, timeout_s=timeout_s))
     for key in SURVEY_SHAPES:
         spec = SHAPES[key]
         course = courses.get(key)
@@ -399,7 +412,7 @@ def generate_running_course(
 
 
 def generate_animal_course(
-    shape: Annotated[str | None, Field(description="Animal shape key: cat, dog, rabbit, whale. See list_available_shapes")] = None,
+    shape: Annotated[str | None, Field(description="Animal shape key: cat, dog, rabbit, whale")] = None,
     location: Annotated[str | None, Field(description="Start place name in Seoul")] = None,
     lat: Annotated[float | None, Field(ge=37.4, le=37.72, description="Start latitude (alternative to location; Seoul area)")] = None,
     lon: Annotated[float | None, Field(ge=126.76, le=127.19, description="Start longitude (alternative to location; Seoul area)")] = None,
@@ -430,8 +443,10 @@ def generate_animal_course(
         except (ValueError, KeyError):
             return "⚠️ 공유 토큰 형식이 올바르지 않아요. 예: whale-5k"
     if shape and shape not in SHAPES:
-        available = ", ".join(SHAPES)
-        return f"⚠️ 가능한 모양은 {available}예요. 이 중 하나를 골라 주세요."
+        return (
+            "⚠️ 현재는 강아지, 고양이, 고래, 토끼 코스만 가능하며 "
+            "다른 동물 코스는 추후 업데이트 예정입니다. 죄송합니다."
+        )
     if not shape:
         # No shape yet → survey: shortest clean-completion distance per
         # animal, so the user picks a shape knowing what it will cost.
@@ -488,11 +503,16 @@ def generate_animal_course(
         # the location-specific clean minimum first and skip generation when
         # the request is below it; show all four verified choices instead.
         baseline = params.model_copy(update={"distance_km": SHAPES[shape].min_km})
-        try:
-            minimum = _offload(
-                find_min_clean_course, baseline, timeout_s=remaining())
-        except _GenerationTimeout:
-            return _animal_timeout_message(params.location_name, shape)
+        minimum = _animal_recommendation_cache.get(
+            _animal_recommendation_key(baseline))
+        if minimum is None:
+            try:
+                minimum = _offload(
+                    find_min_clean_course, baseline, timeout_s=remaining())
+            except _GenerationTimeout:
+                return _animal_timeout_message(params.location_name, shape)
+            if minimum is not None:
+                _cache_animal_recommendation(minimum)
         if minimum is not None and distance_km < minimum.params.distance_km:
             spec = SHAPES[shape]
             return (

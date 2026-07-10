@@ -57,7 +57,7 @@ def test_p4_night_runner():
 @pytest.mark.parametrize("kwargs,expect", [
     (dict(location=None), "출발 위치"),                      # 위치 없음
     (dict(location="아무데나요"), "찾지 못했"),                # 지오코딩 실패
-    (dict(location="시청", shape="dragon"), "가능한 모양"),    # 미지원 모양
+    (dict(location="시청", shape="dragon"), "추후 업데이트 예정"),  # 미지원 모양
 ])
 def test_failures_guide_next_action(kwargs, expect):
     if "shape" in kwargs:

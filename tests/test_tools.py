@@ -1,6 +1,7 @@
 """Tool-level tests: call the underlying functions the MCP tools wrap."""
 
 from runart import server
+from runart.course import Course
 from runart.geocode import (
     _STATION_LOOKUP,
     _address_query_variants,
@@ -125,6 +126,25 @@ def test_survey_result_is_reused_when_user_selects_animal(monkeypatch):
     assert "11km 이내 최상 코스" in out
 
 
+def test_repeated_animal_survey_only_submits_missing_shapes(monkeypatch):
+    server._animal_recommendation_cache.clear()
+    lat, lon, name = resolve_location("시청", None, None)
+    for key in server.SURVEY_SHAPES:
+        params = CourseParams(lat=lat, lon=lon, location_name=name,
+                              distance_km=SHAPES[key].min_km, shape=key)
+        server._cache_animal_recommendation(Course(
+            params=params, path=[], points=[], length_m=params.distance_km * 1000,
+            ascent_m=0.0, rfs={"score": 50, "highlights": []},
+            shape_similarity=1.0))
+
+    def should_not_submit(*args, **kwargs):
+        raise AssertionError("a fully cached survey must not submit CPU work")
+
+    monkeypatch.setattr(server, "_offload_map", should_not_submit)
+    out = server._animal_survey(lat, lon, name, timeout_s=2.7)
+    assert all(SHAPES[key].name_ko in out for key in server.SURVEY_SHAPES)
+
+
 def test_animal_timeout_returns_actionable_guidance(monkeypatch):
     server._animal_recommendation_cache.clear()
 
@@ -197,6 +217,11 @@ def test_mcp_tools_match_playmcp_required_annotations():
     import asyncio
     tools = asyncio.run(server.mcp.list_tools())
     names = [tool.name for tool in tools]
+    assert set(names) == {
+        "generate_running_course", "generate_animal_course",
+        "list_available_shapes", "find_facilities_near_course",
+        "refine_course", "get_course_status",
+    }
     assert len(names) == len(set(names))
     assert 3 <= len(names) <= 10
     for tool in tools:

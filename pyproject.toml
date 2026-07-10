@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Runnywhere(러니웨어) — 어디서든 러닝 코스 짜기!"
 requires-python = ">=3.11"
 dependencies = [
-    "mcp>=1.9",
+    # Verified against PlayMCP's supported protocol range
+    # (2025-03-26 through 2025-11-25). Pin contest builds for reproducibility.
+    "mcp==1.28.1",
     "networkx>=3.2",
     "numpy>=1.26",
     "uvicorn>=0.30",

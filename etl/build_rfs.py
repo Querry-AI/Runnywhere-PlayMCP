@@ -203,13 +203,29 @@ def load_streetlight_points() -> list[tuple[float, float]]:
                     print(f"  streetlights.csv 컬럼 인식 실패 (encoding={enc}): {fields}",
                           flush=True)
                     return []
+                transformer = None
                 for row in reader:
                     lat, lon = row.get(lat_col), row.get(lon_col)
-                    if lat and lon:
-                        try:
-                            pts.append((float(lat), float(lon)))
-                        except ValueError:
-                            continue
+                    if not lat or not lon:
+                        continue
+                    try:
+                        lat, lon = float(lat), float(lon)
+                    except ValueError:
+                        continue
+                    if 37.3 < lat < 37.8 and 126.6 < lon < 127.3:
+                        pts.append((lat, lon))
+                        continue
+                    # Some district exports label EPSG:5186 projected values
+                    # as X/Y coordinates. Convert only plausible projected
+                    # pairs; invalid zero/sentinel rows are discarded.
+                    if 100_000 < lon < 300_000 and 400_000 < lat < 700_000:
+                        if transformer is None:
+                            from pyproj import Transformer
+                            transformer = Transformer.from_crs(
+                                "EPSG:5186", "EPSG:4326", always_xy=True)
+                        wgs_lon, wgs_lat = transformer.transform(lon, lat)
+                        if 37.3 < wgs_lat < 37.8 and 126.6 < wgs_lon < 127.3:
+                            pts.append((wgs_lat, wgs_lon))
             return pts
         except UnicodeDecodeError:
             continue
