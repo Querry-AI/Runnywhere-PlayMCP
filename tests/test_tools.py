@@ -1,7 +1,12 @@
 """Tool-level tests: call the underlying functions the MCP tools wrap."""
 
 from runart import server
-from runart.geocode import _address_query_variants
+from runart.geocode import (
+    _STATION_LOOKUP,
+    _address_query_variants,
+    resolve_location,
+)
+from runart.stations import SEOUL_METRO_STATIONS
 from runart.models import CourseParams, encode_course_id
 
 CITY_HALL = dict(location="시청")
@@ -31,6 +36,57 @@ def test_short_address_variants_expand_to_full_seoul_address():
     assert "테헤란로8길 8" in variants
     assert "강남구 테헤란로8길 8" in variants
     assert "서울특별시 강남구 테헤란로8길 8" in variants
+
+
+def test_bare_neighborhood_address_gets_district_context():
+    variants = _address_query_variants("신설동 76-5")
+    assert "동대문구 신설동 76-5" in variants
+    assert "서울특별시 동대문구 신설동 76-5" in variants
+
+
+def test_seoul_address_prefix_is_normalized():
+    variants = _address_query_variants("서울 동대문구 신설동 76-5")
+    assert "서울특별시 동대문구 신설동 76-5" in variants
+
+
+def test_sinseoldong_station_resolves_without_external_api():
+    lat, lon, name = resolve_location("신설동역", None, None)
+    assert name == "신설동역"
+    assert (lat, lon) == (37.5753, 127.0251)
+
+
+def test_all_289_seoul_metro_rows_are_bundled():
+    assert len(SEOUL_METRO_STATIONS) == 289
+    assert len(_STATION_LOOKUP) > 289
+
+
+def test_station_name_and_line_alias_resolve_without_external_api(monkeypatch):
+    monkeypatch.delenv("KAKAO_REST_API_KEY", raising=False)
+    plain = resolve_location("구파발역", None, None)
+    qualified = resolve_location("3호선 구파발역", None, None)
+    assert plain == qualified
+    assert plain[2] == "구파발역"
+
+
+def test_station_road_and_lot_addresses_resolve_without_external_api(monkeypatch):
+    monkeypatch.delenv("KAKAO_REST_API_KEY", raising=False)
+    by_road = resolve_location("서울 동대문구 왕산로 지하1(신설동)", None, None)
+    by_lot = resolve_location("서울특별시 동대문구 신설동 76-5 신설동역(1호선)", None, None)
+    assert by_road == by_lot
+    assert by_road[2] == "신설동역"
+
+
+def test_recently_added_station_resolves_offline(monkeypatch):
+    monkeypatch.delenv("KAKAO_REST_API_KEY", raising=False)
+    lat, lon, name = resolve_location("암사역사공원역", None, None)
+    assert name == "암사역사공원역"
+    assert (lat, lon) == (37.556667, 127.135556)
+
+
+def test_location_error_does_not_ask_for_coordinates():
+    out = server.generate_running_course(location="아무데나요")
+    assert "위치를 찾지 못했어요" in out
+    assert "좌표" not in out
 
 
 def test_animal_request_surveys_verified_minimum_distances_first():

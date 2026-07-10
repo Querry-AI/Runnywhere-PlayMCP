@@ -8,13 +8,18 @@ The API key never appears in logs, responses, or errors (PRD §8).
 """
 
 import json
+import logging
 import os
 import re
 import ssl
+import urllib.error
 import urllib.parse
 import urllib.request
 
 from .course import CourseError
+from .stations import SEOUL_METRO_STATIONS
+
+log = logging.getLogger(__name__)
 
 _LOCAL_SEARCH_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 _ADDRESS_SEARCH_URL = "https://dapi.kakao.com/v2/local/search/address.json"
@@ -32,6 +37,11 @@ _SEOUL_DISTRICTS = (
 )
 _ROAD_DISTRICT_HINTS = {
     "테헤란로": "강남구",
+}
+_NEIGHBORHOOD_DISTRICT_HINTS = {
+    # Kakao's address search is less reliable for bare legal-dong addresses.
+    # Add district context for common short forms such as "신설동 76-5".
+    "신설동": "동대문구",
 }
 
 try:
@@ -72,6 +82,7 @@ GAZETTEER: dict[str, tuple[float, float]] = {
     "신촌": (37.5551, 126.9368), "이태원": (37.5346, 126.9946),
     "여의도": (37.5219, 126.9245), "성수": (37.5446, 127.0559),
     "건대입구": (37.5403, 127.0695), "왕십리": (37.5613, 127.0374),
+    "신설동역": (37.5753, 127.0251), "신설동": (37.5753, 127.0251),
     "노원": (37.6542, 127.0568), "수유": (37.6380, 127.0250),
     "목동": (37.5266, 126.8644), "사당": (37.4766, 126.9816),
     "구로디지털단지": (37.4852, 126.9015), "가산디지털단지": (37.4817, 126.8827),
@@ -84,6 +95,55 @@ GAZETTEER: dict[str, tuple[float, float]] = {
     "강남구테헤란로8길8": (37.4978, 127.0290),
     "서울특별시강남구테헤란로8길8": (37.4978, 127.0290),
 }
+
+
+def _normalize_station_query(value: str) -> str:
+    """Normalize common station/address spelling without fuzzy matching."""
+    value = value.strip().lower()
+    value = re.sub(r"^서울(?:특별시|시)?", "서울특별시", value)
+    return re.sub(r"[^0-9a-z가-힣]", "", value)
+
+
+def _station_name(value: str) -> str:
+    primary = re.sub(r"\([^)]*\)", "", value).strip()
+    return primary if primary.endswith("역") else f"{primary}역"
+
+
+def _station_aliases(line: str, official_name: str,
+                     road_address: str, lot_address: str) -> set[str]:
+    canonical = _station_name(official_name)
+    base = canonical.removesuffix("역")
+    aliases = {
+        official_name, canonical, base,
+        f"{line}호선 {official_name}", f"{line}호선 {canonical}",
+        road_address, lot_address,
+        re.sub(r"\([^)]*\)", "", road_address).strip(),
+        re.sub(r"\s+\S+역\(\d+호선\)$", "", lot_address).strip(),
+    }
+    # Accept the common short Seoul prefix as well as the official one.
+    for address in (road_address, lot_address):
+        aliases.add(re.sub(r"^서울특별시", "서울", address))
+        aliases.add(re.sub(r"^서울특별시", "서울시", address))
+    return {alias for alias in aliases if alias}
+
+
+def _build_station_lookup() -> dict[str, tuple[float, float, str]]:
+    lookup: dict[str, tuple[float, float, str]] = {}
+    for line, official_name, lat, lon, road_address, lot_address in SEOUL_METRO_STATIONS:
+        hit = (lat, lon, _station_name(official_name))
+        for alias in _station_aliases(
+                line, official_name, road_address, lot_address):
+            # Keep the first line's point for an unqualified transfer-station
+            # name; line-qualified aliases still resolve to their own record.
+            lookup.setdefault(_normalize_station_query(alias), hit)
+    return lookup
+
+
+_STATION_LOOKUP = _build_station_lookup()
+
+
+def _offline_station_search(location: str) -> tuple[float, float, str] | None:
+    return _STATION_LOOKUP.get(_normalize_station_query(location))
 
 
 def _in_seoul(lat: float, lon: float) -> bool:
@@ -120,6 +180,24 @@ def _kakao_get(url: str, params: dict) -> list[dict]:
         try:
             with urllib.request.urlopen(req, timeout=_TIMEOUT_S, context=_SSL_CTX) as r:
                 return json.load(r).get("documents", [])
+        except urllib.error.HTTPError as exc:
+            # Authentication/product errors cannot recover on retry. Distinguish
+            # them from a genuine zero-result search without exposing the key.
+            if exc.code in (401, 403):
+                log.error("Kakao Local API unavailable: HTTP %s", exc.code)
+                raise CourseError(
+                    "지도 검색 서비스 연결이 준비되지 않았어요. 잠시 후 다시 시도해 주세요."
+                ) from exc
+            if attempt:
+                return []
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, ssl.SSLError):
+                log.error("Kakao Local API TLS verification failed")
+                raise CourseError(
+                    "지도 검색 서비스에 안전하게 연결하지 못했어요. 잠시 후 다시 시도해 주세요."
+                ) from exc
+            if attempt:
+                return []
         except Exception:  # noqa: BLE001 — timeout/HTTP/parse all fall through
             if attempt:
                 return []
@@ -193,7 +271,13 @@ def _address_query_variants(query: str) -> list[str]:
     compact_road = re.sub(r"([가-힣]+(?:로|길))\s+(\d+(?:로|길))", r"\1\2", q)
     compact_road = re.sub(r"([가-힣]+(?:로|길)\d+(?:로|길))\s+(\d+)", r"\1 \2", compact_road)
 
-    variants = [q, compact_road]
+    # Normalize all common Seoul prefixes. Kakao accepts the official form
+    # most consistently, especially when a district and legal-dong follow.
+    official_seoul = re.sub(
+        r"^서울(?:특별시|시)?\s*", "서울특별시 ", compact_road
+    ).strip() if re.match(r"^서울(?:특별시|시)?", compact_road) else ""
+
+    variants = [q, compact_road, official_seoul]
     has_seoul = q.startswith(("서울 ", "서울시", "서울특별시"))
     has_district = any(d in q for d in _SEOUL_DISTRICTS)
     for road, district in _ROAD_DISTRICT_HINTS.items():
@@ -201,7 +285,14 @@ def _address_query_variants(query: str) -> list[str]:
             variants.append(f"{district} {compact_road}")
             variants.append(f"서울특별시 {district} {compact_road}")
             break
-    if not has_seoul:
+    for neighborhood, district in _NEIGHBORHOOD_DISTRICT_HINTS.items():
+        if neighborhood in compact_road and not has_district:
+            variants.append(f"{district} {compact_road}")
+            variants.append(f"서울특별시 {district} {compact_road}")
+            break
+    if has_district and not has_seoul:
+        variants.append(f"서울특별시 {compact_road}")
+    elif not has_seoul:
         variants.append(f"서울특별시 {compact_road}")
 
     out = []
@@ -233,11 +324,15 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
         return lat, lon, location or f"({lat:.4f}, {lon:.4f})"
     if location:
         key = location.replace(" ", "")
-        # ① exact offline gazetteer hit (no network, instant)
+        # ① exact offline landmark aliases kept for backward compatibility.
         for name, (glat, glon) in GAZETTEER.items():
             if name == key:
                 return glat, glon, name
-        # ② Kakao API. Address-shaped inputs (관철동 7-14, 테헤란로8길 8)
+        # ② all 289 Seoul Metro station/address rows (no network, instant).
+        station = _offline_station_search(location)
+        if station:
+            return station
+        # ③ Kakao API. Address-shaped inputs (관철동 7-14, 테헤란로8길 8)
         # go to the address API first — keyword search treats them as POI
         # names; place-shaped inputs (station/landmark names) go keyword
         # first. Each is the other's fallback.
@@ -250,20 +345,20 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
             hit = search(location)
             if hit:
                 return hit
-        # ③ fuzzy gazetteer LAST, and only for short place-like queries.
+        # ④ fuzzy gazetteer LAST, and only for short place-like queries.
         # Running it before the API resolved any address containing "강남"
         # or "은평" to the wrong station.
         if not is_address and 2 <= len(key) <= 10:
             for name, (glat, glon) in GAZETTEER.items():
                 if name in key or key in name:
                     return glat, glon, name
-        known = "시청, 강남역, 여의도한강공원, 서울숲, 석촌호수, 올림픽공원, 서울시 중구 세종대로 110"
+        known = "신설동역, 시청, 강남역, 여의도한강공원, 서울숲"
         no_key_hint = (
             "" if os.environ.get("KAKAO_REST_API_KEY")
             else " (서버에 KAKAO_REST_API_KEY가 설정되지 않아 지도 검색 없이 동작 중이에요.)"
         )
         raise CourseError(
-            f"'{location}' 위치를 찾지 못했어요. 좌표(위도/경도)로 알려주시거나 "
-            f"더 잘 알려진 지명으로 시도해 주세요. 예: {known}{no_key_hint}"
+            f"'{location}' 위치를 찾지 못했어요. 역 이름이나 도로명·번지까지 포함한 "
+            f"서울 주소로 다시 알려주세요. 예: {known}{no_key_hint}"
         )
-    raise CourseError("출발 위치가 필요해요. 지명(예: 시청, 강남역)이나 좌표를 알려주세요.")
+    raise CourseError("출발 위치가 필요해요. 역 이름이나 서울 주소를 알려주세요. 예: 시청, 강남역")
