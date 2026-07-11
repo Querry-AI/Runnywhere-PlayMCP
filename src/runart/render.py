@@ -424,8 +424,9 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  {profile_svg}
  <div class="actions">
   <a class="btn" href="{base_url}/c/{cid}.gpx">GPX 다운로드</a>
-  <a class="btn" href="{base_url}/c/{cid}/card.svg">공유 카드</a>
+  <a class="btn" href="{base_url}/c/{cid}/card.svg">코스 카드</a>
   <button class="btn" id="shareCourse" type="button">친구에게 공유하기</button>
+  <a class="btn" href="{base_url}/animals">서울 동물 지도</a>
  </div>
 </div>
 <details class="panel"><summary>카카오맵 GPX 불러오기 방법</summary>

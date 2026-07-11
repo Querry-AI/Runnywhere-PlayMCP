@@ -104,6 +104,10 @@ _POOL: "concurrent.futures.ProcessPoolExecutor | None" = None
 _POOL_LOCK = threading.Lock()
 _POOL_BROKEN = False
 ANIMAL_RESPONSE_BUDGET_S = 2.7
+# At an arbitrary address (no station preset), we first try to draw the animal
+# from that exact start; only after this budget fails do we substitute the
+# nearest station's verified preset.
+ADDRESS_TRY_BUDGET_S = 2.5
 
 
 class _GenerationTimeout(RuntimeError):
@@ -450,16 +454,20 @@ def _animal_survey(lat: float, lon: float, name: str,
     missing = {}
     for key, probe in probes.items():
         preset = get_animal_preset(probe)
-        if preset is None or preset is PRESET_MISSING:
+        if isinstance(preset, Course):
+            # Station start with a verified preset: use it directly.
+            courses[key] = preset
+            continue
+        if preset is None:
+            # Station known to have no clean course for this animal.
             nearby = find_nearest_animal_preset(probe)
             if nearby is not None:
                 courses[key] = nearby.course
                 if not nearby.is_exact:
                     nearby_matches[key] = nearby
-                continue
-        if preset is not PRESET_MISSING:
-            courses[key] = preset
             continue
+        # Arbitrary address: judge each animal from this exact start first;
+        # nearest station presets only cover the ones that fail below.
         cached = _get_animal_recommendation(probe)
         if cached is None:
             missing[key] = probe
@@ -468,6 +476,13 @@ def _animal_survey(lat: float, lon: float, name: str,
     if missing:
         survey_fn = functools.partial(find_min_clean_course, total_budget_s=1.3)
         courses.update(_offload_map(survey_fn, missing, timeout_s=timeout_s))
+        for key, probe in missing.items():
+            if courses.get(key) is None or courses.get(key) is _TIMED_OUT:
+                nearby = find_nearest_animal_preset(probe)
+                if nearby is not None:
+                    courses[key] = nearby.course
+                    if not nearby.is_exact:
+                        nearby_matches[key] = nearby
     for key in SURVEY_SHAPES:
         spec = SHAPES[key]
         course = courses.get(key)
@@ -605,33 +620,31 @@ def generate_animal_course(
                              include_hills=include_hills, night_mode=night_mode,
                              need_facilities=need_facilities or [])
         preset = get_animal_preset(probe)
-        nearby = None
-        if preset is None or preset is PRESET_MISSING:
-            nearby = find_nearest_animal_preset(probe)
-            if nearby is not None:
-                preset = nearby.course
-        if preset is None:
-            # No verified animal within reach: give a runnable plain course
-            # here instead of a dead end, then steer to grid-street areas.
-            return _no_animal_fallback(rlat, rlon, name)
-        if preset is not PRESET_MISSING:
+        if isinstance(preset, Course):
+            # Station start with a verified preset: serve it directly.
             _cache_animal_recommendation(preset)
+            return _serve_course(preset, _verified_animal_note(name, shape, preset))
+        if preset is None:
+            # Station known to have no clean course: nearest other preset.
+            nearby = find_nearest_animal_preset(probe)
+            if nearby is None:
+                return _no_animal_fallback(rlat, rlon, name)
+            _cache_animal_recommendation(nearby.course)
             note = _verified_animal_note(
-                name, shape, preset,
-                nearby if nearby is not None and not nearby.is_exact else None)
-            return _serve_course(preset, note)
+                name, shape, nearby.course,
+                nearby if not nearby.is_exact else None)
+            return _serve_course(nearby.course, note)
+        # Arbitrary address (no preset entry): judge the animal from this
+        # exact start first, within ADDRESS_TRY_BUDGET_S.
         cached = _get_animal_recommendation(probe)
-        if cached is not None:
-            spec = SHAPES[shape]
-            note = (f"{spec.emoji} {spec.name_ko} 모양이 가장 깔끔하게 완성되는 "
-                    f"11km 이내 최상 코스 {cached.length_km:.1f}km로 그렸어요. "
-                    f"{REFERENCE_FEATURES.get(shape, '')}\n")
-            return _serve_course(cached, note)
-        try:
-            course = _offload(
-                find_min_clean_course, probe, timeout_s=remaining())
-        except _GenerationTimeout:
-            return _animal_timeout_message(name, shape)
+        course = cached
+        if course is None:
+            try:
+                course = _offload(
+                    find_min_clean_course, probe,
+                    timeout_s=min(remaining(), ADDRESS_TRY_BUDGET_S))
+            except _GenerationTimeout:
+                course = None
         if course is not None:
             _cache_animal_recommendation(course)
             spec = SHAPES[shape]
@@ -639,6 +652,15 @@ def generate_animal_course(
                     f"11km 이내 최상 코스 {course.length_km:.1f}km로 그렸어요. "
                     f"{REFERENCE_FEATURES.get(shape, '')}\n")
             return _serve_course(course, note)
+        # Couldn't complete from this address in time: substitute the nearest
+        # station's verified preset.
+        nearby = find_nearest_animal_preset(probe)
+        if nearby is not None:
+            _cache_animal_recommendation(nearby.course)
+            note = _verified_animal_note(
+                name, shape, nearby.course,
+                nearby if not nearby.is_exact else None)
+            return _serve_course(nearby.course, note)
         # No clean fit at this location: serve a plain runner-friendly course
         # instead of a dead end, then steer to grid-street areas.
         return _no_animal_fallback(rlat, rlon, name)

@@ -192,6 +192,23 @@ def test_forced_short_animal_returns_choice_survey_not_blob():
         assert "바로 사용하려면" in out
 
 
+def test_address_start_tries_exact_point_before_station_preset(monkeypatch):
+    """At an arbitrary address the animal is judged from that exact start
+    first; the nearest station preset is only substituted after the
+    generation budget fails."""
+    server._animal_recommendation_cache.clear()
+
+    def timeout(*args, **kwargs):
+        raise server._GenerationTimeout
+
+    monkeypatch.setattr(server, "_offload", timeout)
+    # Non-station coordinates near Gangnam: generation times out, so the
+    # nearest verified station preset must be served with a moved-start note.
+    out = server.generate_animal_course(shape="dog", lat=37.5041, lon=127.0293)
+    assert "검증 코스" in out
+    assert "/c/" in out
+
+
 def test_no_animal_course_falls_back_to_general_course(monkeypatch):
     server._animal_recommendation_cache.clear()
     monkeypatch.setattr(server, "get_animal_preset", lambda p: None)
