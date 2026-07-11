@@ -105,8 +105,9 @@ def test_animal_request_surveys_verified_minimum_distances_first():
     assert "어떤 동물" in out or "다시 요청" in out
     assert "모양 완성도" not in out
     # Every course recommendation ends with the animal atlas link.
-    assert out.rstrip().endswith("/animals")
-    assert "서울 동물 지도를 확인하세요" in out
+    assert out.rstrip().endswith("/animals)")
+    assert "다른 동네에서 동물 모양 코스를 찾아보세요" in out
+    assert "[서울 동물 지도 보기](" in out
 
 
 def test_chosen_animal_without_distance_uses_verified_minimum():
@@ -199,7 +200,8 @@ def test_no_animal_course_falls_back_to_general_course(monkeypatch):
     assert "동물 코스가 검색되지 않았어요" in out
     assert "러닝 코스" in out and "/c/" in out
     assert "강남" in out and "잠실" in out
-    assert out.rstrip().endswith("/animals")
+    assert out.rstrip().endswith("/animals)")
+    assert "[서울 동물 지도 보기](" in out
 
 
 def test_shape_token_recreates_shape():

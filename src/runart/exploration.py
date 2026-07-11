@@ -248,7 +248,7 @@ def atlas_html(base_url: str, kakao_key: str) -> str:
 <p>러니웨어의 맞춤 러닝 기능 중 GPS 아트를 더 쉽게 찾기 위한 탐험 지도입니다. 서울 역 주변에서 검증된 {len(courses)}개 코스를 동물별·역별로 확인할 수 있어요. 마커를 누르면 코스 모양이 지도 위에 그려집니다.</p></section>
 <style>#map{{height:58vh;min-height:430px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#edf1ec}}.map-message{{height:100%;display:flex;align-items:center;justify-content:center;padding:22px}}.map-message .card{{max-width:460px;margin:0}}.filters{{display:flex;gap:8px;overflow:auto;margin:14px 0 8px}}button{{border:1px solid var(--line);background:white;padding:9px 12px;border-radius:7px;font-weight:650;white-space:nowrap}}button.on{{background:var(--green);border-color:var(--green);color:white}}button:disabled{{opacity:.45}}.dot{{font-size:23px;filter:drop-shadow(0 3px 4px #0004);cursor:pointer;background:none;border:0;padding:0}}
 .station-filter{{display:flex;gap:8px;margin:0 0 14px}}.station-filter input{{flex:1;max-width:340px;border:1px solid var(--line);border-radius:7px;padding:9px 12px;font-size:14px;font-family:inherit}}
-.atlas-pop{{background:#fff;border:1px solid var(--line);border-radius:9px;box-shadow:0 8px 26px #0003;padding:10px 12px;min-width:170px}}.atlas-pop b{{display:block;font-size:14px;margin-bottom:3px}}.atlas-pop span{{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}}.atlas-pop a{{color:var(--green);font-weight:650;font-size:13px;text-decoration:none}}</style>
+.atlas-pop{{background:#fff;border:1px solid var(--line);border-radius:9px;box-shadow:0 8px 26px #0003;padding:10px 12px;min-width:190px}}.atlas-pop b{{display:block;font-size:14px;margin-bottom:3px}}.atlas-pop span{{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}}.atlas-pop a{{display:block;color:var(--green);font-weight:650;font-size:13px;text-decoration:none;margin-bottom:7px}}.atlas-pop .share-btn{{width:100%;background:var(--green);border-color:var(--green);color:#fff;font-size:13px;padding:8px 10px;cursor:pointer}}</style>
 <div class=\"filters\"><button class=\"on\" data-shape=\"all\">전체</button>{buttons}</div>
 <div class=\"station-filter\"><input id=\"stationInput\" list=\"stationList\" placeholder=\"역 이름으로 찾기 (예: 강남역)\" autocomplete=\"off\"><datalist id=\"stationList\">{station_options}</datalist><button id=\"stationClear\" type=\"button\">지우기</button></div>
 <div id=\"map\"><div class=\"map-message\"><div class=\"card\"><h2>지도를 불러오는 중이에요</h2><p class=\"muted\">지도 연결이 어려우면 AI에게 현재 역을 말해 주세요. 가장 가까운 동물을 바로 추천해 드려요.</p></div></div></div>
@@ -259,26 +259,43 @@ let shapeFilter='all';let stationFilter='';
 const mapNode=document.getElementById('map');
 function showMapError(message){{mapNode.innerHTML='<div class="map-message"><div class="card"><h2>카카오맵을 불러오지 못했습니다</h2><p class="muted">'+message+'</p></div></div>';document.querySelectorAll('[data-shape]').forEach(b=>b.disabled=true)}}
 function clearCourse(){{routeLines.forEach(l=>l.setMap(null));routeLines=[];if(infoOv){{infoOv.setMap(null);infoOv=null}}}}
-function showCourse(x){{clearCourse();
- fetch(baseUrl+'/c/'+encodeURIComponent(x.cid)+'/route.json').then(r=>{{if(!r.ok)throw 0;return r.json()}}).then(d=>{{
-  const path=d.points.map(p=>new kakao.maps.LatLng(p[0],p[1]));
-  routeLines.push(new kakao.maps.Polyline({{map,path,strokeColor:'#ffffff',strokeWeight:11,strokeOpacity:.9}}));
-  routeLines.push(new kakao.maps.Polyline({{map,path,strokeColor:'#08735a',strokeWeight:6,strokeOpacity:.95}}));
-  const b=new kakao.maps.LatLngBounds();path.forEach(p=>b.extend(p));map.setBounds(b,70,70,70,70);
-  const el=document.createElement('div');el.className='atlas-pop';
-  const t=document.createElement('b');t.textContent=x.emoji+' '+x.name;
-  const s=document.createElement('span');s.textContent=x.km+'km 검증 코스';
-  const a=document.createElement('a');a.href=baseUrl+'/c/'+x.cid;a.textContent='코스 상세·GPX 보기 →';
-  el.append(t,s,a);
-  infoOv=new kakao.maps.CustomOverlay({{position:new kakao.maps.LatLng(x.lat,x.lon),content:el,yAnchor:1.3,zIndex:40}});
-  infoOv.setMap(map);
- }}).catch(()=>{{location.href=baseUrl+'/c/'+x.cid}});
+const ROUTE_COLORS=['#08735a','#f06d3b','#5677d8','#9c5cc8'];
+function coursePopup(x){{
+ const el=document.createElement('div');el.className='atlas-pop';
+ const t=document.createElement('b');t.textContent=x.emoji+' '+x.name;
+ const s=document.createElement('span');s.textContent=x.km+'km 검증 코스';
+ const a=document.createElement('a');a.href=baseUrl+'/c/'+x.cid;a.textContent='코스 상세·GPX 보기 →';
+ const btn=document.createElement('button');btn.className='share-btn';btn.type='button';btn.textContent='친구에게 공유하기';
+ btn.onclick=ev=>{{ev.stopPropagation();const url=baseUrl+'/c/'+x.cid;
+  const done=()=>{{btn.textContent='링크가 복사됐어요!';setTimeout(()=>btn.textContent='친구에게 공유하기',2200)}};
+  if(navigator.clipboard&&navigator.clipboard.writeText){{navigator.clipboard.writeText(url).then(done).catch(()=>window.prompt('아래 링크를 복사하세요',url))}}
+  else{{window.prompt('아래 링크를 복사하세요',url)}}
+ }};
+ el.append(t,s,a,btn);
+ infoOv=new kakao.maps.CustomOverlay({{position:new kakao.maps.LatLng(x.lat,x.lon),content:el,yAnchor:1.25,zIndex:40}});
+ infoOv.setMap(map);
+}}
+function showCourses(list){{clearCourse();
+ const picks=list.slice(0,4);
+ Promise.all(picks.map(x=>fetch(baseUrl+'/c/'+encodeURIComponent(x.cid)+'/route.json')
+   .then(r=>r.ok?r.json():null).catch(()=>null).then(d=>({{x,d}}))))
+ .then(results=>{{
+  const bounds=new kakao.maps.LatLngBounds();let drawn=null;
+  results.forEach((r,i)=>{{if(!r.d)return;
+   const path=r.d.points.map(p=>new kakao.maps.LatLng(p[0],p[1]));
+   routeLines.push(new kakao.maps.Polyline({{map,path,strokeColor:'#ffffff',strokeWeight:11,strokeOpacity:.9}}));
+   routeLines.push(new kakao.maps.Polyline({{map,path,strokeColor:ROUTE_COLORS[i%ROUTE_COLORS.length],strokeWeight:6,strokeOpacity:.95}}));
+   path.forEach(p=>bounds.extend(p));if(!drawn)drawn=r.x;
+  }});
+  if(drawn){{map.setBounds(bounds,70,70,70,70);coursePopup(drawn)}}
+  else if(picks.length===1){{location.href=baseUrl+'/c/'+picks[0].cid}}
+ }});
 }}
 function visibleItems(){{return items.filter(x=>(shapeFilter==='all'||x.shape===shapeFilter)&&(!stationFilter||x.name.includes(stationFilter)))}}
 function draw(){{overlays.forEach(o=>o.setMap(null));overlays=[];clearCourse();
  const vis=visibleItems();
- vis.forEach(x=>{{const el=document.createElement('button');el.className='dot';el.textContent=x.emoji;el.title=x.name+' '+x.km+'km';el.onclick=()=>showCourse(x);const o=new kakao.maps.CustomOverlay({{position:new kakao.maps.LatLng(x.lat,x.lon),content:el,yAnchor:.5}});o.setMap(map);overlays.push(o)}});
- if(stationFilter&&vis.length){{const b=new kakao.maps.LatLngBounds();vis.forEach(x=>b.extend(new kakao.maps.LatLng(x.lat,x.lon)));map.setBounds(b,90,90,90,90);showCourse(vis[0])}}
+ vis.forEach(x=>{{const el=document.createElement('button');el.className='dot';el.textContent=x.emoji;el.title=x.name+' '+x.km+'km';el.onclick=()=>showCourses([x]);const o=new kakao.maps.CustomOverlay({{position:new kakao.maps.LatLng(x.lat,x.lon),content:el,yAnchor:.5}});o.setMap(map);overlays.push(o)}});
+ if(stationFilter&&vis.length){{showCourses(vis)}}
 }}
 function bootAtlasMap(){{map=new kakao.maps.Map(mapNode,{{center:new kakao.maps.LatLng(37.5665,126.978),level:8}});map.addControl(new kakao.maps.ZoomControl(),kakao.maps.ControlPosition.LEFT);
  document.querySelectorAll('[data-shape]').forEach(b=>b.onclick=()=>{{document.querySelectorAll('[data-shape]').forEach(x=>x.classList.remove('on'));b.classList.add('on');shapeFilter=b.dataset.shape;draw()}});

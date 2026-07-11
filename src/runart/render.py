@@ -22,7 +22,8 @@ PREVIEW_FACILITY_TYPES = {"convenience_store", "restroom"}
 def atlas_line(base_url: str) -> str:
     """Closing line appended to every course recommendation (PRD: always link
     the Seoul animal atlas at the bottom of course answers)."""
-    return f"🗺️ 서울 동물 지도를 확인하세요: {base_url}/animals"
+    return (f"다른 동네에서 동물 모양 코스를 찾아보세요! "
+            f"[서울 동물 지도 보기]({base_url}/animals)")
 
 
 def markdown_text(value: str) -> str:
