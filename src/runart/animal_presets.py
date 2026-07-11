@@ -10,6 +10,7 @@ import gzip
 import hashlib
 import json
 import math
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -18,8 +19,27 @@ from .course import Course
 from .data_integrity import verify_data_file
 from .models import CourseParams
 
-PRESET_PATH = Path(__file__).resolve().parents[2] / "data" / "animal_station_presets.json.gz"
-GRAPH_PATH = Path(__file__).resolve().parents[2] / "data" / "seoul_graph.pkl"
+
+def _data_path(filename: str) -> Path:
+    """Same search order as graph.py/facilities.py: RUNART_DATA_DIR, then the
+    working directory (the deploy image installs the package into
+    site-packages and keeps data/ under WORKDIR), then the repo checkout."""
+    candidates = []
+    if os.environ.get("RUNART_DATA_DIR"):
+        candidates.append(Path(os.environ["RUNART_DATA_DIR"]))
+    candidates.extend([
+        Path.cwd() / "data",
+        Path(__file__).resolve().parents[2] / "data",
+    ])
+    for base in candidates:
+        path = base / filename
+        if path.exists():
+            return path
+    return candidates[0] / filename
+
+
+PRESET_PATH = _data_path("animal_station_presets.json.gz")
+GRAPH_PATH = _data_path("seoul_graph.pkl")
 FORMAT_VERSION = 1
 MISSING = object()
 
