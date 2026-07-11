@@ -2,6 +2,7 @@ import pytest
 
 from runart.course import CourseError, generate_course
 from runart.models import CourseParams, decode_course_id, encode_course_id
+from runart.render import preview_html
 
 CITY_HALL = dict(lat=37.5665, lon=126.9780, location_name="시청")
 
@@ -40,3 +41,26 @@ def test_course_id_roundtrip():
     restored = decode_course_id(cid)
     assert restored.canonical() == params.canonical()
     assert encode_course_id(restored) == cid  # deterministic / stateless
+
+
+def test_course_id_rejects_oversized_input():
+    with pytest.raises(ValueError, match="too large"):
+        decode_course_id("A" * 4097)
+
+
+def test_preview_uses_kakao_maps_without_leaflet():
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example",
+                        kakao_javascript_key="javascript-key")
+    assert "dapi.kakao.com/v2/maps/sdk.js?appkey=javascript-key" in page
+    assert "new kakao.maps.Map" in page
+    assert "Leaflet" not in page and "leaflet" not in page
+    assert "basemaps.cartocdn.com" not in page
+    assert "© OpenStreetMap contributors" in page
+
+
+def test_preview_explains_missing_kakao_javascript_key():
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+    assert "dapi.kakao.com/v2/maps/sdk.js" not in page
+    assert "KAKAO_JAVASCRIPT_KEY와 등록 도메인을 확인" in page

@@ -1430,6 +1430,44 @@ def find_min_clean_course(params: CourseParams,
     return best
 
 
+def find_best_reference_course(params: CourseParams,
+                               per_distance_budget_s: float = 5.0,
+                               ) -> Course | None:
+    """Offline quality-first search for station presets.
+
+    Unlike the request-time anytime search, this evaluates every legal 1km
+    distance through 11km and never stops merely because a good-enough route
+    was found. Reference-shape similarity is the primary objective; distance
+    only breaks visually equivalent results.
+    """
+    spec = SHAPES.get(params.shape or "")
+    if spec is None:
+        return None
+    style = SHAPE_STYLES.get(spec.key)
+    if style is None:
+        return None
+    start_km = max(spec.min_km, params.distance_km or 0.0)
+    if start_km > MAX_ANIMAL_ART_KM:
+        return None
+    best = None
+    best_sim = -1.0
+    for distance in _distance_probe_order(spec, start_km):
+        probe = params.model_copy(update={"distance_km": distance})
+        course, sim = _search_shape(
+            spec, probe,
+            deadline=time.perf_counter() + per_distance_budget_s,
+            rotations=style.rotations, scales=style.scales, style=style)
+        if (course is None or sim < style.similarity_gate
+                or course.length_km > MAX_ANIMAL_ART_KM
+                or not _course_is_usable(probe, course)):
+            continue
+        if (sim > best_sim + 0.015
+                or (abs(sim - best_sim) <= 0.015
+                    and (best is None or course.length_km < best.length_km))):
+            best, best_sim = course, sim
+    return best
+
+
 def suggest_alternatives(params: CourseParams, limit: int = 2) -> list[str]:
     """Quick-probe other shapes at this location; return only verified fits."""
     deadline = time.perf_counter() + PROBE_BUDGET_S

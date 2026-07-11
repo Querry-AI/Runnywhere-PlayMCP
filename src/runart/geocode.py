@@ -173,12 +173,17 @@ def _kakao_get(url: str, params: dict) -> list[dict]:
     key = os.environ.get("KAKAO_REST_API_KEY")
     if not key:
         return []
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname != "dapi.kakao.com":
+        raise ValueError("Kakao API URL must use the trusted HTTPS endpoint")
     req = urllib.request.Request(
         f"{url}?{urllib.parse.urlencode(params)}",
         headers={"Authorization": f"KakaoAK {key}"})
     for attempt in (0, 1):
         try:
-            with urllib.request.urlopen(req, timeout=_TIMEOUT_S, context=_SSL_CTX) as r:
+            # URL scheme and host are allowlisted immediately above.
+            with urllib.request.urlopen(  # nosec B310
+                    req, timeout=_TIMEOUT_S, context=_SSL_CTX) as r:
                 return json.load(r).get("documents", [])
         except urllib.error.HTTPError as exc:
             # Authentication/product errors cannot recover on retry. Distinguish

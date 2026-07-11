@@ -19,6 +19,14 @@ from .shapes import SHAPES
 PREVIEW_FACILITY_TYPES = {"convenience_store", "restroom"}
 
 
+def markdown_text(value: str) -> str:
+    """Escape untrusted labels embedded in MCP Markdown responses."""
+    value = "".join(ch for ch in value if ch >= " " and ch != "\x7f")[:120]
+    for char in "\\`*_{}[]()<>#+-.!|":
+        value = value.replace(char, "\\" + char)
+    return value
+
+
 def course_markdown(course: Course, base_url: str, facilities: list[dict]) -> str:
     p = course.params
     cid = encode_course_id(p)
@@ -30,9 +38,13 @@ def course_markdown(course: Course, base_url: str, facilities: list[dict]) -> st
     where = f" ({p.location_name} 출발·도착)" if p.location_name else ""
     lo, hi = course.duration_range_min
     lines = [
-        f"{title}{where}",
-        f"- 누적 오르막 {course.ascent_m:.0f}m ({course.grade_label}) · 예상 {lo}~{hi}분 (6:30/km 기준)",
-        f"- 러닝 친화도 {course.rfs['score']}/100 (서울 전체 상위 {course.rfs.get('top_percent', 50)}%)"
+        f"## {title}",
+        f"📍 **출발·도착:** {markdown_text(p.location_name) if p.location_name else '지정한 출발점'}",
+        "",
+        "**한눈에 보기**",
+        f"- 거리 **{course.length_km:.1f}km** · 예상 **{lo}~{hi}분** (6:30/km 기준)",
+        f"- 누적 오르막 **{course.ascent_m:.0f}m** · {course.grade_label}",
+        f"- 러닝 친화도 **{course.rfs['score']}/100** (서울 전체 상위 {course.rfs.get('top_percent', 50)}%)"
         + (" — " + " · ".join(course.rfs["highlights"]) if course.rfs["highlights"] else ""),
     ]
     if facilities:
@@ -48,10 +60,16 @@ def course_markdown(course: Course, base_url: str, facilities: list[dict]) -> st
             lines.append(f"- 요청 시설 중 {', '.join(missing)}은 코스 10m 반경에서 찾지 못했어요")
     if p.night_mode:
         lines.append("- 🌙 야간 안전 모드: 조명·안심 CCTV가 좋은 길 위주예요")
-    lines.append(f"- 🗺️ 지도 보기: {base_url}/c/{cid}  ⬇️ GPX: {base_url}/c/{cid}.gpx")
+    lines.extend([
+        "",
+        "**바로 시작하기**",
+        f"- 🗺️ 지도·러닝 가이드: {base_url}/c/{cid}",
+        f"- ⬇️ GPX 다운로드: {base_url}/c/{cid}.gpx",
+    ])
     if shape:
         token = encode_shape_token(p.shape, p.distance_km)
-        lines.append(f"- {shape.emoji} 모양 공유 링크: {base_url}/s/{token}")
+        lines.append(f"- {shape.emoji} 친구 동네에서 다시 그리기: {base_url}/s/{token}")
+    lines.append("지도에서 출발점을 확인한 뒤 **러닝 시작**을 누르면 길 안내가 시작돼요.")
     return "\n".join(lines)
 
 
@@ -256,7 +274,8 @@ def _course_fact_html(course: Course, facilities: list[dict],
     )
 
 
-def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
+def preview_html(course: Course, facilities: list[dict], base_url: str,
+                 kakao_javascript_key: str = "") -> str:
     facilities = [f for f in facilities if f["type"] in PREVIEW_FACILITY_TYPES]
     p = course.params
     cid = encode_course_id(p)
@@ -282,6 +301,11 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
         for f in facilities
     ])
     highlights = html.escape(" · ".join(course.rfs.get("highlights", [])))
+    kakao_key = html.escape(kakao_javascript_key, quote=True)
+    map_sdk = (
+        f'<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={kakao_key}&autoload=false"></script>'
+        if kakao_key else ""
+    )
     return f"""<!DOCTYPE html><html lang="ko"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>러니웨어 — {title}</title>
@@ -289,8 +313,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
 <meta property="og:description" content="{og_desc}">
 <meta property="og:image" content="{base_url}/c/{cid}/card.svg">
 <meta property="og:type" content="website">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+{map_sdk}
 <style>
  body{{margin:0;font-family:-apple-system,'Apple SD Gothic Neo',sans-serif;color:#17201b;background:#f5f7f3}}
  .brand{{height:54px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;
@@ -298,7 +321,8 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  .brand strong{{font-size:18px;color:#142018}}
  .brand span{{font-size:12px;color:#66726a}}
  #map{{height:58vh;min-height:380px;background:#e8ece5}}
- .leaflet-control-attribution{{font-size:10px}}
+ .map-error{{height:100%;display:flex;align-items:center;justify-content:center;padding:24px;
+      box-sizing:border-box;text-align:center;color:#536057;font-size:14px;background:#eef2ec}}
  .map-hud{{position:absolute;z-index:500;left:14px;right:14px;top:14px;display:flex;gap:8px;flex-wrap:wrap;pointer-events:none}}
  .pill{{background:rgba(255,255,255,.94);border:1px solid rgba(20,35,25,.08);border-radius:8px;
       padding:8px 10px;font-size:13px;font-weight:700;box-shadow:0 4px 18px rgba(0,0,0,.08)}}
@@ -346,7 +370,10 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
       font-size:12px;font-weight:800;box-shadow:0 3px 12px rgba(0,0,0,.28);white-space:nowrap}}
  .user-dot{{width:18px;height:18px;background:#1677ff;border:3px solid #fff;border-radius:999px;
       box-shadow:0 0 0 8px rgba(22,119,255,.18),0 2px 10px rgba(0,0,0,.25)}}
+ .facility-marker{{width:12px;height:12px;background:#2563eb;border:2px solid #fff;border-radius:999px;
+      box-shadow:0 2px 8px rgba(0,0,0,.24)}}
  footer{{color:#7b857d;font-size:12px;padding:8px 20px 20px;text-align:center}}
+ footer a{{color:inherit}}
  @media (max-width:560px){{.brand span{{font-size:11px}} .facts{{grid-template-columns:repeat(2,1fr)}}
       #map{{height:54vh;min-height:320px}} .actions{{display:grid;grid-template-columns:1fr 1fr}}
       .actions .btn{{text-align:center;padding:12px 8px}}}}
@@ -397,37 +424,63 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  </div>
 </section>
 </div>
-<footer>러니웨어 · 데이터: OpenStreetMap, SRTM, 서울열린데이터광장 (스냅숏 기준) ·
+<footer>러니웨어 · 배경 지도: Kakao Maps · 경로 데이터
+<a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a> · SRTM · 서울열린데이터광장 ·
 위치 정보는 저장되지 않습니다</footer>
 <script>
  const segs = {segments};
  const shapeRoute = {shape_route};
  const kms = {km_markers};
  const dirs = {dir_markers};
- const map = L.map('map');
- L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png',
-   {{attribution:'&copy; OpenStreetMap &copy; CARTO', subdomains:'abcd', maxZoom:20}}).addTo(map);
+ const mapNode = document.getElementById('map');
+ if (!window.kakao || !kakao.maps) {{
+   mapNode.innerHTML = '<div class="map-error">카카오맵을 불러오지 못했습니다.<br>KAKAO_JAVASCRIPT_KEY와 등록 도메인을 확인해 주세요.</div>';
+ }} else kakao.maps.load(() => {{
+ const startPos = segs.length
+   ? new kakao.maps.LatLng(segs[0][0], segs[0][1])
+   : new kakao.maps.LatLng({p.lat}, {p.lon});
+ const map = new kakao.maps.Map(mapNode, {{center:startPos, level:6}});
+ map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.LEFT);
  const color = s => s >= .62 ? '#18a558' : (s >= .48 ? '#f0a202' : '#dc3d2a');
- const group = L.featureGroup();
- const shapeLayer = L.featureGroup();
- const guideLayer = L.layerGroup().addTo(map);
+ const routeLayers = [];
+ const shapeLayers = [];
+ const guideLayers = [];
+ const addPolyline = (path, options, bucket, visible=true) => {{
+   const line = new kakao.maps.Polyline({{path, ...options}});
+   if (visible) line.setMap(map);
+   bucket.push(line);
+   return line;
+ }};
+ const addOverlay = (position, content, bucket) => {{
+   const overlay = new kakao.maps.CustomOverlay({{
+     position, content, xAnchor:.5, yAnchor:.5, zIndex:5
+   }});
+   overlay.setMap(map);
+   bucket.push(overlay);
+   return overlay;
+ }};
+ const setLayers = (layers, visible) => layers.forEach(layer => layer.setMap(visible ? map : null));
  const route = segs.map(s => [s[0], s[1]]);
  if (segs.length) route.push([segs[segs.length - 1][2], segs[segs.length - 1][3]]);
- L.polyline(route, {{color:'#ffffff', weight:9, opacity:.95, lineJoin:'round', lineCap:'round'}}).addTo(group);
+ const routePath = route.map(([lat, lon]) => new kakao.maps.LatLng(lat, lon));
+ addPolyline(routePath, {{strokeColor:'#ffffff',strokeWeight:9,strokeOpacity:.95}}, routeLayers);
  for (const [a, b, c, d, s] of segs)
-   L.polyline([[a, b], [c, d]], {{color: color(s), weight: 5, opacity: .92, lineJoin:'round', lineCap:'round'}}).addTo(group);
- L.polyline(shapeRoute, {{color:'#ffffff', weight:13, opacity:.72, lineJoin:'round', lineCap:'round'}}).addTo(shapeLayer);
- L.polyline(shapeRoute, {{color:'#18a558', weight:8, opacity:.92, lineJoin:'round', lineCap:'round'}}).addTo(shapeLayer);
- group.addTo(map);
- map.fitBounds(group.getBounds(), {{padding: [42, 42]}});
- if (segs.length) L.marker([segs[0][0], segs[0][1]], {{icon:L.divIcon({{className:'start-marker', html:'출발·도착', iconAnchor:[28,16]}})}})
-   .addTo(guideLayer).bindTooltip('출발·도착 지점', {{direction:'top'}}).bindPopup('출발·도착 지점');
- for (const m of dirs) L.marker([m.lat, m.lon], {{icon:L.divIcon({{className:'dir-marker', html:'<span style="transform:rotate('+m.angle+'deg)">➤</span>', iconSize:[22,22], iconAnchor:[11,11]}})}})
-   .addTo(guideLayer).bindTooltip('진행 방향', {{direction:'top'}});
- for (const k of kms) L.marker([k.lat, k.lon], {{icon:L.divIcon({{className:'km-marker', html:k.km, iconSize:[24,24], iconAnchor:[12,12]}})}})
-   .addTo(guideLayer).bindTooltip(`${{k.km}}km 지점`, {{direction:'top'}});
- for (const m of {markers}) L.circleMarker([m.lat, m.lon], {{radius: 6, color: '#2563eb'}})
-   .addTo(guideLayer).bindTooltip(m.label, {{direction:'top'}}).bindPopup(m.label);
+   addPolyline([new kakao.maps.LatLng(a,b),new kakao.maps.LatLng(c,d)],
+     {{strokeColor:color(s),strokeWeight:5,strokeOpacity:.92}},routeLayers);
+ const shapePath = shapeRoute.map(([lat, lon]) => new kakao.maps.LatLng(lat, lon));
+ addPolyline(shapePath, {{strokeColor:'#ffffff',strokeWeight:13,strokeOpacity:.72}}, shapeLayers, false);
+ addPolyline(shapePath, {{strokeColor:'#18a558',strokeWeight:8,strokeOpacity:.92}}, shapeLayers, false);
+ const bounds = new kakao.maps.LatLngBounds();
+ routePath.forEach(pos => bounds.extend(pos));
+ if (routePath.length) map.setBounds(bounds, 42, 42, 42, 42);
+ if (segs.length) addOverlay(startPos,
+   '<div class="start-marker" title="출발·도착 지점">출발·도착</div>', guideLayers);
+ for (const m of dirs) addOverlay(new kakao.maps.LatLng(m.lat,m.lon),
+   '<div class="dir-marker" title="진행 방향"><span style="transform:rotate('+m.angle+'deg)">➤</span></div>',guideLayers);
+ for (const k of kms) addOverlay(new kakao.maps.LatLng(k.lat,k.lon),
+   '<div class="km-marker" title="'+k.km+'km 지점">'+k.km+'</div>',guideLayers);
+ for (const m of {markers}) addOverlay(new kakao.maps.LatLng(m.lat,m.lon),
+   '<div class="facility-marker" title="'+m.label+'"></div>',guideLayers);
  const shapeView = document.getElementById('shapeView');
  const guideView = document.getElementById('guideView');
  const setMapMode = mode => {{
@@ -436,16 +489,13 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
    shapeView.classList.toggle('active', shapeOnly);
    guideView.classList.toggle('active', !shapeOnly);
    if (shapeOnly) {{
-     map.removeLayer(group);
-     map.removeLayer(guideLayer);
-     if (!map.hasLayer(shapeLayer)) shapeLayer.addTo(map);
-   }} else if (!map.hasLayer(guideLayer)) {{
-     map.removeLayer(shapeLayer);
-     if (!map.hasLayer(group)) group.addTo(map);
-     guideLayer.addTo(map);
+     setLayers(routeLayers, false);
+     setLayers(guideLayers, false);
+     setLayers(shapeLayers, true);
    }} else {{
-     map.removeLayer(shapeLayer);
-     if (!map.hasLayer(group)) group.addTo(map);
+     setLayers(shapeLayers, false);
+     setLayers(routeLayers, true);
+     setLayers(guideLayers, true);
    }}
  }};
  shapeView.addEventListener('click', () => setMapMode('shape'));
@@ -455,7 +505,6 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
  let watchId = null;
  let userMarker = null;
  let accuracyCircle = null;
- const userIcon = L.divIcon({{className:'', html:'<div class="user-dot"></div>', iconSize:[24,24], iconAnchor:[12,12]}});
  const toRad = deg => deg * Math.PI / 180;
  const distM = (a, b, c, d) => {{
    const R = 6371000;
@@ -486,12 +535,19 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
    const lon = pos.coords.longitude;
    const acc = Math.round(pos.coords.accuracy || 0);
    const off = Math.round(nearestRouteM(lat, lon));
+   const posLatLng = new kakao.maps.LatLng(lat, lon);
    if (!userMarker) {{
-     userMarker = L.marker([lat, lon], {{icon:userIcon, zIndexOffset:1000}}).addTo(map);
-     accuracyCircle = L.circle([lat, lon], {{radius: acc, color:'#1677ff', weight:1, fillOpacity:.06}}).addTo(map);
+     userMarker = addOverlay(posLatLng, '<div class="user-dot" title="현재 위치"></div>', guideLayers);
+     accuracyCircle = new kakao.maps.Circle({{
+       center:posLatLng,radius:acc,strokeWeight:1,strokeColor:'#1677ff',
+       strokeOpacity:.8,fillColor:'#1677ff',fillOpacity:.06
+     }});
+     accuracyCircle.setMap(map);
+     guideLayers.push(accuracyCircle);
    }} else {{
-     userMarker.setLatLng([lat, lon]);
-     accuracyCircle.setLatLng([lat, lon]).setRadius(acc);
+     userMarker.setPosition(posLatLng);
+     accuracyCircle.setPosition(posLatLng);
+     accuracyCircle.setRadius(acc);
    }}
    const guide = off > 80 ? `코스에서 약 ${{off}}m 벗어남` : `코스 위를 달리는 중 · 오차 ${{acc}}m`;
    setStatus(guide);
@@ -533,6 +589,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str) -> str:
    startBtn.disabled = true;
    setStatus(!window.isSecureContext ? 'HTTPS 연결에서 위치 기능을 사용할 수 있어요' : '이 브라우저는 위치 기능을 지원하지 않아요');
  }}
+ }});
 </script></body></html>"""
 
 

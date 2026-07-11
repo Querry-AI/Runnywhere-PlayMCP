@@ -2,17 +2,21 @@
 
 - Streamable HTTP, stateless (PRD §9): course ids are self-contained parameter
   tokens; the in-process cache is a performance layer only.
-- 6 read-only, idempotent tools (PRD §5.1). Tool errors are returned as
+- 9 stateless, idempotent tools (PRD §5.1). Tool errors are returned as
   refined guidance text, never raw exceptions (PRD §5.2).
 - Preview pages / GPX / shape share links are served by the same app (§5.6).
 """
 
 import concurrent.futures
 import functools
+import html
+import logging
 import multiprocessing
 import os
+import re
 import threading
 import time
+import urllib.parse
 
 import anyio
 from mcp.server.fastmcp import FastMCP
@@ -23,13 +27,21 @@ from pydantic import Field
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
+from .animal_presets import (MISSING as PRESET_MISSING, PresetMatch,
+                             find_nearest_animal_preset, get_animal_preset)
 from .course import Course, CourseError, generate_course
 from .facilities import LABELS_KO, facilities_along
 from .geocode import resolve_location
 from .gpx import to_gpx
+from .geo import haversine_m
+from .exploration import (atlas_html, create_relay, decode_passport,
+                          decode_relay, passport_html, passport_summary,
+                          home_html, record_run, relay_html,
+                          weekly_recommendation)
 from .models import (CourseParams, DEFAULT_PACE_MIN_PER_KM, decode_course_id,
                      decode_shape_token, encode_course_id)
-from .render import card_svg, course_markdown, preview_html, route_points
+from .render import (card_svg, course_markdown, markdown_text, preview_html,
+                     route_points)
 from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
                      generate_shape_course, list_shapes)
 from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
@@ -38,6 +50,16 @@ BASE_URL = os.environ.get(
     "RUNART_BASE_URL",
     "https://runnywhere.playmcp-endpoint.kakaocloud.io",
 ).rstrip("/")
+_BASE_PARTS = urllib.parse.urlparse(BASE_URL)
+if (_BASE_PARTS.scheme not in {"http", "https"} or not _BASE_PARTS.hostname
+        or _BASE_PARTS.username or _BASE_PARTS.password
+        or _BASE_PARTS.path not in {"", "/"}
+        or _BASE_PARTS.params or _BASE_PARTS.query or _BASE_PARTS.fragment):
+    raise RuntimeError("RUNART_BASE_URL must be an HTTP(S) origin without credentials or a path")
+KAKAO_JAVASCRIPT_KEY = os.environ.get("KAKAO_JAVASCRIPT_KEY", "")
+if KAKAO_JAVASCRIPT_KEY and not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", KAKAO_JAVASCRIPT_KEY):
+    raise RuntimeError("KAKAO_JAVASCRIPT_KEY has an invalid format")
+log = logging.getLogger("runart")
 
 mcp = FastMCP(
     "Runnywhere",
@@ -49,7 +71,7 @@ mcp = FastMCP(
     ),
     stateless_http=True,
     json_response=True,
-    host="0.0.0.0",
+    host=os.environ.get("HOST", "127.0.0.1"),
     port=int(os.environ.get("PORT", "8000")),
 )
 
@@ -61,6 +83,7 @@ _RO = dict(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWo
 _course_cache: dict[str, "Course | CourseError"] = {}
 _CACHE_MAX = 512
 _animal_recommendation_cache: dict[tuple, Course] = {}
+_CACHE_LOCK = threading.RLock()
 
 
 # ---------- CPU offload (PlayMCP p99 <= 3s) ----------
@@ -125,8 +148,8 @@ def _offload(fn, *args, timeout_s: float | None = None):
             with _POOL_LOCK:
                 _POOL_BROKEN = True
                 _POOL = None
-        except Exception:  # noqa: BLE001 — pickling/other — degrade to inline
-            pass
+        except Exception as exc:  # noqa: BLE001 — degrade to bounded inline
+            log.debug("process-pool offload failed; using bounded inline path: %s", exc)
     if timeout_s is not None and not _intrinsically_bounded(fn):
         # Never run an unbounded fallback inside an MCP request.
         raise _GenerationTimeout
@@ -163,8 +186,8 @@ def _offload_map(fn, items: dict, timeout_s: float | None = None) -> dict:
             with _POOL_LOCK:
                 _POOL_BROKEN = True
                 _POOL = None
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log.debug("process-pool map failed; using bounded inline path: %s", exc)
     if timeout_s is not None:
         if not _intrinsically_bounded(fn):
             return {k: _TIMED_OUT for k in items}
@@ -209,7 +232,8 @@ def offloaded(fn):
 
 def _get_course(params: CourseParams, timeout_s: float | None = None) -> Course:
     cid = encode_course_id(params)
-    hit = _course_cache.get(cid)
+    with _CACHE_LOCK:
+        hit = _course_cache.get(cid)
     if isinstance(hit, Course):
         return hit
     if isinstance(hit, CourseError):
@@ -231,9 +255,10 @@ def _get_course(params: CourseParams, timeout_s: float | None = None) -> Course:
 
 
 def _cache_put(cid: str, value) -> None:
-    if len(_course_cache) >= _CACHE_MAX:
-        _course_cache.pop(next(iter(_course_cache)))
-    _course_cache[cid] = value
+    with _CACHE_LOCK:
+        if len(_course_cache) >= _CACHE_MAX:
+            _course_cache.pop(next(iter(_course_cache)))
+        _course_cache[cid] = value
 
 
 def _animal_recommendation_key(params: CourseParams) -> tuple:
@@ -245,9 +270,15 @@ def _animal_recommendation_key(params: CourseParams) -> tuple:
 
 
 def _cache_animal_recommendation(course: Course) -> None:
-    if len(_animal_recommendation_cache) >= _CACHE_MAX:
-        _animal_recommendation_cache.pop(next(iter(_animal_recommendation_cache)))
-    _animal_recommendation_cache[_animal_recommendation_key(course.params)] = course
+    with _CACHE_LOCK:
+        if len(_animal_recommendation_cache) >= _CACHE_MAX:
+            _animal_recommendation_cache.pop(next(iter(_animal_recommendation_cache)))
+        _animal_recommendation_cache[_animal_recommendation_key(course.params)] = course
+
+
+def _get_animal_recommendation(params: CourseParams) -> Course | None:
+    with _CACHE_LOCK:
+        return _animal_recommendation_cache.get(_animal_recommendation_key(params))
 
 
 def _build_params(location, lat, lon, distance_km, duration_min, include_hills,
@@ -300,6 +331,7 @@ def _animal_help(name: str) -> str:
 
 def _animal_timeout_message(name: str, shape: str) -> str:
     spec = SHAPES[shape]
+    name = markdown_text(name)
     return (
         f"⏱️ {name}에서 3초 안에 또렷한 {spec.name_ko} 코스를 찾지 못했어요. "
         "도로망 후보가 많아 이번 탐색은 여기서 멈췄습니다. "
@@ -318,6 +350,29 @@ REFERENCE_FEATURES = {
 }
 
 
+def _nearby_start_text(requested_name: str, match: PresetMatch) -> str:
+    """Clear, decision-ready explanation when a nearby preset is substituted."""
+    requested_name = markdown_text(requested_name)
+    actual = markdown_text(match.course.params.location_name or "가까운 출발점")
+    metres = int(round(match.distance_m / 50.0) * 50)
+    walk_min = max(1, round(match.distance_m / 80.0))
+    return (f"요청한 {requested_name}에서는 모양이 흐려져, 가장 가까운 검증 코스로 바꿨어요.\n"
+            f"📍 실제 출발·도착: **{actual}** · 약 {metres:,}m 이동 · 도보 약 {walk_min}분\n")
+
+
+def _verified_animal_note(requested_name: str, shape: str,
+                          course: Course,
+                          nearby: PresetMatch | None = None) -> str:
+    spec = SHAPES[shape]
+    lead = ("✅ 바로 달릴 수 있는 검증 코스예요.\n"
+            if nearby is None else "✅ 가까운 곳에서 바로 달릴 수 있는 검증 코스를 찾았어요.\n")
+    moved = _nearby_start_text(requested_name, nearby) if nearby is not None else ""
+    return (lead + moved
+            + f"선택 이유: {spec.emoji} {spec.name_ko} 특유의 "
+              f"**{REFERENCE_FEATURES.get(shape, '대표 특징')}** 같은 특징이 가장 또렷한 "
+              f"**11km 이내 최상 코스**예요.\n")
+
+
 def _animal_survey(lat: float, lon: float, name: str,
                    timeout_s: float | None = None) -> str:
     """Per-animal shortest clean-completion distance at this start point.
@@ -327,7 +382,11 @@ def _animal_survey(lat: float, lon: float, name: str,
     animals. So instead of drawing anything yet, tell the user at which
     minimal distance each animal completes cleanly and let them choose.
     """
-    lines = [f"📍 {name} 출발 기준, 11km 이내에서 가장 또렷한 동물 코스예요:"]
+    safe_name = markdown_text(name)
+    lines = [
+        "✅ **지금 선택할 수 있는 검증된 동물 코스예요.**",
+        f"📍 {safe_name} 기준 · 11km 이내 · 필요하면 주변 2km 안의 더 또렷한 출발점까지 함께 찾았어요.",
+    ]
     found_any = False
     timed_out_any = False
     # All four animals are generated in parallel across the process pool, so the
@@ -344,10 +403,21 @@ def _animal_survey(lat: float, lon: float, name: str,
     # direct animal request. Only missing animals enter the process pool; this
     # makes repeated conversational turns sub-100ms without weakening gates.
     courses = {}
+    nearby_matches = {}
     missing = {}
     for key, probe in probes.items():
-        cached = _animal_recommendation_cache.get(
-            _animal_recommendation_key(probe))
+        preset = get_animal_preset(probe)
+        if preset is None or preset is PRESET_MISSING:
+            nearby = find_nearest_animal_preset(probe)
+            if nearby is not None:
+                courses[key] = nearby.course
+                if not nearby.is_exact:
+                    nearby_matches[key] = nearby
+                continue
+        if preset is not PRESET_MISSING:
+            courses[key] = preset
+            continue
+        cached = _get_animal_recommendation(probe)
         if cached is None:
             missing[key] = probe
         else:
@@ -372,9 +442,15 @@ def _animal_survey(lat: float, lon: float, name: str,
         cid = encode_course_id(course.params)
         _cache_put(cid, course)
         _cache_animal_recommendation(course)
+        nearby = nearby_matches.get(key)
+        start = ""
+        if nearby is not None:
+            metres = int(round(nearby.distance_m / 50.0) * 50)
+            start = (f" · **{markdown_text(course.params.location_name)}에서 출발**"
+                     f"(약 {metres:,}m 이동)")
         lines.append(
             f"- {spec.emoji} {spec.name_ko}: **추천 {course.length_km:.1f}km** · "
-            f"{REFERENCE_FEATURES[key]} · "
+            f"{REFERENCE_FEATURES[key]}{start} · "
             f"미리보기 {BASE_URL}/c/{cid}"
         )
     if found_any:
@@ -466,8 +542,27 @@ def generate_animal_course(
                              distance_km=SHAPES[shape].min_km, shape=shape,
                              include_hills=include_hills, night_mode=night_mode,
                              need_facilities=need_facilities or [])
-        cached = _animal_recommendation_cache.get(
-            _animal_recommendation_key(probe))
+        preset = get_animal_preset(probe)
+        nearby = None
+        if preset is None or preset is PRESET_MISSING:
+            nearby = find_nearest_animal_preset(probe)
+            if nearby is not None:
+                preset = nearby.course
+        if preset is None:
+            spec = SHAPES[shape]
+            safe_name = markdown_text(name)
+            return (f"⚠️ **이 위치에서는 {spec.name_ko} 코스를 추천할 수 없어요.**\n"
+                    f"- 이유: {safe_name} 주변 2km 안에서 11km 이내 품질 기준을 통과한 "
+                    f"{spec.name_ko} 코스가 없어요.\n"
+                    f"- 다음 선택: 동물 이름 없이 **\"{safe_name}에서 동물 코스 추천해줘\"**라고 "
+                    "말하면 가능한 모양을 바로 찾아드려요.")
+        if preset is not PRESET_MISSING:
+            _cache_animal_recommendation(preset)
+            note = _verified_animal_note(
+                name, shape, preset,
+                nearby if nearby is not None and not nearby.is_exact else None)
+            return _serve_course(preset, note)
+        cached = _get_animal_recommendation(probe)
         if cached is not None:
             spec = SHAPES[shape]
             note = (f"{spec.emoji} {spec.name_ko} 모양이 가장 깔끔하게 완성되는 "
@@ -490,7 +585,7 @@ def generate_animal_course(
         # re-running a full survey (which would push latency past p99 3s).
         spec = SHAPES[shape]
         return (
-            f"⚠️ {name}에서는 {spec.name_ko} 실루엣이 11km 이내에 또렷하게 "
+            f"⚠️ {markdown_text(name)}에서는 {spec.name_ko} 실루엣이 11km 이내에 또렷하게 "
             f"완성되지 않았어요. " + _animal_help(name)
         )
     try:
@@ -503,9 +598,16 @@ def generate_animal_course(
         # the location-specific clean minimum first and skip generation when
         # the request is below it; show all four verified choices instead.
         baseline = params.model_copy(update={"distance_km": SHAPES[shape].min_km})
-        minimum = _animal_recommendation_cache.get(
-            _animal_recommendation_key(baseline))
-        if minimum is None:
+        preset = get_animal_preset(baseline)
+        nearby = None
+        if preset is None or preset is PRESET_MISSING:
+            nearby = find_nearest_animal_preset(baseline)
+            if nearby is not None:
+                preset = nearby.course
+        preset_unavailable = preset is None
+        minimum = (_get_animal_recommendation(baseline)
+            if preset is PRESET_MISSING else preset)
+        if minimum is None and not preset_unavailable:
             try:
                 minimum = _offload(
                     find_min_clean_course, baseline, timeout_s=remaining())
@@ -513,14 +615,26 @@ def generate_animal_course(
                 return _animal_timeout_message(params.location_name, shape)
             if minimum is not None:
                 _cache_animal_recommendation(minimum)
+        if (minimum is not None
+                and abs(minimum.length_km - distance_km) / distance_km <= 0.10):
+            note = _verified_animal_note(
+                params.location_name, shape, minimum,
+                nearby if nearby is not None and not nearby.is_exact else None)
+            note += (f"거리도 요청한 {distance_km:g}km의 ±10% 안에 들어와 "
+                     "이 코스로 바로 확정했어요.\n")
+            return _serve_course(minimum, note)
         if minimum is not None and distance_km < minimum.params.distance_km:
             spec = SHAPES[shape]
+            nearby_text = (_nearby_start_text(params.location_name, nearby)
+                           if nearby is not None and not nearby.is_exact else "")
             return (
-                f"⚠️ {params.location_name}에서 {distance_km:g}km로는 "
-                f"{spec.name_ko}의 레퍼런스 특징이 충분히 분리되지 않아요. "
-                f"검증된 최소 요청 거리는 {minimum.params.distance_km:g}km"
-                f"(실거리 약 {minimum.length_km:.1f}km)예요.\n\n"
-                + _animal_survey(params.lat, params.lon, params.location_name)
+                f"⚠️ **{distance_km:g}km보다 모양이 또렷한 대안을 추천해요.**\n"
+                + nearby_text
+                + f"- 요청 거리: {distance_km:g}km\n"
+                + f"- 추천 거리: **{minimum.length_km:.1f}km**\n"
+                + f"- 이유: 더 짧으면 {spec.name_ko}의 {REFERENCE_FEATURES[shape]} 특징들이 "
+                  "도로에 겹쳐 알아보기 어려워져요.\n"
+                + f"- 바로 사용하려면 **\"{minimum.length_km:.1f}km로 확정\"**이라고 말해 주세요."
             )
     try:
         out = _run(params, note, timeout_s=remaining())
@@ -614,6 +728,100 @@ def get_course_status(
     return _run(params)
 
 
+def explore_animal_collection(
+    location: Annotated[str | None, Field(description="Current place in Seoul for the nearest undiscovered animal recommendation")] = None,
+    lat: Annotated[float | None, Field(ge=37.4, le=37.72, description="Current latitude, alternative to location")] = None,
+    lon: Annotated[float | None, Field(ge=126.76, le=127.19, description="Current longitude, alternative to location")] = None,
+    passport_token: Annotated[str | None, Field(description="Optional stateless passport token returned after recording completed animal courses")] = None,
+) -> str:
+    """Opens the Runnywhere(러니웨어) Seoul animal-art atlas and recommends
+    this week's nearest verified course not yet recorded in the user's
+    stateless animal passport. Returns concise links, not the full atlas data."""
+    try:
+        rlat, rlon, name = resolve_location(location, lat, lon)
+        passport = decode_passport(passport_token)
+    except CourseError as e:
+        return f"⚠️ {e}"
+    except Exception:
+        return "⚠️ passport_token이 올바르지 않아요. 토큰 없이 새 도감을 시작할 수 있어요."
+    course = weekly_recommendation(rlat, rlon, passport_token)
+    summary = passport_summary(passport)
+    lines = [
+        "🗺️ **서울 동물지도가 열렸어요.**",
+        f"- 탐험 지도: {BASE_URL}/animals",
+        f"- 도감 현황: {summary['runs']}회 완주 · {len(summary['shapes'])}/4종 발견",
+    ]
+    if passport_token:
+        lines.append(f"- 나의 동물도감: {BASE_URL}/passport/{passport_token}")
+    if course is not None:
+        cid = encode_course_id(course.params)
+        distance = int(round(haversine_m(rlat, rlon, course.params.lat, course.params.lon)))
+        spec = SHAPES[course.params.shape]
+        lines.extend([
+            "",
+            "**이번 주 가장 가까운 미발견 동물**",
+            f"- {spec.emoji} {spec.name_ko} · {markdown_text(course.params.location_name)} · {course.length_km:.1f}km",
+            f"- 현재 위치에서 약 {distance:,}m · 코스 보기 {BASE_URL}/c/{cid}",
+        ])
+    lines.append("완주 후 course_id와 함께 **동물도감에 기록해줘**라고 말해 주세요.")
+    return "\n".join(lines)
+
+
+def record_animal_completion(
+    course_id: Annotated[str, Field(description="Completed animal course id")],
+    passport_token: Annotated[str | None, Field(description="Existing passport token; omit for the first completed animal")] = None,
+) -> str:
+    """Records a completed Runnywhere(러니웨어) animal course by returning a
+    new self-contained passport token. No account, session, or server-side
+    personal data is stored; repeating the same input is idempotent."""
+    try:
+        token, summary = record_run(course_id, passport_token)
+    except RuntimeError:
+        return "⚠️ 동물도감 보안 설정이 준비되지 않았어요. 운영자에게 문의해 주세요."
+    except Exception:
+        return "⚠️ 동물 코스 course_id 또는 passport_token이 올바르지 않아요."
+    shapes = " ".join(SHAPES[key].emoji for key in summary["shapes"])
+    lines = [
+        "🎉 **완주를 동물도감에 기록했어요.**",
+        f"- 발견: {len(summary['shapes'])}/4종 {shapes}",
+        f"- 누적 완주: {summary['runs']}회",
+    ]
+    if summary["badges"]:
+        lines.append("- 새 배지: " + " · ".join(
+            f"🏅 {markdown_text(b)}" for b in summary["badges"]))
+    lines.extend([
+        f"- 나의 도감: {BASE_URL}/passport/{token}",
+        "- 다음 대화의 passport_token에는 위 도감 링크를 그대로 사용하세요.",
+        "- 개인정보 안내: 이 링크를 가진 사람은 완주 코스와 출발역을 볼 수 있어요.",
+        "다음에는 **내 도감에서 가장 가까운 미발견 동물 찾아줘**라고 말해보세요.",
+    ])
+    return "\n".join(lines)
+
+
+def extend_shape_relay(
+    course_id: Annotated[str, Field(description="Animal course id to add as the next relay leg")],
+    relay_token: Annotated[str | None, Field(description="Existing relay token; omit to start a new relay")] = None,
+) -> str:
+    """Starts or extends a Runnywhere(러니웨어) Shape Relay with another
+    neighborhood's version of the same animal. The self-contained relay token
+    supports up to eight legs and stores no user account or server session."""
+    try:
+        token, data = create_relay(course_id, relay_token)
+    except RuntimeError:
+        return "⚠️ Shape Relay 보안 설정이 준비되지 않았어요. 운영자에게 문의해 주세요."
+    except ValueError as e:
+        if "same shape" in str(e):
+            return "⚠️ 릴레이에는 같은 동물 코스만 이어 붙일 수 있어요."
+        return "⚠️ 동물 코스 course_id 또는 relay_token이 올바르지 않아요."
+    spec = SHAPES[data["shape"]]
+    return "\n".join([
+        f"{spec.emoji} **{spec.name_ko} Shape Relay {len(data['legs'])}번째 주자를 연결했어요.**",
+        f"- 공동 작품 보기: {BASE_URL}/relay/{token}",
+        "- 다음 주자의 relay_token에는 위 공동 작품 링크를 그대로 사용하세요.",
+        "친구는 자기 동네에서 같은 동물 코스를 만든 뒤 이 토큰과 course_id를 함께 전달하면 돼요.",
+    ])
+
+
 # Register each tool as an async offloaded wrapper (frees the event loop for
 # health checks) while keeping the sync functions above directly callable by
 # tests. offloaded() preserves the signature/docstring FastMCP needs.
@@ -624,6 +832,9 @@ for _fn, _title in (
     (find_facilities_near_course, "Find facilities near course"),
     (refine_course, "Refine course"),
     (get_course_status, "Get course status"),
+    (explore_animal_collection, "Explore Seoul animal-art collection"),
+    (record_animal_completion, "Record animal-course completion"),
+    (extend_shape_relay, "Extend shape relay"),
 ):
     mcp.add_tool(
         offloaded(_fn), name=_fn.__name__,
@@ -636,6 +847,12 @@ for _fn, _title in (
 @mcp.custom_route("/healthz", methods=["GET"])
 async def healthz(_: Request) -> Response:
     return JSONResponse({"ok": True, "service": "runnywhere"})
+
+
+@mcp.custom_route("/", methods=["GET"])
+async def home(_: Request) -> Response:
+    return HTMLResponse(home_html(BASE_URL),
+                        headers={"Cache-Control": "public, max-age=3600"})
 
 
 @mcp.custom_route("/c/{course_id}/card.svg", methods=["GET"])
@@ -665,7 +882,8 @@ async def preview(request: Request) -> Response:
         return Response(to_gpx(name, route_points(course)), media_type="application/gpx+xml",
                         headers={"Content-Disposition": f'attachment; filename="runnywhere-{cid[:12]}.gpx"'})
     facs = facilities_along(route_points(course), ["convenience_store", "restroom"], limit=80)
-    return HTMLResponse(preview_html(course, facs, BASE_URL))
+    return HTMLResponse(preview_html(
+        course, facs, BASE_URL, kakao_javascript_key=KAKAO_JAVASCRIPT_KEY))
 
 
 @mcp.custom_route("/s/{token}", methods=["GET"])
@@ -676,16 +894,52 @@ async def share_shape(request: Request) -> Response:
         shape, dist = decode_shape_token(token)
     except (ValueError, KeyError):
         return PlainTextResponse("잘못된 공유 링크입니다.", status_code=404)
-    prompt = f"내 위치에서 {dist:g}km {shape} 모양 러닝 코스 만들어줘 (shape_token: {token})"
+    if shape not in SHAPES:
+        return PlainTextResponse("지원하지 않는 동물 모양입니다.", status_code=404)
+    safe_shape = html.escape(shape)
+    prompt = html.escape(
+        f"내 위치에서 {dist:g}km {shape} 모양 러닝 코스 만들어줘 (shape_token: {token})")
     return HTMLResponse(f"""<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>러니웨어 모양 공유</title>
 <style>body{{font-family:-apple-system,'Apple SD Gothic Neo',sans-serif;max-width:560px;
 margin:48px auto;padding:0 20px;line-height:1.7}}</style></head><body>
-<h2>🐾 친구가 {dist:g}km '{shape}' 모양 코스를 공유했어요</h2>
+<h2>🐾 친구가 {dist:g}km '{safe_shape}' 모양 코스를 공유했어요</h2>
 <p><b>러니웨어</b> · 어디서든 러닝 코스 짜기!</p>
 <p>AI 채팅에 아래 문장을 붙여넣으면, 같은 모양이 <b>내 동네 도로망</b>에 그려져요.</p>
 <pre style="background:#f4f4f4;padding:14px;border-radius:10px;white-space:pre-wrap">{prompt}</pre>
 </body></html>""")
+
+
+@mcp.custom_route("/animals", methods=["GET"])
+async def animal_atlas(_: Request) -> Response:
+    return HTMLResponse(atlas_html(BASE_URL, KAKAO_JAVASCRIPT_KEY),
+                        headers={"Cache-Control": "public, max-age=3600"})
+
+
+@mcp.custom_route("/passport/{token}", methods=["GET"])
+async def animal_passport_page(request: Request) -> Response:
+    token = request.path_params["token"]
+    try:
+        page = passport_html(token, BASE_URL)
+    except Exception:
+        return PlainTextResponse("잘못된 동물도감 링크입니다.", status_code=404)
+    return HTMLResponse(page, headers={"Cache-Control": "private, no-store"})
+
+
+@mcp.custom_route("/relay/{token}", methods=["GET"])
+async def shape_relay_page(request: Request) -> Response:
+    token = request.path_params["token"]
+    try:
+        data = decode_relay(token)
+        courses = []
+        for cid in data["legs"]:
+            params = decode_course_id(cid)
+            preset = get_animal_preset(params)
+            courses.append(preset if isinstance(preset, Course) else _get_course(params))
+        page = relay_html(token, courses, BASE_URL)
+    except Exception:
+        return PlainTextResponse("잘못된 Shape Relay 링크입니다.", status_code=404)
+    return HTMLResponse(page, headers={"Cache-Control": "public, max-age=3600"})
 
 
 # ---------- rate limiting (PRD §8) ----------
@@ -710,8 +964,20 @@ class _TokenBucketMiddleware:
                 headers.extend([
                     (b"x-content-type-options", b"nosniff"),
                     (b"x-frame-options", b"DENY"),
-                    (b"referrer-policy", b"no-referrer"),
+                    (b"strict-transport-security", b"max-age=31536000; includeSubDomains"),
+                    (b"cross-origin-opener-policy", b"same-origin"),
+                    (b"x-permitted-cross-domain-policies", b"none"),
+                    # Kakao Maps validates the registered JavaScript SDK
+                    # origin; send only the origin on cross-site SDK requests.
+                    (b"referrer-policy", b"strict-origin-when-cross-origin"),
                     (b"permissions-policy", b"geolocation=(self), camera=(), microphone=()"),
+                    (b"content-security-policy",
+                     b"default-src 'self'; base-uri 'self'; object-src 'none'; "
+                     b"frame-ancestors 'none'; script-src 'self' 'unsafe-inline' "
+                     b"https://dapi.kakao.com https://t1.daumcdn.net; "
+                     b"style-src 'self' 'unsafe-inline'; img-src 'self' data: "
+                     b"https://*.kakaocdn.net https://*.daumcdn.net; "
+                     b"connect-src 'self' https://*.kakao.com https://*.daum.net"),
                 ])
                 message["headers"] = headers
             await send(message)
@@ -746,12 +1012,12 @@ def _warm() -> None:
                 warms = [pool.submit(graphmod.warmup) for _ in range(workers * 2)]
                 for w in warms:
                     w.result()
-            except Exception:  # noqa: BLE001 — pool warm is best-effort
-                pass
+            except Exception as exc:  # noqa: BLE001 — pool warm is best-effort
+                log.debug("process-pool warmup skipped: %s", exc)
         _get_course(CourseParams(lat=37.5665, lon=126.9780,
                                  location_name="시청", distance_km=5.0))
-    except Exception:  # noqa: BLE001 — warming must never block startup
-        pass
+    except Exception as exc:  # noqa: BLE001 — warming must never block startup
+        log.warning("startup cache warmup failed; requests will warm lazily: %s", exc)
 
 
 def _log_geocoding_status() -> None:
@@ -770,6 +1036,14 @@ def _log_geocoding_status() -> None:
             "works; arbitrary addresses like '관철동 7-14' will fail. Set the env "
             "var in the deploy to enable Kakao address/station lookups."
         )
+    token_secret = os.environ.get("RUNART_TOKEN_SECRET", "")
+    if len(token_secret) < 32:
+        log.error(
+            "security: RUNART_TOKEN_SECRET is missing or shorter than 32 chars; "
+            "passport and relay token issuance is disabled"
+        )
+    if not KAKAO_JAVASCRIPT_KEY:
+        log.warning("maps: KAKAO_JAVASCRIPT_KEY not set; preview maps show fallback guidance")
 
 
 def create_app():

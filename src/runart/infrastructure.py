@@ -3,10 +3,12 @@
 import functools
 import math
 import os
-import pickle
+# Pickle is restricted to the checksum-verified image artifact below.
+import pickle  # nosec B403
 from pathlib import Path
 
 from .geo import haversine_m, to_xy
+from .data_integrity import verify_data_file
 
 
 def _data_path(filename: str) -> Path:
@@ -32,8 +34,9 @@ _CELL = 0.001
 def get_infra_points() -> dict[str, list[tuple[float, float]]]:
     if not INFRA_PATH.exists():
         return {"streetlight": [], "pedestrian_signal": []}
+    verify_data_file(INFRA_PATH)
     with INFRA_PATH.open("rb") as f:
-        raw = pickle.load(f)
+        raw = pickle.load(f)  # nosec B301
     # Do not let one malformed projected-coordinate record silently poison
     # nearest-point checks or appear as a Seoul streetlight at runtime.
     return {

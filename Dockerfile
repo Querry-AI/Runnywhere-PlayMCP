@@ -8,10 +8,13 @@ COPY src ./src
 # the server falls back to the demo grid — do not ship demo mode to the contest.
 COPY data ./data
 
-RUN pip install --no-cache-dir .
+RUN python -m pip install --no-cache-dir --upgrade pip==26.1.2 \
+    && pip install --no-cache-dir .
 
 ENV PORT=8000
+ENV HOST=0.0.0.0
 # Deploy-time env (PlayMCP in KC): RUNART_BASE_URL=<public endpoint>,
-# WEB_CONCURRENCY=1, RUNART_POOL_WORKERS=2, optional KAKAO_REST_API_KEY.
+# KAKAO_JAVASCRIPT_KEY, RUNART_TOKEN_SECRET (32+ chars), WEB_CONCURRENCY=1,
+# RUNART_POOL_WORKERS=2, and optional KAKAO_REST_API_KEY.
 EXPOSE 8000
 CMD ["python", "-m", "runart.server"]

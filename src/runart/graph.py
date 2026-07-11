@@ -14,12 +14,14 @@ import functools
 import hashlib
 import math
 import os
-import pickle
+# Pickle is restricted to the checksum-verified image artifact below.
+import pickle  # nosec B403
 from pathlib import Path
 
 import networkx as nx
 
 from .geo import M_PER_DEG_LAT, m_per_deg_lon
+from .data_integrity import verify_data_file
 
 def _data_path(filename: str) -> Path:
     candidates = []
@@ -46,7 +48,7 @@ DEMO_STEP_M = 80.0
 
 def _h(*parts) -> float:
     """Deterministic pseudo-random in [0,1) from parts."""
-    digest = hashlib.sha1("|".join(str(p) for p in parts).encode()).digest()
+    digest = hashlib.sha256("|".join(str(p) for p in parts).encode()).digest()
     return int.from_bytes(digest[:4], "big") / 2**32
 
 
@@ -91,8 +93,9 @@ def _demo_edge_attrs(i: int, j: int, ni: int, nj: int) -> dict:
 @functools.lru_cache(maxsize=1)
 def get_graph() -> nx.Graph:
     if GRAPH_PATH.exists():
+        verify_data_file(GRAPH_PATH)
         with GRAPH_PATH.open("rb") as f:
-            g = pickle.load(f)
+            g = pickle.load(f)  # nosec B301
     else:
         g = build_demo_graph()
     from .rfs import precompute_weights  # local import — no cycle at module load

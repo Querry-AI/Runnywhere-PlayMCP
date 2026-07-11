@@ -9,12 +9,14 @@ the demo grid so the tool works end-to-end.
 import functools
 import hashlib
 import os
-import pickle
+# Pickle is restricted to the checksum-verified image artifact below.
+import pickle  # nosec B403
 from pathlib import Path
 
 from . import graph as graphmod
 from .geo import densify_points, haversine_m
 from .models import FACILITY_TYPES
+from .data_integrity import verify_data_file
 
 def _data_path(filename: str) -> Path:
     candidates = []
@@ -45,8 +47,9 @@ LABELS_KO = {
 @functools.lru_cache(maxsize=1)
 def get_facilities() -> list[dict]:
     if FACILITIES_PATH.exists():
+        verify_data_file(FACILITIES_PATH)
         with FACILITIES_PATH.open("rb") as f:
-            return pickle.load(f)
+            return pickle.load(f)  # nosec B301
     return _demo_facilities()
 
 
@@ -54,7 +57,7 @@ def _demo_facilities() -> list[dict]:
     g = graphmod.get_graph()
     out = []
     for n, d in g.nodes(data=True):
-        h = int.from_bytes(hashlib.sha1(f"poi|{n}".encode()).digest()[:4], "big") / 2**32
+        h = int.from_bytes(hashlib.sha256(f"poi|{n}".encode()).digest()[:4], "big") / 2**32
         if h < 0.985:
             continue
         kind = FACILITY_TYPES[int(h * 1e6) % len(FACILITY_TYPES)]

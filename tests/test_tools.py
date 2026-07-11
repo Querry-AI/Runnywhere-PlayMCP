@@ -153,11 +153,13 @@ def test_animal_timeout_returns_actionable_guidance(monkeypatch):
 
     monkeypatch.setattr(server, "_offload", timeout)
     out = server.generate_animal_course(shape="whale", **CITY_HALL)
-    assert out.startswith("⏱️")
-    assert "3초 안에" in out
-    assert "불가능" not in out
-    assert "한 번 더 시도" in out
-    assert "동물 코스 추천" in out
+    # A verified nearby preset now wins before CPU generation, so a simulated
+    # timeout is visible only when no preset fallback exists.
+    assert out.startswith(("⏱️", "✅"))
+    if out.startswith("⏱️"):
+        assert "3초 안에" in out and "한 번 더 시도" in out
+    else:
+        assert "11km 이내 최상 코스" in out and "/c/" in out
 
 
 def test_bounded_animal_generation_falls_back_when_pool_is_unavailable(monkeypatch):
@@ -176,13 +178,24 @@ def test_forced_short_animal_returns_choice_survey_not_blob():
     assert out.startswith(("⚠️", "⏱️"))
     assert "강아지" in out
     if out.startswith("⚠️"):
-        assert "11km 이내" in out
-        assert "고양이" in out and "고래" in out and "토끼" in out
+        assert "추천 거리" in out
+        assert "바로 사용하려면" in out
 
 
 def test_shape_token_recreates_shape():
     out = server.generate_animal_course(shape_token="whale-5k", **CITY_HALL)
     assert "고래" in out or "최단" in out
+
+
+def test_shape_share_page_rejects_html_injection_token():
+    import asyncio
+    from starlette.requests import Request
+    request = Request({"type": "http", "method": "GET", "path": "/s/x",
+                       "headers": [], "path_params": {
+                           "token": "<img-onerror=alert(1)>-5k"}})
+    response = asyncio.run(server.share_shape(request))
+    assert response.status_code == 404
+    assert b"<img" not in response.body
 
 
 def test_refine_and_status_roundtrip():
@@ -221,6 +234,8 @@ def test_mcp_tools_match_playmcp_required_annotations():
         "generate_running_course", "generate_animal_course",
         "list_available_shapes", "find_facilities_near_course",
         "refine_course", "get_course_status",
+        "explore_animal_collection", "record_animal_completion",
+        "extend_shape_relay",
     }
     assert len(names) == len(set(names))
     assert 3 <= len(names) <= 10
@@ -231,3 +246,27 @@ def test_mcp_tools_match_playmcp_required_annotations():
         assert tool.annotations.title
         assert tool.annotations.openWorldHint is False
         assert tool.annotations.idempotentHint is True
+
+
+def test_http_middleware_adds_security_headers():
+    import asyncio
+
+    async def inner(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    messages = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        messages.append(message)
+
+    middleware = server._TokenBucketMiddleware(inner)
+    asyncio.run(middleware({"type": "http", "client": ("127.0.0.1", 1)},
+                           receive, send))
+    headers = dict(messages[0]["headers"])
+    assert headers[b"x-content-type-options"] == b"nosniff"
+    assert headers[b"x-frame-options"] == b"DENY"
+    assert b"frame-ancestors 'none'" in headers[b"content-security-policy"]

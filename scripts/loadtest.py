@@ -10,7 +10,7 @@ animal/location combinations.
 
 import asyncio
 import os
-import random
+import secrets
 import statistics
 import sys
 import time
@@ -29,9 +29,9 @@ async def worker(n_calls: int, latencies: dict):
         async with ClientSession(r, w) as s:
             await s.initialize()
             for _ in range(n_calls):
-                loc = random.choice(SPOTS)
-                shape = random.choice(SHAPES)
-                dist = random.choice([3, 4, 5, 5, 7, 10])
+                loc = secrets.choice(SPOTS)
+                shape = secrets.choice(SHAPES)
+                dist = secrets.choice([3, 4, 5, 5, 7, 10])
                 t0 = time.perf_counter()
                 if shape:
                     # Product contract: animal art chooses its own cleanest
