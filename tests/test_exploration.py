@@ -5,8 +5,8 @@ import pytest
 from runart import server
 from runart.animal_presets import all_verified_animal_presets
 from runart.exploration import (create_relay, decode_passport, decode_relay,
-                                legal_html, passport_summary, record_run,
-                                weekly_recommendation)
+                                atlas_html, legal_html, passport_summary,
+                                record_run, weekly_recommendation)
 from runart.gpx import to_gpx
 from runart.models import encode_course_id
 from runart.shapes import SHAPES
@@ -81,6 +81,20 @@ def test_atlas_is_not_exposed_as_competing_mcp_tool():
     names = {tool.name for tool in asyncio.run(server.mcp.list_tools())}
     assert "generate_animal_course" in names
     assert "explore_animal_collection" not in names
+
+
+def test_atlas_uses_kakao_map_sdk():
+    page = atlas_html("https://runnywhere.example", "javascript-key")
+    assert "dapi.kakao.com/v2/maps/sdk.js?appkey=javascript-key&autoload=false" in page
+    assert "kakao.maps.load(bootAtlasMap)" in page
+    assert "new kakao.maps.Map" in page
+    assert "baseUrl=\"https://runnywhere.example\"" in page
+
+
+def test_atlas_explains_missing_kakao_key():
+    page = atlas_html("https://runnywhere.example", "")
+    assert "dapi.kakao.com/v2/maps/sdk.js" not in page
+    assert "운영 환경의 KAKAO_JAVASCRIPT_KEY" in page
 
 
 def test_legal_pages_are_linked_without_expanding_mcp_responses():

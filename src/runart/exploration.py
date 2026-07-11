@@ -236,15 +236,24 @@ def atlas_html(base_url: str, kakao_key: str) -> str:
               "km": round(c.length_km, 1), "cid": encode_course_id(c.params)} for c in courses]
     data = json.dumps(items, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     buttons = "".join(f'<button data-shape="{k}">{s.emoji} {s.name_ko}</button>' for k, s in SHAPES.items())
+    js_base = json.dumps(base_url, ensure_ascii=False)
+    safe_key = html.escape(kakao_key, quote=True)
+    map_sdk = (
+        f'<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={safe_key}&autoload=false"></script>'
+        if safe_key else ""
+    )
     body = f"""<section class=\"hero\"><div class=\"eyebrow\">러니웨어 동물 GPS 아트</div><h1>검증된 동물 코스를<br>지도에서 찾아보세요.</h1>
 <p>러니웨어의 맞춤 러닝 기능 중 GPS 아트를 더 쉽게 찾기 위한 탐험 지도입니다. 서울 역 주변에서 검증된 421개 코스를 동물별로 확인할 수 있어요.</p></section>
-<style>#map{{height:58vh;min-height:430px;border:1px solid var(--line);border-radius:10px;overflow:hidden}}.filters{{display:flex;gap:8px;overflow:auto;margin:14px 0}}button{{border:1px solid var(--line);background:white;padding:9px 12px;border-radius:7px;font-weight:650;white-space:nowrap}}button.on{{background:var(--green);border-color:var(--green);color:white}}.dot{{font-size:23px;filter:drop-shadow(0 3px 4px #0004)}}</style>
-<div class=\"filters\"><button class=\"on\" data-shape=\"all\">전체</button>{buttons}</div><div id=\"map\"><div class=\"card\" style=\"margin:20px;max-width:440px\"><h2>지도를 불러오는 중이에요</h2><p class=\"muted\">지도 연결이 어려우면 AI에게 현재 역을 말해 주세요. 가장 가까운 동물을 바로 추천해 드려요.</p></div></div>
+<style>#map{{height:58vh;min-height:430px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#edf1ec}}.map-message{{height:100%;display:flex;align-items:center;justify-content:center;padding:22px}}.map-message .card{{max-width:460px;margin:0}}.filters{{display:flex;gap:8px;overflow:auto;margin:14px 0}}button{{border:1px solid var(--line);background:white;padding:9px 12px;border-radius:7px;font-weight:650;white-space:nowrap}}button.on{{background:var(--green);border-color:var(--green);color:white}}button:disabled{{opacity:.45}}.dot{{font-size:23px;filter:drop-shadow(0 3px 4px #0004);cursor:pointer}}</style>
+<div class=\"filters\"><button class=\"on\" data-shape=\"all\">전체</button>{buttons}</div><div id=\"map\"><div class=\"map-message\"><div class=\"card\"><h2>지도를 불러오는 중이에요</h2><p class=\"muted\">지도 연결이 어려우면 AI에게 현재 역을 말해 주세요. 가장 가까운 동물을 바로 추천해 드려요.</p></div></div></div>
 <p class=\"muted\">마커를 누르면 거리와 출발역을 확인할 수 있어요. 완주 후 AI에게 course_id와 함께 “동물도감에 기록해줘”라고 말해보세요. · <a href=\"https://www.openstreetmap.org/copyright\">경로 데이터 © OpenStreetMap contributors · ODbL</a></p>
-<script src=\"//dapi.kakao.com/v2/maps/sdk.js?appkey={html.escape(kakao_key)}\"></script><script>
-const items={data};let overlays=[];let map=null;
-function draw(shape){{overlays.forEach(o=>o.setMap(null));overlays=[];items.filter(x=>shape==='all'||x.shape===shape).forEach(x=>{{const el=document.createElement('button');el.className='dot';el.textContent=x.emoji;el.title=x.name+' '+x.km+'km';el.onclick=()=>{{location.href='{base_url}/c/'+x.cid}};const o=new kakao.maps.CustomOverlay({{position:new kakao.maps.LatLng(x.lat,x.lon),content:el,yAnchor:.5}});o.setMap(map);overlays.push(o)}})}}
-if(window.kakao?.maps){{map=new kakao.maps.Map(document.getElementById('map'),{{center:new kakao.maps.LatLng(37.5665,126.978),level:8}});document.querySelectorAll('[data-shape]').forEach(b=>b.onclick=()=>{{document.querySelectorAll('[data-shape]').forEach(x=>x.classList.remove('on'));b.classList.add('on');draw(b.dataset.shape)}});draw('all')}}else{{document.querySelectorAll('[data-shape]').forEach(b=>b.disabled=true)}}</script>"""
+{map_sdk}<script>
+const items={data};const baseUrl={js_base};let overlays=[];let map=null;
+const mapNode=document.getElementById('map');
+function showMapError(message){{mapNode.innerHTML='<div class="map-message"><div class="card"><h2>카카오맵을 불러오지 못했습니다</h2><p class="muted">'+message+'</p></div></div>';document.querySelectorAll('[data-shape]').forEach(b=>b.disabled=true)}}
+function draw(shape){{overlays.forEach(o=>o.setMap(null));overlays=[];items.filter(x=>shape==='all'||x.shape===shape).forEach(x=>{{const el=document.createElement('button');el.className='dot';el.textContent=x.emoji;el.title=x.name+' '+x.km+'km';el.onclick=()=>{{location.href=baseUrl+'/c/'+x.cid}};const o=new kakao.maps.CustomOverlay({{position:new kakao.maps.LatLng(x.lat,x.lon),content:el,yAnchor:.5}});o.setMap(map);overlays.push(o)}})}}
+function bootAtlasMap(){{map=new kakao.maps.Map(mapNode,{{center:new kakao.maps.LatLng(37.5665,126.978),level:8}});map.addControl(new kakao.maps.ZoomControl(),kakao.maps.ControlPosition.LEFT);document.querySelectorAll('[data-shape]').forEach(b=>b.onclick=()=>{{document.querySelectorAll('[data-shape]').forEach(x=>x.classList.remove('on'));b.classList.add('on');draw(b.dataset.shape)}});draw('all')}}
+if(!"{safe_key}"){{showMapError('운영 환경의 KAKAO_JAVASCRIPT_KEY가 설정되어야 합니다.')}}else if(!window.kakao?.maps){{showMapError('KAKAO_JAVASCRIPT_KEY와 카카오 개발자 콘솔의 등록 도메인을 확인해 주세요.')}}else{{kakao.maps.load(bootAtlasMap)}}</script>"""
     return _page("서울 동물지도", body)
 
 
