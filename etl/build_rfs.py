@@ -62,12 +62,15 @@ import csv
 import gzip
 import json
 import os
-import pickle
+# ETL reads only artifacts created in the local data build workspace. Runtime
+# loading is separately protected by committed SHA-256 checksums.
+import pickle  # nosec B403
 import ssl
 import struct
 import sys
 import unicodedata
 import urllib.request
+import urllib.parse
 
 try:
     import certifi
@@ -77,7 +80,12 @@ except ImportError:  # pragma: no cover
 
 
 def _urlopen(url: str, timeout: int):
-    return urllib.request.urlopen(url, timeout=timeout, context=_SSL_CTX)
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname != "s3.amazonaws.com":
+        raise ValueError("ETL downloads are restricted to the trusted SRTM HTTPS host")
+    # The exact scheme and host are allowlisted above.
+    return urllib.request.urlopen(  # nosec B310
+        url, timeout=timeout, context=_SSL_CTX)
 from datetime import date
 from pathlib import Path
 
@@ -343,7 +351,8 @@ def gov_elevation_at(buckets, lat: float, lon: float) -> float | None:
 
 # ---------- pedestrian signals (crossing friction) ----------
 #
-# "서울특별시_보행자 신호등 분포도.csv": 자치구/종류/X좌표/Y좌표/주소. The
+# "서울특별시_보행자 신호등 분포도.csv" (Seoul OA-22356,
+# KOGL Type 1): 자치구/종류/X좌표/Y좌표/주소. See DATA_LICENSES.md. The
 # X/Y ranges match EPSG:5186 (중부원점, verified against known addresses).
 # Signal density feeds crossing_score: more signalized crossings on a
 # stretch means more forced stops — worse for uninterrupted running.
@@ -517,7 +526,8 @@ def _load_existing_facilities() -> list[dict]:
     if not FACILITIES.exists():
         return []
     with FACILITIES.open("rb") as f:
-        return pickle.load(f)
+        # Local ETL output, never an uploaded input.
+        return pickle.load(f)  # nosec B301
 
 
 def build_facilities() -> list[dict]:
@@ -619,7 +629,8 @@ def main() -> None:
     if not GRAPH.exists():
         sys.exit("data/seoul_graph.pkl이 없습니다. 먼저 etl/build_graph.py를 실행하세요.")
     with GRAPH.open("rb") as f:
-        g = pickle.load(f)
+        # Local build_graph.py output in the developer's build workspace.
+        g = pickle.load(f)  # nosec B301
     print(f"Graph: {g.number_of_nodes():,} nodes / {g.number_of_edges():,} edges", flush=True)
 
     from shapely.geometry import Point

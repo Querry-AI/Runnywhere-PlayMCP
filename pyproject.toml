@@ -2,6 +2,7 @@
 name = "runart"
 version = "0.1.0"
 description = "Runnywhere(러니웨어) — 어디서든 러닝 코스 짜기!"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     # Verified against PlayMCP's supported protocol range

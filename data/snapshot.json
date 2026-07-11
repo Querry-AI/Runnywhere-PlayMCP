@@ -7,8 +7,8 @@
     "cctv": "osm-surveillance",
     "lighting": "seoul-oa22205",
     "sidewalk": "none (osm highway-class prior only)",
-    "facilities": "osm-poi + seoul-public-restrooms",
-    "crossing": "seoul-pedestrian-signals"
+    "facilities": "osm-poi + seoul-oa22586-public-restrooms",
+    "crossing": "seoul-oa22356-pedestrian-signals"
   },
   "local_only": false,
   "counts": {

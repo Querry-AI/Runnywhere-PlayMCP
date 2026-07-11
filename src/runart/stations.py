@@ -1,9 +1,11 @@
 """Bundled Seoul Metro station catalog for network-free geocoding.
 
-The 289 station/address rows are from Seoul Metro's 2026-02-12 public dataset.
-Coordinates are joined from public station-coordinate catalogs; four renamed or
-new stations use current public-data coordinates. This module intentionally uses
-a literal tuple so packaged deployments need no external data file or API call.
+The 289 station/address rows are from Seoul Metro's 2026-02-12 public dataset
+(data.go.kr 15044231 / Seoul OA-12035, KOGL Type 1). Coordinates are joined
+from the official 1–8 line station-coordinate dataset (data.go.kr 15099316,
+usage unrestricted); four renamed or new stations use current public-data
+coordinates. See DATA_LICENSES.md. This module intentionally uses a literal
+tuple so packaged deployments need no external data file or API call.
 """
 
 # (line, official_name, latitude, longitude, road_address, lot_address)

@@ -36,7 +36,7 @@ from .gpx import to_gpx
 from .geo import haversine_m
 from .exploration import (atlas_html, create_relay, decode_passport,
                           decode_relay, passport_html, passport_summary,
-                          home_html, record_run, relay_html,
+                          home_html, legal_html, record_run, relay_html,
                           weekly_recommendation)
 from .models import (CourseParams, DEFAULT_PACE_MIN_PER_KM, decode_course_id,
                      decode_shape_token, encode_course_id)
@@ -59,6 +59,9 @@ if (_BASE_PARTS.scheme not in {"http", "https"} or not _BASE_PARTS.hostname
 KAKAO_JAVASCRIPT_KEY = os.environ.get("KAKAO_JAVASCRIPT_KEY", "")
 if KAKAO_JAVASCRIPT_KEY and not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", KAKAO_JAVASCRIPT_KEY):
     raise RuntimeError("KAKAO_JAVASCRIPT_KEY has an invalid format")
+LEGAL_CONTACT = os.environ.get("RUNART_LEGAL_CONTACT", "")
+if LEGAL_CONTACT and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", LEGAL_CONTACT):
+    raise RuntimeError("RUNART_LEGAL_CONTACT must be an email address")
 log = logging.getLogger("runart")
 
 mcp = FastMCP(
@@ -855,6 +858,24 @@ async def home(_: Request) -> Response:
                         headers={"Cache-Control": "public, max-age=3600"})
 
 
+@mcp.custom_route("/terms", methods=["GET"])
+async def terms(_: Request) -> Response:
+    return HTMLResponse(legal_html("terms", LEGAL_CONTACT),
+                        headers={"Cache-Control": "public, max-age=3600"})
+
+
+@mcp.custom_route("/privacy", methods=["GET"])
+async def privacy(_: Request) -> Response:
+    return HTMLResponse(legal_html("privacy", LEGAL_CONTACT),
+                        headers={"Cache-Control": "public, max-age=3600"})
+
+
+@mcp.custom_route("/data-licenses", methods=["GET"])
+async def data_licenses(_: Request) -> Response:
+    return HTMLResponse(legal_html("licenses", LEGAL_CONTACT),
+                        headers={"Cache-Control": "public, max-age=3600"})
+
+
 @mcp.custom_route("/c/{course_id}/card.svg", methods=["GET"])
 async def share_card(request: Request) -> Response:
     """SVG share card — og:image for the preview page, SNS-ready (PRD §2.2)."""
@@ -907,6 +928,7 @@ margin:48px auto;padding:0 20px;line-height:1.7}}</style></head><body>
 <p><b>러니웨어</b> · 어디서든 러닝 코스 짜기!</p>
 <p>AI 채팅에 아래 문장을 붙여넣으면, 같은 모양이 <b>내 동네 도로망</b>에 그려져요.</p>
 <pre style="background:#f4f4f4;padding:14px;border-radius:10px;white-space:pre-wrap">{prompt}</pre>
+<p style="margin-top:28px;font-size:12px;color:#68706b"><a href="/terms">이용·안전</a> · <a href="/privacy">개인정보</a> · <a href="/data-licenses">© OpenStreetMap contributors · 데이터 출처</a></p>
 </body></html>""")
 
 

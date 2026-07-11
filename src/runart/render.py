@@ -69,7 +69,7 @@ def course_markdown(course: Course, base_url: str, facilities: list[dict]) -> st
     if shape:
         token = encode_shape_token(p.shape, p.distance_km)
         lines.append(f"- {shape.emoji} 친구 동네에서 다시 그리기: {base_url}/s/{token}")
-    lines.append("지도에서 출발점을 확인한 뒤 **러닝 시작**을 누르면 길 안내가 시작돼요.")
+    lines.append("지도에서 통행·공사·날씨를 확인한 뒤 **러닝 시작**을 누르세요. 코스는 참고용이에요.")
     return "\n".join(lines)
 
 
@@ -425,8 +425,8 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
 </section>
 </div>
 <footer>러니웨어 · 배경 지도: Kakao Maps · 경로 데이터
-<a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a> · SRTM · 서울열린데이터광장 ·
-위치 정보는 저장되지 않습니다</footer>
+<a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors · ODbL</a> · NASA SRTM · 서울시 공공데이터<br>
+GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이용·안전</a> · <a href="/privacy">개인정보</a> · <a href="/data-licenses">데이터 출처</a></footer>
 <script>
  const segs = {segments};
  const shapeRoute = {shape_route};
@@ -625,6 +625,8 @@ def card_svg(course: Course) -> str:
    font-family="-apple-system,sans-serif">러닝 친화도 {course.rfs['score']}/100 · 오르막 {course.ascent_m:.0f}m</text>
  <text x="40" y="{h - 44}" font-size="18" fill="#666"
    font-family="-apple-system,sans-serif">Runnywhere(러니웨어) — 어디서든 러닝 코스 짜기!</text>
+ <text x="40" y="{h - 18}" font-size="12" fill="#666"
+   font-family="-apple-system,sans-serif">© OpenStreetMap contributors · ODbL · 코스는 참고용</text>
  <polyline points="{pts}" fill="none" stroke="#e0533d" stroke-width="5"
    stroke-linejoin="round" stroke-linecap="round"/>
 </svg>"""

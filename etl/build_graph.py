@@ -11,7 +11,8 @@ edge attrs (length + raw OSM tags that etl/build_rfs.py turns into RFS
 component scores).
 """
 
-import pickle
+# ETL writes a new local artifact; runtime loading is checksum-gated.
+import pickle  # nosec B403
 import sys
 from pathlib import Path
 

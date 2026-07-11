@@ -14,7 +14,7 @@ pytest                            # 테스트 (시나리오 수용 테스트 포
 python scripts/loadtest.py 1000 10 # 콜드 미스 포함 부하 테스트 (평균 100ms / p99 3s)
 ```
 
-환경변수: `HOST`(로컬 기본 127.0.0.1, 컨테이너 0.0.0.0) · `PORT`(기본 8000) · `RUNART_BASE_URL`(미리보기 링크 도메인) · `KAKAO_JAVASCRIPT_KEY`(카카오맵 Web API, 필수) · `KAKAO_REST_API_KEY`(지오코딩, 선택) · `RUNART_TOKEN_SECRET`(32자 이상 도감·릴레이 토큰 서명키, 운영 환경 필수) · `WEB_CONCURRENCY`(웹 워커 수, 기본 1) · `RUNART_POOL_WORKERS`(코스 탐색 프로세스 수, 기본 2) · `RATE_LIMIT_RPS`(IP당, 기본 20) · `RUNART_ETL_LOCAL_ONLY=1`(기존 OSM 속성은 보존하고 로컬 경사도/신호등/가로등만 재반영)
+환경변수: `HOST`(로컬 기본 127.0.0.1, 컨테이너 0.0.0.0) · `PORT`(기본 8000) · `RUNART_BASE_URL`(미리보기 링크 도메인) · `KAKAO_JAVASCRIPT_KEY`(카카오맵 Web API, 필수) · `KAKAO_REST_API_KEY`(지오코딩, 선택) · `RUNART_TOKEN_SECRET`(32자 이상 도감·릴레이 토큰 서명키, 운영 환경 필수) · `RUNART_LEGAL_CONTACT`(정책 문의 이메일, 공개 배포 시 필수) · `WEB_CONCURRENCY`(웹 워커 수, 기본 1) · `RUNART_POOL_WORKERS`(코스 탐색 프로세스 수, 기본 2) · `RATE_LIMIT_RPS`(IP당, 기본 20) · `RUNART_ETL_LOCAL_ONLY=1`(기존 OSM 속성은 보존하고 로컬 경사도/신호등/가로등만 재반영)
 
 실그래프(`data/seoul_graph.pkl`)가 없으면 **서울 시청 일대 데모 그리드**로 구동된다(전체 파이프라인 동작 확인용). 공모전 제출 전 반드시 ETL 실행:
 
@@ -63,5 +63,8 @@ docker run -p 8000:8000 -e RUNART_BASE_URL=https://<kc-endpoint> runnywhere
 
 MCP Endpoint: `https://<kc-endpoint>/mcp` — PlayMCP 등록 전 [MCP Inspector](https://github.com/modelcontextprotocol/inspector)로 검증할 것.
 
-## 데이터 출처
-OpenStreetMap, 서울 열린데이터광장(서울시 경사도 OA-22241, 서울시 가로등 위치 정보 OA-22205, 서울특별시 보행자 신호등 분포도, 서울시 공중화장실 위치정보), SRTM 30m 고도 데이터. 안심이 CCTV 포인트 데이터는 서비스 종료로 직접 사용하지 않고 OSM surveillance 태그를 폴백으로 사용한다. 개인정보는 수집·저장하지 않는다.
+## 라이선스·데이터·안전
+
+소스 코드는 [MIT License](LICENSE)로 배포한다. OSM 파생 DB는 ODbL 1.0, 서울시 경사도 OA-22241·가로등 OA-22205·보행자 신호등 OA-22356·공중화장실 OA-22586·서울교통공사 역주소는 공공누리 1유형으로 이용한다. 역 좌표는 서울교통공사 1–8호선 좌표 공공데이터(이용허락 제한 없음)를 기준으로 한다. NASA SRTM 30m를 고도 폴백으로 사용한다. 안심이 CCTV 포인트는 서비스 종료로 사용하지 않고 OSM surveillance 태그만 사용한다.
+
+세부 출처·가공·재배포 조건은 [DATA_LICENSES.md](DATA_LICENSES.md), 의존성 고지는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 참고한다. 웹 UI의 `/terms`, `/privacy`, `/data-licenses`에서 이용·안전, 정보 처리, 출처를 확인할 수 있다. 코스는 실시간 내비게이션이 아닌 참고용이며, 사용자가 현장 통행·공사·날씨·건강 상태를 확인해야 한다.

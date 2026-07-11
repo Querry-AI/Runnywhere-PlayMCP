@@ -5,8 +5,9 @@ import pytest
 from runart import server
 from runart.animal_presets import all_verified_animal_presets
 from runart.exploration import (create_relay, decode_passport, decode_relay,
-                                passport_summary, record_run,
+                                legal_html, passport_summary, record_run,
                                 weekly_recommendation)
+from runart.gpx import to_gpx
 from runart.models import encode_course_id
 from runart.shapes import SHAPES
 
@@ -73,3 +74,21 @@ def test_new_mcp_tool_answers_are_concise_and_actionable():
     assert "relay_token" in relay_out and "/relay/" in relay_out
     atlas_out = server.explore_animal_collection(location="시청")
     assert "/animals" in atlas_out and "이번 주" in atlas_out
+
+
+def test_legal_pages_are_linked_without_expanding_mcp_responses():
+    for kind, marker in (("privacy", "Kakao Local API"),
+                         ("terms", "112"),
+                         ("licenses", "OpenStreetMap")):
+        page = legal_html(kind, "legal@example.com")
+        assert marker in page
+        assert "/terms" in page and "/privacy" in page and "/data-licenses" in page
+        if kind != "licenses":
+            assert "legal@example.com" in page
+
+
+def test_gpx_carries_osm_licence_notice():
+    gpx = to_gpx("안전 & 코스", [(37.5, 127.0), (37.51, 127.01)])
+    assert "OpenStreetMap contributors" in gpx
+    assert "https://www.openstreetmap.org/copyright" in gpx
+    assert "안전 &amp; 코스" in gpx

@@ -174,9 +174,43 @@ a.btn{{display:inline-block;background:var(--green);color:white;text-decoration:
 .demo{{background:var(--navy);color:white;border-radius:12px;padding:28px;box-shadow:0 22px 60px #17333d1a}}.demo-label{{font-size:12px;color:#a9c0c6;margin-bottom:9px}}.prompt{{background:white;color:var(--ink);border-radius:7px;padding:15px 16px;font-size:15px;font-weight:600}}.route-preview{{height:178px;margin:24px 0 18px}}.metrics{{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;border-top:1px solid #ffffff26;padding-top:18px}}.metric b{{display:block;font-size:22px;letter-spacing:-.04em}}.metric span{{font-size:11px;color:#a9c0c6}}
 .section-head{{display:flex;justify-content:space-between;align-items:end;margin:0 0 22px;padding-top:48px;border-top:1px solid var(--line)}}.section-head h2{{font-size:30px;margin:0}}.feature-list{{border-top:1px solid var(--line)}}.feature-row{{display:grid;grid-template-columns:56px 220px 1fr auto;gap:20px;align-items:center;padding:26px 0;border-bottom:1px solid var(--line)}}.feature-no{{font-size:12px;color:var(--green);font-weight:700}}.feature-row h3{{font-size:18px;margin:0}}.feature-row p{{font-size:15px;color:var(--muted);margin:0}}.text-link{{color:var(--green);font-weight:650;text-decoration:none;font-size:14px;white-space:nowrap}}
 code{{overflow-wrap:anywhere;font-size:12px;color:var(--muted)}}
+.legal-footer{{margin-top:72px;padding-top:22px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--muted);font-size:12px}}.legal-footer a{{color:inherit;text-decoration:none}}.legal-footer a:hover{{color:var(--green)}}
+.legal-copy{{max-width:760px}}.legal-copy h2{{margin-top:38px}}.legal-copy ul{{line-height:1.75;padding-left:20px}}.legal-copy a{{color:var(--green)}}
 @media(max-width:800px){{.wrap{{padding:0 20px 56px}}header{{height:64px;margin-bottom:40px}}nav{{gap:14px}}nav a:first-child{{display:none}}.product-hero{{grid-template-columns:1fr;gap:38px;margin-bottom:72px}}h1{{font-size:42px}}.feature-row{{grid-template-columns:38px 1fr;gap:10px 14px}}.feature-row p,.feature-row a{{grid-column:2}}}}
 @media(max-width:480px){{.wrap{{padding:0 18px 48px}}header{{margin-bottom:34px}}.brand{{font-size:16px}}nav a{{font-size:13px}}h1{{font-size:36px;line-height:1.17}}.lead{{font-size:16px}}.demo{{padding:20px;border-radius:9px}}.route-preview{{height:140px}}.metric b{{font-size:19px}}.section-head h2{{font-size:26px}}}}</style></head><body><div class=\"wrap\">
-<header><a class=\"brand\" href=\"/\" style=\"color:inherit;text-decoration:none\">Runnywhere · 러니웨어</a><nav><a href=\"/\">서비스 소개</a><a href=\"/animals\">동물 GPS 아트</a></nav></header>{body}</div></body></html>"""
+<header><a class=\"brand\" href=\"/\" style=\"color:inherit;text-decoration:none\">Runnywhere · 러니웨어</a><nav><a href=\"/\">서비스 소개</a><a href=\"/animals\">동물 GPS 아트</a></nav></header>{body}
+<footer class=\"legal-footer\"><span>© 2026 Runnywhere</span><a href=\"/terms\">이용약관</a><a href=\"/privacy\">개인정보</a><a href=\"/data-licenses\">데이터·라이선스</a><a href=\"https://www.openstreetmap.org/copyright\">© OpenStreetMap contributors</a></footer>
+</div></body></html>"""
+
+
+def legal_html(kind: str, contact: str = "") -> str:
+    """Compact legal pages linked from the global footer, outside MCP output."""
+    contact_html = (f'<a href="mailto:{html.escape(contact, quote=True)}">'
+                    f'{html.escape(contact)}</a>' if contact else
+                    '서비스가 제공되는 채널의 운영자')
+    if kind == "privacy":
+        title = "개인정보 처리 안내"
+        body = f"""<main class="legal-copy"><div class="eyebrow">PRIVACY</div><h1>{title}</h1>
+<p>시행일: 2026-07-11</p><p>러니웨어는 계정과 서버 사이드 완주 데이터베이스를 운영하지 않습니다.</p>
+<h2>처리되는 정보</h2><ul><li>입력한 장소·주소는 코스 생성에 사용됩니다. Kakao Local API가 활성화된 경우 주소 검색어가 Kakao에 전송됩니다.</li><li>지도 페이지를 열면 Kakao Maps가 IP, 브라우저 정보, referrer를 처리할 수 있습니다.</li><li>브라우저 GPS는 사용자 동의 후 현재 위치를 표시하는 데만 쓰이며 러니웨어 서버로 전송하지 않습니다.</li><li>IP는 남용 방지를 위한 메모리 내 rate limit에 일시 사용될 수 있으며, 호스팅 제공자의 보안 로그 정책은 별도로 적용됩니다.</li></ul>
+<h2>자기완결형 토큰</h2><p>course_id, passport_token, relay_token은 링크 안에 코스 조건·출발지·완주 목록을 담을 수 있습니다. 서버에 계정 기록으로 저장되지 않지만 링크를 받은 사람은 내용을 볼 수 있으므로 공개 공유에 주의하세요.</p>
+<h2>보유·삭제·문의</h2><p>서비스는 사용자 계정이나 위치 기록을 지속 보유하지 않습니다. 토큰 기록을 없애려면 보관한 링크를 삭제하세요. 문의: {contact_html}</p></main>"""
+    elif kind == "terms":
+        title = "이용약관·안전 안내"
+        body = f"""<main class="legal-copy"><div class="eyebrow">TERMS & SAFETY</div><h1>{title}</h1><p>시행일: 2026-07-11</p>
+<h2>서비스의 범위</h2><p>러니웨어는 공개·사전 계산 데이터를 기반으로 러닝 코스 후보를 제공하는 참고용 서비스입니다. 실시간 내비게이션, 응급, 의료 또는 안전 보증 서비스가 아닙니다.</p>
+<h2>사용자 안전</h2><ul><li>출발 전 현장의 통행 가능 여부, 공사·통제·사유지·계단·날씨·조명을 직접 확인하세요.</li><li>교통법규와 시설 안내를 우선하고, 화면보다 주변 환경에 주의하세요.</li><li>건강 상태와 운동 경험에 맞게 이용하고, 위험하거나 이상 증상이 있으면 즉시 중단하세요. 긴급 상황에서는 112 또는 119를 이용하세요.</li></ul>
+<h2>데이터·제3자 서비스</h2><p>경로와 점수는 불완전하거나 늦게 갱신될 수 있습니다. Kakao Maps·Local API는 Kakao 약관과 쿼터의 적용을 받습니다. 데이터 출처와 이용조건은 <a href="/data-licenses">데이터·라이선스</a>에서 확인할 수 있습니다.</p>
+<h2>책임·변경</h2><p>법령이 허용하는 범위에서 서비스는 특정 목적 적합성과 코스의 절대적 안전을 보증하지 않습니다. 중요한 변경은 이 페이지의 시행일을 갱신합니다. 문의: {contact_html}</p></main>"""
+    elif kind == "licenses":
+        title = "데이터·라이선스"
+        body = """<main class="legal-copy"><div class="eyebrow">OPEN DATA</div><h1>데이터·라이선스</h1>
+<p>코드는 MIT License, OpenStreetMap 파생 데이터베이스는 ODbL 1.0, 해당 서울시 공공데이터는 공공누리 1유형 조건으로 사용합니다.</p>
+<h2>주요 출처</h2><ul><li><a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors · ODbL 1.0</a></li><li><a href="https://data.seoul.go.kr/dataList/OA-22241/F/1/datasetView.do">서울시 경사도 OA-22241</a></li><li><a href="https://data.seoul.go.kr/dataList/OA-22205/F/1/datasetView.do">서울시 가로등 OA-22205</a></li><li><a href="https://data.seoul.go.kr/dataList/OA-22356/F/1/datasetView.do">서울시 보행자 신호등 OA-22356</a></li><li><a href="https://data.seoul.go.kr/dataList/OA-22586/S/1/datasetView.do">서울시 공중화장실 OA-22586</a></li><li><a href="https://www.data.go.kr/data/15044231/fileData.do">서울교통공사 역주소</a> · <a href="https://www.data.go.kr/data/15099316/fileData.do">1–8호선 역 좌표</a></li><li><a href="https://www.earthdata.nasa.gov/data/instruments/srtm">NASA/JPL-Caltech/NGA SRTM</a></li></ul>
+<h2>가공 및 제공</h2><p>원천 데이터는 좌표 변환·필터링·결합·점수화되었으며 공식 실시간 자료가 아닙니다. OSM 파생 DB와 재생성 코드는 공개 소스 배포본의 <code>data/</code>, <code>etl/</code>, <code>scripts/build_animal_presets.py</code>에서 ODbL 조건으로 제공됩니다. 전체 고지는 배포본의 <code>DATA_LICENSES.md</code>를 참고하세요.</p><p class="muted">출처 표시는 각 기관의 후원이나 인증을 의미하지 않습니다.</p></main>"""
+    else:
+        raise ValueError("unknown legal page")
+    return _page(title, body)
 
 
 def home_html(base_url: str) -> str:
@@ -206,7 +240,7 @@ def atlas_html(base_url: str, kakao_key: str) -> str:
 <p>러니웨어의 맞춤 러닝 기능 중 GPS 아트를 더 쉽게 찾기 위한 탐험 지도입니다. 서울 역 주변에서 검증된 421개 코스를 동물별로 확인할 수 있어요.</p></section>
 <style>#map{{height:58vh;min-height:430px;border:1px solid var(--line);border-radius:10px;overflow:hidden}}.filters{{display:flex;gap:8px;overflow:auto;margin:14px 0}}button{{border:1px solid var(--line);background:white;padding:9px 12px;border-radius:7px;font-weight:650;white-space:nowrap}}button.on{{background:var(--green);border-color:var(--green);color:white}}.dot{{font-size:23px;filter:drop-shadow(0 3px 4px #0004)}}</style>
 <div class=\"filters\"><button class=\"on\" data-shape=\"all\">전체</button>{buttons}</div><div id=\"map\"><div class=\"card\" style=\"margin:20px;max-width:440px\"><h2>지도를 불러오는 중이에요</h2><p class=\"muted\">지도 연결이 어려우면 AI에게 현재 역을 말해 주세요. 가장 가까운 동물을 바로 추천해 드려요.</p></div></div>
-<p class=\"muted\">마커를 누르면 거리와 출발역을 확인할 수 있어요. 완주 후 AI에게 course_id와 함께 “동물도감에 기록해줘”라고 말해보세요.</p>
+<p class=\"muted\">마커를 누르면 거리와 출발역을 확인할 수 있어요. 완주 후 AI에게 course_id와 함께 “동물도감에 기록해줘”라고 말해보세요. · <a href=\"https://www.openstreetmap.org/copyright\">경로 데이터 © OpenStreetMap contributors · ODbL</a></p>
 <script src=\"//dapi.kakao.com/v2/maps/sdk.js?appkey={html.escape(kakao_key)}\"></script><script>
 const items={data};let overlays=[];let map=null;
 function draw(shape){{overlays.forEach(o=>o.setMap(null));overlays=[];items.filter(x=>shape==='all'||x.shape===shape).forEach(x=>{{const el=document.createElement('button');el.className='dot';el.textContent=x.emoji;el.title=x.name+' '+x.km+'km';el.onclick=()=>{{location.href='{base_url}/c/'+x.cid}};const o=new kakao.maps.CustomOverlay({{position:new kakao.maps.LatLng(x.lat,x.lon),content:el,yAnchor:.5}});o.setMap(map);overlays.push(o)}})}}
@@ -246,5 +280,5 @@ def relay_html(token: str, courses: list[Course], base_url: str) -> str:
     cards = "".join(f'<div class="card"><div class="emoji">{spec.emoji}</div><h2>{idx+1}. {html.escape(c.params.location_name)}</h2>{_route_svg(c, colors[idx % len(colors)])}<p>{c.length_km:.1f}km · 모양 유사도 {float(c.shape_similarity or 0):.2f}</p><a class="btn" href="{base_url}/c/{encode_course_id(c.params)}">코스 보기</a></div>' for idx, c in enumerate(courses))
     layers = "".join(_route_svg(c, colors[idx % len(colors)]).replace('<svg viewBox="0 0 240 160" role="img" aria-label="동물 코스 실루엣" style="width:100%;background:#f5f7f2;border-radius:15px">', '').replace('</svg>', '') for idx, c in enumerate(courses))
     collective = f'<svg viewBox="0 0 240 160" style="width:100%;max-height:360px;background:#17211b;border-radius:18px">{layers}</svg>'
-    body = f'<section class="hero"><div class="eyebrow">동물 GPS 아트 · Shape Relay {len(courses)}개 코스</div><h1>{spec.emoji} 서로 다른 동네가 그린<br>{spec.name_ko} 코스</h1><p>러니웨어에서 만든 같은 동물 코스를 나란히 비교하는 공유 기능입니다. 서로 다른 서울 도로망이 만든 모양의 차이를 확인해 보세요.</p></section><div class="card" style="margin-bottom:14px"><h2>겹쳐 보기</h2>{collective}<p class="muted">각 색은 한 동네의 코스입니다. 릴레이가 이어질수록 비교할 수 있는 코스가 늘어납니다.</p></div><div class="grid">{cards}</div><div class="card" style="margin-top:14px"><h2>다음 코스 연결하기</h2><p>이 링크를 공유한 뒤 친구가 자기 동네에서 같은 동물 코스를 만들고 AI에게 릴레이 연결을 요청하면 됩니다.</p><code>{base_url}/relay/{html.escape(token)}</code></div>'
+    body = f'<section class="hero"><div class="eyebrow">동물 GPS 아트 · Shape Relay {len(courses)}개 코스</div><h1>{spec.emoji} 서로 다른 동네가 그린<br>{spec.name_ko} 코스</h1><p>러니웨어에서 만든 같은 동물 코스를 나란히 비교하는 공유 기능입니다. 서로 다른 서울 도로망이 만든 모양의 차이를 확인해 보세요.</p></section><div class="card" style="margin-bottom:14px"><h2>겹쳐 보기</h2>{collective}<p class="muted">각 색은 한 동네의 코스입니다. 릴레이가 이어질수록 비교할 수 있는 코스가 늘어납니다. · <a href="https://www.openstreetmap.org/copyright">경로 데이터 © OpenStreetMap contributors · ODbL</a></p></div><div class="grid">{cards}</div><div class="card" style="margin-top:14px"><h2>다음 코스 연결하기</h2><p>이 링크를 공유한 뒤 친구가 자기 동네에서 같은 동물 코스를 만들고 AI에게 릴레이 연결을 요청하면 됩니다.</p><code>{base_url}/relay/{html.escape(token)}</code></div>'
     return _page(f"{spec.name_ko} Shape Relay", body)
