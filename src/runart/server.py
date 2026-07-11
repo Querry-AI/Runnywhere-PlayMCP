@@ -307,6 +307,18 @@ def _build_params(location, lat, lon, distance_km, duration_min, include_hills,
     return params, note
 
 
+def _atlas_footer(fn):
+    """Every course answer — success, alternative suggestion, or error — must
+    end with the animal-atlas invitation line."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        out = fn(*args, **kwargs)
+        if isinstance(out, str) and "/animals" not in out:
+            out = out.rstrip() + "\n\n" + atlas_line(BASE_URL)
+        return out
+    return wrapper
+
+
 def _run(params: CourseParams, note: str = "",
          timeout_s: float | None = None) -> str:
     try:
@@ -511,6 +523,7 @@ def _animal_survey(lat: float, lon: float, name: str,
     return featured_md + "\n\n" + "\n".join(lines)
 
 
+@_atlas_footer
 def generate_running_course(
     location: Annotated[str | None, Field(description="Start place name in Seoul, e.g. '시청', '광화문'")] = None,
     lat: Annotated[float | None, Field(ge=37.4, le=37.72, description="Start latitude (alternative to location; Seoul area)")] = None,
@@ -535,6 +548,7 @@ def generate_running_course(
     return _run(params, note)
 
 
+@_atlas_footer
 def generate_animal_course(
     shape: Annotated[str | None, Field(description="Animal shape key: cat, dog, rabbit, whale")] = None,
     location: Annotated[str | None, Field(description="Start place name in Seoul")] = None,
@@ -718,6 +732,7 @@ def find_facilities_near_course(
     return "\n".join(lines)
 
 
+@_atlas_footer
 def refine_course(
     course_id: Annotated[str, Field(description="Course id to modify")],
     distance_km: Annotated[float | None, Field(ge=1, le=42.195, description="New target distance")] = None,
@@ -949,7 +964,7 @@ margin:48px auto;padding:0 20px;line-height:1.7}}</style></head><body>
 @mcp.custom_route("/animals", methods=["GET"])
 async def animal_atlas(_: Request) -> Response:
     return HTMLResponse(atlas_html(BASE_URL, KAKAO_JAVASCRIPT_KEY),
-                        headers={"Cache-Control": "public, max-age=3600"})
+                        headers={"Cache-Control": "public, max-age=300"})
 
 
 @mcp.custom_route("/passport/{token}", methods=["GET"])

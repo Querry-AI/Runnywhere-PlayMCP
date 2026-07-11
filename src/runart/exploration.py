@@ -252,7 +252,7 @@ def atlas_html(base_url: str, kakao_key: str) -> str:
 <div class=\"filters\"><button class=\"on\" data-shape=\"all\">전체</button>{buttons}</div>
 <div class=\"station-filter\"><input id=\"stationInput\" list=\"stationList\" placeholder=\"역 이름으로 찾기 (예: 강남역)\" autocomplete=\"off\"><datalist id=\"stationList\">{station_options}</datalist><button id=\"stationClear\" type=\"button\">지우기</button></div>
 <div id=\"map\"><div class=\"map-message\"><div class=\"card\"><h2>지도를 불러오는 중이에요</h2><p class=\"muted\">지도 연결이 어려우면 AI에게 현재 역을 말해 주세요. 가장 가까운 동물을 바로 추천해 드려요.</p></div></div></div>
-<p class=\"muted\">마커를 누르면 코스 모양과 거리·출발역이 지도에 표시돼요. 완주 후 AI에게 course_id와 함께 “동물도감에 기록해줘”라고 말해보세요. · <a href=\"https://www.openstreetmap.org/copyright\">경로 데이터 © OpenStreetMap contributors · ODbL</a></p>
+<p class=\"muted\">마커를 누르면 코스 모양과 거리·출발역이 지도에 표시되고, 친구에게 공유하기 버튼으로 링크를 복사할 수 있어요. · <a href=\"https://www.openstreetmap.org/copyright\">경로 데이터 © OpenStreetMap contributors · ODbL</a></p>
 {map_sdk}<script>
 const items={data};const baseUrl={js_base};let overlays=[];let map=null;let routeLines=[];let infoOv=null;
 let shapeFilter='all';let stationFilter='';

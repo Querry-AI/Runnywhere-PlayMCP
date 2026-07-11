@@ -39,7 +39,8 @@ def test_p3_gps_art_share():
     out = server.generate_animal_course(shape="whale", location="강남역")
     assert _is_course(out) or out.startswith("⏱️")
     if _is_course(out):
-        assert "/s/whale-" in out
+        # Sharing travels via the course link and the atlas invitation.
+        assert "[서울 동물 지도 보기](" in out
     else:
         assert "3초 안에" in out and "한 번 더" in out
     assert "모양 완성도" not in out

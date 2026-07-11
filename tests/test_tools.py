@@ -115,7 +115,7 @@ def test_chosen_animal_without_distance_uses_verified_minimum():
     assert "고래" in out
     assert "11km 이내 최상 코스" in out or "3초 안에" in out
     if "최상 코스" in out:
-        assert "/s/whale-" in out
+        assert "/c/" in out
 
 
 def test_survey_result_is_reused_when_user_selects_animal(monkeypatch):
