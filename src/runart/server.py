@@ -105,14 +105,15 @@ _CACHE_LOCK = threading.RLock()
 _POOL: "concurrent.futures.ProcessPoolExecutor | None" = None
 _POOL_LOCK = threading.Lock()
 _POOL_BROKEN = False
-ANIMAL_RESPONSE_BUDGET_S = 2.7
+ANIMAL_RESPONSE_BUDGET_S = 2.8
 # Plain-course generation must also stay inside the PlayMCP p99 3s budget.
 GENERAL_RESPONSE_BUDGET_S = 2.5
 # At an arbitrary address (no station preset), we first try to draw the animal
 # from that exact start; only after this budget fails do we substitute a
-# nearby station's verified preset. 2.2s leaves room for geocoding and
-# rendering inside the p99 3s cap.
-ADDRESS_TRY_BUDGET_S = 2.2
+# nearby station's verified preset. The remaining-budget cap (2.8s minus
+# elapsed geocoding) keeps the whole answer inside the p99 3s cap even at the
+# top of this range, and the preset fallback afterwards is a sub-ms memory scan.
+ADDRESS_TRY_BUDGET_S = 2.6
 
 
 class _GenerationTimeout(RuntimeError):
