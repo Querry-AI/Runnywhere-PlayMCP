@@ -234,8 +234,7 @@ def test_mcp_tools_match_playmcp_required_annotations():
         "generate_running_course", "generate_animal_course",
         "list_available_shapes", "find_facilities_near_course",
         "refine_course", "get_course_status",
-        "explore_animal_collection", "record_animal_completion",
-        "extend_shape_relay",
+        "record_animal_completion", "extend_shape_relay",
     }
     assert len(names) == len(set(names))
     assert 3 <= len(names) <= 10

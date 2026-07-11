@@ -48,9 +48,9 @@ pickle 형식의 그래프·시설·인프라 파일은 로드 전에 `src/runar
 
 경로·안전·시설 데이터는 컨테이너에 미리 적재되어 런타임에 외부로 조회하지 않는다. 단, 사용자가 입력한 임의의 서울 주소를 좌표로 바꾸는 지오코딩은 `KAKAO_REST_API_KEY`가 설정된 경우 Kakao Local API를 선택적으로 사용하며, 지하철역 289개와 주요 지명은 네트워크 없이 해석한다.
 
-## 툴 (9개, 모두 stateless·idempotent)
+## 툴 (8개, 모두 stateless·idempotent)
 
-`generate_running_course` · `generate_animal_course` · `list_available_shapes` · `find_facilities_near_course` · `refine_course` · `get_course_status` · `explore_animal_collection` · `record_animal_completion` · `extend_shape_relay`
+`generate_running_course` · `generate_animal_course` · `list_available_shapes` · `find_facilities_near_course` · `refine_course` · `get_course_status` · `record_animal_completion` · `extend_shape_relay`
 
 서울 동물지도(`/animals`)는 검증된 421개 GPS 아트를 한 화면에서 탐색하게 한다. 완주 기록은 서버 DB나 로그인 대신 자기완결형 `passport_token`으로 이어지며, 4종 도감·지역별 4종 배지·주간 최인접 미발견 동물을 제공한다. Shape Relay(`/relay/{token}`)도 최대 8개 동네의 같은 동물 course_id를 자기완결형 토큰에 담아 나란히 비교하고 공동 GPS 작품으로 겹쳐 보여준다. 따라서 PlayMCP 권장 stateless/no-session 구조를 유지한다.
 

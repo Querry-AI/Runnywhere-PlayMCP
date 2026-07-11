@@ -72,8 +72,15 @@ def test_new_mcp_tool_answers_are_concise_and_actionable():
     assert "passport_token" in passport_out and "/passport/" in passport_out
     relay_out = server.extend_shape_relay(cid)
     assert "relay_token" in relay_out and "/relay/" in relay_out
-    atlas_out = server.explore_animal_collection(location="시청")
-    assert "/animals" in atlas_out and "이번 주" in atlas_out
+    survey_out = server.generate_animal_course(location="시청")
+    assert "추천" in survey_out and "/animals" in survey_out
+
+
+def test_atlas_is_not_exposed_as_competing_mcp_tool():
+    import asyncio
+    names = {tool.name for tool in asyncio.run(server.mcp.list_tools())}
+    assert "generate_animal_course" in names
+    assert "explore_animal_collection" not in names
 
 
 def test_legal_pages_are_linked_without_expanding_mcp_responses():

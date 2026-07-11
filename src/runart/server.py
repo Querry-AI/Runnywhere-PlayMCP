@@ -2,7 +2,7 @@
 
 - Streamable HTTP, stateless (PRD §9): course ids are self-contained parameter
   tokens; the in-process cache is a performance layer only.
-- 9 stateless, idempotent tools (PRD §5.1). Tool errors are returned as
+- 8 stateless, idempotent tools (PRD §5.1). Tool errors are returned as
   refined guidance text, never raw exceptions (PRD §5.2).
 - Preview pages / GPX / shape share links are served by the same app (§5.6).
 """
@@ -33,11 +33,9 @@ from .course import Course, CourseError, generate_course
 from .facilities import LABELS_KO, facilities_along
 from .geocode import resolve_location
 from .gpx import to_gpx
-from .geo import haversine_m
-from .exploration import (atlas_html, create_relay, decode_passport,
-                          decode_relay, passport_html, passport_summary,
-                          home_html, legal_html, record_run, relay_html,
-                          weekly_recommendation)
+from .exploration import (atlas_html, create_relay, decode_relay,
+                          passport_html, home_html, legal_html, record_run,
+                          relay_html)
 from .models import (CourseParams, DEFAULT_PACE_MIN_PER_KM, decode_course_id,
                      decode_shape_token, encode_course_id)
 from .render import (card_svg, course_markdown, markdown_text, preview_html,
@@ -70,7 +68,11 @@ mcp = FastMCP(
         "Runnywhere(러니웨어) — 어디서든 러닝 코스 짜기! "
         "It designs running courses in Seoul through conversation: "
         "loop courses by distance, animal-shaped GPS-art courses, hill/flat "
-        "preference, night-safety routing, and nearby facilities."
+        "preference, night-safety routing, and nearby facilities. "
+        "ROUTING RULE: for every request asking to recommend, find, or create "
+        "an animal course at a location, always call generate_animal_course. "
+        "The animal atlas and passport are secondary follow-up experiences, "
+        "never substitutes for an animal-course recommendation."
     ),
     stateless_http=True,
     json_response=True,
@@ -463,6 +465,7 @@ def _animal_survey(lat: float, lon: float, name: str,
         lines.append("도로망 후보가 많아 탐색을 멈췄어요. 원하는 동물 하나를 골라 다시 요청해 주세요.")
     else:
         lines.append("강남·잠실처럼 길이 바둑판인 동네나 큰 공원 근처 출발점에서 성공률이 높아요.")
+    lines.append(f"더 많은 검증 코스를 둘러보려면: {BASE_URL}/animals")
     return "\n".join(lines)
 
 
@@ -731,45 +734,6 @@ def get_course_status(
     return _run(params)
 
 
-def explore_animal_collection(
-    location: Annotated[str | None, Field(description="Current place in Seoul for the nearest undiscovered animal recommendation")] = None,
-    lat: Annotated[float | None, Field(ge=37.4, le=37.72, description="Current latitude, alternative to location")] = None,
-    lon: Annotated[float | None, Field(ge=126.76, le=127.19, description="Current longitude, alternative to location")] = None,
-    passport_token: Annotated[str | None, Field(description="Optional stateless passport token returned after recording completed animal courses")] = None,
-) -> str:
-    """Opens the Runnywhere(러니웨어) Seoul animal-art atlas and recommends
-    this week's nearest verified course not yet recorded in the user's
-    stateless animal passport. Returns concise links, not the full atlas data."""
-    try:
-        rlat, rlon, name = resolve_location(location, lat, lon)
-        passport = decode_passport(passport_token)
-    except CourseError as e:
-        return f"⚠️ {e}"
-    except Exception:
-        return "⚠️ passport_token이 올바르지 않아요. 토큰 없이 새 도감을 시작할 수 있어요."
-    course = weekly_recommendation(rlat, rlon, passport_token)
-    summary = passport_summary(passport)
-    lines = [
-        "🗺️ **서울 동물지도가 열렸어요.**",
-        f"- 탐험 지도: {BASE_URL}/animals",
-        f"- 도감 현황: {summary['runs']}회 완주 · {len(summary['shapes'])}/4종 발견",
-    ]
-    if passport_token:
-        lines.append(f"- 나의 동물도감: {BASE_URL}/passport/{passport_token}")
-    if course is not None:
-        cid = encode_course_id(course.params)
-        distance = int(round(haversine_m(rlat, rlon, course.params.lat, course.params.lon)))
-        spec = SHAPES[course.params.shape]
-        lines.extend([
-            "",
-            "**이번 주 가장 가까운 미발견 동물**",
-            f"- {spec.emoji} {spec.name_ko} · {markdown_text(course.params.location_name)} · {course.length_km:.1f}km",
-            f"- 현재 위치에서 약 {distance:,}m · 코스 보기 {BASE_URL}/c/{cid}",
-        ])
-    lines.append("완주 후 course_id와 함께 **동물도감에 기록해줘**라고 말해 주세요.")
-    return "\n".join(lines)
-
-
 def record_animal_completion(
     course_id: Annotated[str, Field(description="Completed animal course id")],
     passport_token: Annotated[str | None, Field(description="Existing passport token; omit for the first completed animal")] = None,
@@ -835,7 +799,6 @@ for _fn, _title in (
     (find_facilities_near_course, "Find facilities near course"),
     (refine_course, "Refine course"),
     (get_course_status, "Get course status"),
-    (explore_animal_collection, "Explore Seoul animal-art collection"),
     (record_animal_completion, "Record animal-course completion"),
     (extend_shape_relay, "Extend shape relay"),
 ):
