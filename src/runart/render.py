@@ -19,6 +19,12 @@ from .shapes import SHAPES
 PREVIEW_FACILITY_TYPES = {"convenience_store", "restroom"}
 
 
+def atlas_line(base_url: str) -> str:
+    """Closing line appended to every course recommendation (PRD: always link
+    the Seoul animal atlas at the bottom of course answers)."""
+    return f"🗺️ 서울 동물 지도를 확인하세요: {base_url}/animals"
+
+
 def markdown_text(value: str) -> str:
     """Escape untrusted labels embedded in MCP Markdown responses."""
     value = "".join(ch for ch in value if ch >= " " and ch != "\x7f")[:120]
@@ -70,6 +76,8 @@ def course_markdown(course: Course, base_url: str, facilities: list[dict]) -> st
         token = encode_shape_token(p.shape, p.distance_km)
         lines.append(f"- {shape.emoji} 친구 동네에서 다시 그리기: {base_url}/s/{token}")
     lines.append("지도에서 통행·공사·날씨를 확인한 뒤 **러닝 시작**을 누르세요. 코스는 참고용이에요.")
+    lines.append("")
+    lines.append(atlas_line(base_url))
     return "\n".join(lines)
 
 
@@ -269,7 +277,9 @@ def _course_fact_html(course: Course, facilities: list[dict],
     return (
         '<section class="panel"><h3>러너 체크포인트</h3>'
         f'<div class="facts">{cells}</div>'
-        '<p class="hint">보행 신호는 코스가 실제로 길을 건너는 지점 기준이며, 편의점·화장실은 코스 10m 반경 기준입니다.</p>'
+        '<p class="hint">보행 신호는 코스가 실제로 길을 건너는 횟수 기준이며, 편의점·화장실은 코스 10m 반경 기준입니다. '
+        '지도에서 내 위치는 빨간 점, 편의점은 파란 점, 화장실은 초록 점으로 표시되고, '
+        '점을 터치하거나 마우스를 올리면 장소명과 주소가 보여요.</p>'
         '</section>'
     )
 
@@ -296,14 +306,16 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
     score_breakdown = _score_breakdown_html(course)
     course_facts = _course_fact_html(course, facilities, detailed)
     markers = json.dumps([
-        {"lat": f["lat"], "lon": f["lon"],
+        {"lat": f["lat"], "lon": f["lon"], "type": f["type"],
+         "name": html.escape(f.get("name") or LABELS_KO[f["type"]]),
          "label": html.escape(f"{LABELS_KO[f['type']]} · {f['at_km']:g}km 지점")}
         for f in facilities
     ])
     highlights = html.escape(" · ".join(course.rfs.get("highlights", [])))
     kakao_key = html.escape(kakao_javascript_key, quote=True)
     map_sdk = (
-        f'<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={kakao_key}&autoload=false"></script>'
+        f'<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={kakao_key}'
+        '&autoload=false&libraries=services"></script>'
         if kakao_key else ""
     )
     return f"""<!DOCTYPE html><html lang="ko"><head>
@@ -368,10 +380,18 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .dir-marker span{{display:block;color:#142018;font-size:20px;text-shadow:0 0 3px #fff,0 1px 4px rgba(0,0,0,.2)}}
  .start-marker{{background:#142018;color:#fff;border:2px solid #fff;border-radius:999px;padding:6px 9px;
       font-size:12px;font-weight:800;box-shadow:0 3px 12px rgba(0,0,0,.28);white-space:nowrap}}
- .user-dot{{width:18px;height:18px;background:#1677ff;border:3px solid #fff;border-radius:999px;
-      box-shadow:0 0 0 8px rgba(22,119,255,.18),0 2px 10px rgba(0,0,0,.25)}}
- .facility-marker{{width:12px;height:12px;background:#2563eb;border:2px solid #fff;border-radius:999px;
-      box-shadow:0 2px 8px rgba(0,0,0,.24)}}
+ .user-dot{{width:18px;height:18px;background:#e5322e;border:3px solid #fff;border-radius:999px;
+      box-shadow:0 0 0 8px rgba(229,50,46,.18),0 2px 10px rgba(0,0,0,.25)}}
+ .facility-marker{{position:relative;width:12px;height:12px;border:2px solid #fff;border-radius:999px;
+      box-shadow:0 2px 8px rgba(0,0,0,.24);cursor:pointer}}
+ .facility-marker.convenience_store{{background:#2563eb}}
+ .facility-marker.restroom{{background:#0a9d4f}}
+ .poi-pop{{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:#fff;
+      border:1px solid rgba(20,35,25,.14);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.18);
+      padding:8px 10px;min-width:150px;max-width:220px;z-index:900;text-align:left;pointer-events:none}}
+ .poi-pop b{{display:block;font-size:13px;color:#142018;margin-bottom:2px;white-space:nowrap;
+      overflow:hidden;text-overflow:ellipsis}}
+ .poi-pop span{{font-size:12px;color:#5c675e;line-height:1.4;word-break:keep-all}}
  footer{{color:#7b857d;font-size:12px;padding:8px 20px 20px;text-align:center}}
  footer a{{color:inherit}}
  @media (max-width:560px){{.brand span{{font-size:11px}} .facts{{grid-template-columns:repeat(2,1fr)}}
@@ -479,8 +499,56 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    '<div class="dir-marker" title="진행 방향"><span style="transform:rotate('+m.angle+'deg)">➤</span></div>',guideLayers);
  for (const k of kms) addOverlay(new kakao.maps.LatLng(k.lat,k.lon),
    '<div class="km-marker" title="'+k.km+'km 지점">'+k.km+'</div>',guideLayers);
- for (const m of {markers}) addOverlay(new kakao.maps.LatLng(m.lat,m.lon),
-   '<div class="facility-marker" title="'+m.label+'"></div>',guideLayers);
+ const geocoder = (kakao.maps.services && kakao.maps.services.Geocoder)
+   ? new kakao.maps.services.Geocoder() : null;
+ let openPop = null;
+ const closePop = () => {{ if (openPop) {{ openPop.style.display = 'none'; openPop = null; }} }};
+ kakao.maps.event.addListener(map, 'click', closePop);
+ const addFacility = m => {{
+   const el = document.createElement('div');
+   el.className = 'facility-marker ' + m.type;
+   el.title = m.label;
+   const pop = document.createElement('div');
+   pop.className = 'poi-pop';
+   pop.style.display = 'none';
+   const nameEl = document.createElement('b');
+   nameEl.textContent = m.name;
+   const addrEl = document.createElement('span');
+   addrEl.textContent = m.label;
+   pop.appendChild(nameEl);
+   pop.appendChild(addrEl);
+   el.appendChild(pop);
+   let addressAsked = false;
+   const show = () => {{
+     if (openPop && openPop !== pop) openPop.style.display = 'none';
+     pop.style.display = 'block';
+     openPop = pop;
+     if (!addressAsked && geocoder) {{
+       addressAsked = true;
+       addrEl.textContent = '주소 확인 중…';
+       geocoder.coord2Address(m.lon, m.lat, (res, status) => {{
+         const ok = status === kakao.maps.services.Status.OK && res && res[0];
+         const addr = ok ? (res[0].road_address
+           ? res[0].road_address.address_name : res[0].address.address_name) : '';
+         addrEl.textContent = addr || m.label;
+       }});
+     }}
+   }};
+   const hide = () => {{ pop.style.display = 'none'; if (openPop === pop) openPop = null; }};
+   el.addEventListener('mouseenter', show);
+   el.addEventListener('mouseleave', hide);
+   el.addEventListener('click', ev => {{
+     ev.stopPropagation();
+     pop.style.display === 'none' ? show() : hide();
+   }});
+   const overlay = new kakao.maps.CustomOverlay({{
+     position: new kakao.maps.LatLng(m.lat, m.lon), content: el,
+     xAnchor:.5, yAnchor:.5, zIndex:6
+   }});
+   overlay.setMap(map);
+   guideLayers.push(overlay);
+ }};
+ for (const m of {markers}) addFacility(m);
  const shapeView = document.getElementById('shapeView');
  const guideView = document.getElementById('guideView');
  const setMapMode = mode => {{
@@ -539,8 +607,8 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    if (!userMarker) {{
      userMarker = addOverlay(posLatLng, '<div class="user-dot" title="현재 위치"></div>', guideLayers);
      accuracyCircle = new kakao.maps.Circle({{
-       center:posLatLng,radius:acc,strokeWeight:1,strokeColor:'#1677ff',
-       strokeOpacity:.8,fillColor:'#1677ff',fillOpacity:.06
+       center:posLatLng,radius:acc,strokeWeight:1,strokeColor:'#e5322e',
+       strokeOpacity:.8,fillColor:'#e5322e',fillOpacity:.06
      }});
      accuracyCircle.setMap(map);
      guideLayers.push(accuracyCircle);

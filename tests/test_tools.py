@@ -93,11 +93,20 @@ def test_location_error_does_not_ask_for_coordinates():
 
 def test_animal_request_surveys_verified_minimum_distances_first():
     out = server.generate_animal_course(**CITY_HALL)
-    assert out.index("강아지") < out.index("고양이") < out.index("고래") < out.index("토끼")
+    # First try already renders the fastest-completing shape as a full course.
+    assert "가장 빨리 완성되는" in out
+    assert "## " in out and "/c/" in out
+    # The choice list after the featured course keeps the survey order.
+    survey = out[out.index("지금 선택할 수 있는"):]
+    assert (survey.index("강아지") < survey.index("고양이")
+            < survey.index("고래") < survey.index("토끼"))
     assert "11km 이내" in out
     assert "추천" in out or "3초 안에" in out
     assert "어떤 동물" in out or "다시 요청" in out
     assert "모양 완성도" not in out
+    # Every course recommendation ends with the animal atlas link.
+    assert out.rstrip().endswith("/animals")
+    assert "서울 동물 지도를 확인하세요" in out
 
 
 def test_chosen_animal_without_distance_uses_verified_minimum():
@@ -180,6 +189,17 @@ def test_forced_short_animal_returns_choice_survey_not_blob():
     if out.startswith("⚠️"):
         assert "추천 거리" in out
         assert "바로 사용하려면" in out
+
+
+def test_no_animal_course_falls_back_to_general_course(monkeypatch):
+    server._animal_recommendation_cache.clear()
+    monkeypatch.setattr(server, "get_animal_preset", lambda p: None)
+    monkeypatch.setattr(server, "find_nearest_animal_preset", lambda p: None)
+    out = server.generate_animal_course(shape="whale", **CITY_HALL)
+    assert "동물 코스가 검색되지 않았어요" in out
+    assert "러닝 코스" in out and "/c/" in out
+    assert "강남" in out and "잠실" in out
+    assert out.rstrip().endswith("/animals")
 
 
 def test_shape_token_recreates_shape():

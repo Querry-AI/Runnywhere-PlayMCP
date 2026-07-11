@@ -62,13 +62,18 @@ def _infra_buckets() -> dict[str, dict[tuple[int, int], list[tuple[float, float]
 # a few tens of meters of the road-centerline intersection node.
 CROSSING_SIGNAL_RADIUS_M = 25.0
 STRAIGHT_THROUGH_MAX_DEG = 45.0
+# One physical intersection is often modelled as a few centerline nodes a few
+# meters apart (dual carriageways, split crosswalk nodes). Qualifying nodes
+# closer than this along the route belong to the same real crossing event.
+CROSSING_MERGE_M = 40.0
 
 
 def pedestrian_signals_crossed(graph, path: list,
                                radius_m: float = CROSSING_SIGNAL_RADIUS_M,
                                straight_max_deg: float = STRAIGHT_THROUGH_MAX_DEG,
+                               merge_m: float = CROSSING_MERGE_M,
                                ) -> int:
-    """Signalized crossing points the route actually CROSSES.
+    """Number of times the route actually crosses a signalized street.
 
     Merely running past a signal pole must not count. On a centerline graph a
     crossing happens when the route passes straight through an intersection
@@ -76,20 +81,31 @@ def pedestrian_signals_crossed(graph, path: list,
     waits for its signal. Turning at the corner keeps the runner on the same
     block edge, so signals there are excluded.
 
-    The source data stores individual signal poles. Several poles can belong
-    to one crosswalk/intersection, but the UI should report the crossing event,
-    not every pole around that event.
+    The count is per crossing EVENT, not per node or per pole: several signal
+    poles serve one crosswalk, and one wide intersection can span several
+    graph nodes within a few meters of each other — those must read as a
+    single crossing. Conversely, a loop that returns through the same
+    intersection later crosses the street again, and that counts again.
     """
     buckets = _infra_buckets().get("pedestrian_signal", {})
-    crossed_nodes: set = set()
     n = len(path)
     if n < 3:
         return 0
     closed = path[0] == path[-1]
+    # Cumulative distance along the path lets nearby qualifying nodes merge
+    # into one crossing event while distant revisits count separately.
+    cum = [0.0]
+    for u, v in zip(path, path[1:]):
+        du, dv = graph.nodes[u], graph.nodes[v]
+        cum.append(cum[-1] + haversine_m(du["lat"], du["lon"],
+                                         dv["lat"], dv["lon"]))
     # For a closed loop the shared start/end node is also a potential crossing.
     indices = list(range(1, n - 1)) + ([0] if closed else [])
+    crossings = 0
+    last_event_at: float | None = None
     for i in indices:
         b = path[i]
+        at_m = cum[i] if i > 0 else cum[-1]
         if graph.degree(b) < 3:
             continue  # mid-block node, nothing to cross
         a = path[i - 1] if i > 0 else path[-2]
@@ -118,6 +134,12 @@ def pedestrian_signals_crossed(graph, path: list,
                     break
             if has_signal:
                 break
-        if has_signal:
-            crossed_nodes.add(b)
-    return len(crossed_nodes)
+        if not has_signal:
+            continue
+        if last_event_at is not None and at_m - last_event_at <= merge_m:
+            # Same physical intersection as the crossing just counted.
+            last_event_at = at_m
+            continue
+        crossings += 1
+        last_event_at = at_m
+    return crossings

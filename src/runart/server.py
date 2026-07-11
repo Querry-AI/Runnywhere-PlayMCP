@@ -28,7 +28,8 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from .animal_presets import (MISSING as PRESET_MISSING, PresetMatch,
-                             find_nearest_animal_preset, get_animal_preset)
+                             find_nearest_animal_preset, get_animal_preset,
+                             preset_status)
 from .course import Course, CourseError, generate_course
 from .facilities import LABELS_KO, facilities_along
 from .geocode import resolve_location
@@ -38,8 +39,8 @@ from .exploration import (atlas_html, create_relay, decode_relay,
                           relay_html)
 from .models import (CourseParams, DEFAULT_PACE_MIN_PER_KM, decode_course_id,
                      decode_shape_token, encode_course_id)
-from .render import (card_svg, course_markdown, markdown_text, preview_html,
-                     route_points)
+from .render import (atlas_line, card_svg, course_markdown, markdown_text,
+                     preview_html, route_points)
 from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
                      generate_shape_course, list_shapes)
 from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
@@ -334,6 +335,31 @@ def _animal_help(name: str) -> str:
     )
 
 
+ANIMAL_GUIDE_TAIL = ("💡 동물 GPS 아트 코스는 **강남·잠실처럼 길이 바둑판으로 뻗은 동네**나 "
+                     "**큰 공원 근처**에서 또렷하게 완성돼요. 그런 출발점으로 다시 "
+                     "요청하시면 동물 코스를 찾아드릴게요.")
+
+
+def _no_animal_fallback(lat: float, lon: float, name: str) -> str:
+    """When no animal completes here, don't dead-end: serve a runner-friendly
+    plain course at this exact start, then steer toward grid-street areas
+    where GPS art works."""
+    safe_name = markdown_text(name)
+    head = (f"🔎 **{safe_name}에서는 동물 코스가 검색되지 않았어요.** "
+            "대신 이 위치에서 바로 달릴 수 있는 러닝 친화적인 일반 코스를 추천해요.\n")
+    params = CourseParams(lat=lat, lon=lon, location_name=name, distance_km=5.0)
+    try:
+        course = _get_course(params)
+        facs = facilities_along(route_points(course), None)
+        body = course_markdown(course, BASE_URL, facs).replace(
+            "\n\n" + atlas_line(BASE_URL), "")
+    except CourseError as e:
+        return (f"🔎 **{safe_name}에서는 동물 코스가 검색되지 않았어요.**\n⚠️ {e}\n"
+                + ANIMAL_GUIDE_TAIL + "\n\n" + atlas_line(BASE_URL))
+    return (head + body + "\n\n" + ANIMAL_GUIDE_TAIL
+            + "\n\n" + atlas_line(BASE_URL))
+
+
 def _animal_timeout_message(name: str, shape: str) -> str:
     spec = SHAPES[shape]
     name = markdown_text(name)
@@ -463,10 +489,26 @@ def _animal_survey(lat: float, lon: float, name: str,
                      "(더 길게 뛰고 싶으면 거리도 함께 말씀해 주세요)")
     elif timed_out_any:
         lines.append("도로망 후보가 많아 탐색을 멈췄어요. 원하는 동물 하나를 골라 다시 요청해 주세요.")
+        lines.append(atlas_line(BASE_URL))
+        return "\n".join(lines)
     else:
-        lines.append("강남·잠실처럼 길이 바둑판인 동네나 큰 공원 근처 출발점에서 성공률이 높아요.")
-    lines.append(f"더 많은 검증 코스를 둘러보려면: {BASE_URL}/animals")
-    return "\n".join(lines)
+        # Nothing completes here at all: fall back to a plain runner-friendly
+        # course and steer toward grid-street areas where GPS art works.
+        return _no_animal_fallback(lat, lon, name)
+    lines.append(atlas_line(BASE_URL))
+    # First try must already show a runnable course: feature the animal that
+    # completes at the shortest distance here, then list the other choices.
+    ready = {key: c for key, c in courses.items()
+             if c is not None and c is not _TIMED_OUT}
+    featured_key = min(ready, key=lambda key: ready[key].length_km)
+    featured = ready[featured_key]
+    spec = SHAPES[featured_key]
+    note = (f"⚡ **가장 빨리 완성되는 모양부터 바로 준비했어요** — "
+            f"{spec.emoji} {spec.name_ko} {featured.length_km:.1f}km.\n"
+            "다른 동물이 좋으면 아래 목록에서 골라주세요.\n")
+    featured_md = _serve_course(featured, note).replace(
+        "\n\n" + atlas_line(BASE_URL), "")
+    return featured_md + "\n\n" + "\n".join(lines)
 
 
 def generate_running_course(
@@ -555,13 +597,9 @@ def generate_animal_course(
             if nearby is not None:
                 preset = nearby.course
         if preset is None:
-            spec = SHAPES[shape]
-            safe_name = markdown_text(name)
-            return (f"⚠️ **이 위치에서는 {spec.name_ko} 코스를 추천할 수 없어요.**\n"
-                    f"- 이유: {safe_name} 주변 2km 안에서 11km 이내 품질 기준을 통과한 "
-                    f"{spec.name_ko} 코스가 없어요.\n"
-                    f"- 다음 선택: 동물 이름 없이 **\"{safe_name}에서 동물 코스 추천해줘\"**라고 "
-                    "말하면 가능한 모양을 바로 찾아드려요.")
+            # No verified animal within reach: give a runnable plain course
+            # here instead of a dead end, then steer to grid-street areas.
+            return _no_animal_fallback(rlat, rlon, name)
         if preset is not PRESET_MISSING:
             _cache_animal_recommendation(preset)
             note = _verified_animal_note(
@@ -587,13 +625,9 @@ def generate_animal_course(
                     f"11km 이내 최상 코스 {course.length_km:.1f}km로 그렸어요. "
                     f"{REFERENCE_FEATURES.get(shape, '')}\n")
             return _serve_course(course, note)
-        # No clean fit at this location. Return fast guidance instead of
-        # re-running a full survey (which would push latency past p99 3s).
-        spec = SHAPES[shape]
-        return (
-            f"⚠️ {markdown_text(name)}에서는 {spec.name_ko} 실루엣이 11km 이내에 또렷하게 "
-            f"완성되지 않았어요. " + _animal_help(name)
-        )
+        # No clean fit at this location: serve a plain runner-friendly course
+        # instead of a dead end, then steer to grid-street areas.
+        return _no_animal_fallback(rlat, rlon, name)
     try:
         params, note = _build_params(location, lat, lon, distance_km, duration_min,
                                      include_hills, night_mode, need_facilities, shape=shape)
@@ -812,7 +846,8 @@ for _fn, _title in (
 
 @mcp.custom_route("/healthz", methods=["GET"])
 async def healthz(_: Request) -> Response:
-    return JSONResponse({"ok": True, "service": "runnywhere"})
+    return JSONResponse({"ok": True, "service": "runnywhere",
+                         "animal_presets": preset_status()})
 
 
 @mcp.custom_route("/", methods=["GET"])
@@ -849,6 +884,22 @@ async def share_card(request: Request) -> Response:
         return PlainTextResponse("잘못된 코스 링크입니다.", status_code=404)
     return Response(card_svg(course), media_type="image/svg+xml",
                     headers={"Cache-Control": "public, max-age=86400"})
+
+
+@mcp.custom_route("/c/{course_id}/route.json", methods=["GET"])
+async def course_route_json(request: Request) -> Response:
+    """Course polyline for the animal-atlas overlay (verified presets only:
+    the atlas must never trigger CPU generation from an unauthenticated URL)."""
+    try:
+        params = decode_course_id(request.path_params["course_id"])
+        course = get_animal_preset(params)
+    except Exception:
+        return JSONResponse({"error": "bad course id"}, status_code=404)
+    if not isinstance(course, Course):
+        return JSONResponse({"error": "not a verified course"}, status_code=404)
+    points = [[round(lat, 5), round(lon, 5)] for lat, lon in route_points(course)]
+    return JSONResponse({"points": points, "km": round(course.length_km, 1)},
+                        headers={"Cache-Control": "public, max-age=86400"})
 
 
 @mcp.custom_route("/c/{course_id}", methods=["GET"])
@@ -1029,6 +1080,13 @@ def _log_geocoding_status() -> None:
         )
     if not KAKAO_JAVASCRIPT_KEY:
         log.warning("maps: KAKAO_JAVASCRIPT_KEY not set; preview maps show fallback guidance")
+    status = preset_status()
+    if status.startswith("ok"):
+        log.info("animal presets: %s", status)
+    else:
+        log.error(
+            "animal presets: NOT LOADED (%s) — the atlas will be empty and "
+            "animal answers lose the verified fast path", status)
 
 
 def create_app():

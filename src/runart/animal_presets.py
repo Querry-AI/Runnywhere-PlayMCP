@@ -53,18 +53,53 @@ def preset_key(lat: float, lon: float, shape: str) -> str:
     return f"{lat:.5f},{lon:.5f},{shape}"
 
 
+_load_status = "not loaded yet"
+
+
 @lru_cache(maxsize=1)
 def _load() -> dict | None:
+    """Verified preset entries, or None with the failure recorded in
+    preset_status() — a silent None here previously made a broken deploy
+    (stale image, regenerated graph) indistinguishable from 'no presets'."""
+    global _load_status
+    if not PRESET_PATH.exists():
+        _load_status = f"preset file missing: {PRESET_PATH}"
+        return None
     try:
         verify_data_file(PRESET_PATH)
+    except Exception as e:
+        _load_status = f"integrity check failed: {e}"
+        return None
+    try:
         with gzip.open(PRESET_PATH, "rt", encoding="utf-8") as f:
             payload = json.load(f)
-        if (payload.get("format_version") != FORMAT_VERSION
-                or payload.get("graph_fingerprint") != graph_fingerprint()):
-            return None
-        return payload.get("entries", {})
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError) as e:
+        _load_status = f"unreadable preset file: {e}"
         return None
+    if payload.get("format_version") != FORMAT_VERSION:
+        _load_status = (f"format_version {payload.get('format_version')!r} != "
+                        f"{FORMAT_VERSION} (rebuild with scripts/build_animal_presets.py)")
+        return None
+    try:
+        fingerprint = graph_fingerprint()
+    except OSError as e:
+        _load_status = f"graph file unavailable: {e}"
+        return None
+    if payload.get("graph_fingerprint") != fingerprint:
+        _load_status = ("graph fingerprint mismatch — the deployed graph differs from "
+                        "the one the presets were built against "
+                        "(rebuild with scripts/build_animal_presets.py)")
+        return None
+    entries = payload.get("entries", {})
+    verified = sum(1 for value in entries.values() if value)
+    _load_status = f"ok: {verified} verified courses ({len(entries)} entries)"
+    return entries
+
+
+def preset_status() -> str:
+    """Human-readable preset availability for startup logs and diagnostics."""
+    _load()
+    return _load_status
 
 
 def get_animal_preset(params: CourseParams):

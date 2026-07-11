@@ -65,6 +65,40 @@ def test_signal_not_counted_when_route_turns_at_corner(monkeypatch):
     assert infrastructure.pedestrian_signals_crossed(g, ["s", "c", "e"]) == 0
 
 
+def test_split_intersection_nodes_count_as_one_crossing(monkeypatch):
+    """A dual-carriageway crossing is two centerline nodes a few meters
+    apart; the runner crosses the street once, so the count must be 1."""
+    g = nx.Graph()
+    lat0, lon0 = 37.5, 127.0
+    nodes = {
+        "s": (0.0, -200.0),
+        "c1": (0.0, 0.0),
+        "c2": (0.0, 15.0),
+        "n": (0.0, 200.0),
+        "e1": (200.0, 0.0), "w1": (-200.0, 0.0),
+        "e2": (200.0, 15.0), "w2": (-200.0, 15.0),
+    }
+    for name, (x, y) in nodes.items():
+        lat, lon = to_latlon(x, y, lat0, lon0)
+        g.add_node(name, lat=lat, lon=lon)
+    for a, b in (("s", "c1"), ("c1", "c2"), ("c2", "n"),
+                 ("e1", "c1"), ("w1", "c1"), ("e2", "c2"), ("w2", "c2")):
+        g.add_edge(a, b, length=100.0)
+    _patch_signals(monkeypatch, [to_latlon(6.0, 8.0, lat0, lon0)])
+
+    assert infrastructure.pedestrian_signals_crossed(g, ["s", "c1", "c2", "n"]) == 1
+
+
+def test_returning_through_same_crossing_counts_again(monkeypatch):
+    g, lat0, lon0 = _cross_graph()
+    _patch_signals(monkeypatch, [to_latlon(12.0, 12.0, lat0, lon0)])
+
+    # Out north through the crossing, around, and back south through it:
+    # the street is physically crossed twice.
+    assert infrastructure.pedestrian_signals_crossed(
+        g, ["s", "c", "n", "c", "s"]) == 2
+
+
 def test_signal_not_counted_when_merely_running_past(monkeypatch):
     g, lat0, lon0 = _cross_graph()
     mid_block = to_latlon(12.0, 100.0, lat0, lon0)  # beside the s-c leg
