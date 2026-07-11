@@ -13,6 +13,7 @@ import html
 import logging
 import multiprocessing
 import os
+import random
 import re
 import threading
 import time
@@ -28,6 +29,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from .animal_presets import (MISSING as PRESET_MISSING, PresetMatch,
+                             find_nearby_animal_presets,
                              find_nearest_animal_preset, get_animal_preset,
                              preset_status)
 from .course import Course, CourseError, generate_course
@@ -39,7 +41,7 @@ from .exploration import (atlas_html, create_relay, decode_relay,
                           relay_html)
 from .models import (CourseParams, DEFAULT_PACE_MIN_PER_KM, decode_course_id,
                      decode_shape_token, encode_course_id)
-from .render import (atlas_line, card_svg, course_markdown, markdown_text,
+from .render import (card_svg, course_markdown, markdown_text,
                      preview_html, route_points)
 from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
                      generate_shape_course, list_shapes)
@@ -104,10 +106,13 @@ _POOL: "concurrent.futures.ProcessPoolExecutor | None" = None
 _POOL_LOCK = threading.Lock()
 _POOL_BROKEN = False
 ANIMAL_RESPONSE_BUDGET_S = 2.7
+# Plain-course generation must also stay inside the PlayMCP p99 3s budget.
+GENERAL_RESPONSE_BUDGET_S = 2.5
 # At an arbitrary address (no station preset), we first try to draw the animal
-# from that exact start; only after this budget fails do we substitute the
-# nearest station's verified preset.
-ADDRESS_TRY_BUDGET_S = 2.5
+# from that exact start; only after this budget fails do we substitute a
+# nearby station's verified preset. 2.2s leaves room for geocoding and
+# rendering inside the p99 3s cap.
+ADDRESS_TRY_BUDGET_S = 2.2
 
 
 class _GenerationTimeout(RuntimeError):
@@ -311,18 +316,6 @@ def _build_params(location, lat, lon, distance_km, duration_min, include_hills,
     return params, note
 
 
-def _atlas_footer(fn):
-    """Every course answer — success, alternative suggestion, or error — must
-    end with the animal-atlas invitation line."""
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        out = fn(*args, **kwargs)
-        if isinstance(out, str) and "/animals" not in out:
-            out = out.rstrip() + "\n\n" + atlas_line(BASE_URL)
-        return out
-    return wrapper
-
-
 def _run(params: CourseParams, note: str = "",
          timeout_s: float | None = None) -> str:
     try:
@@ -331,6 +324,9 @@ def _run(params: CourseParams, note: str = "",
         return note + course_markdown(course, BASE_URL, facs)
     except CourseError as e:
         return f"⚠️ {e}"
+    except _GenerationTimeout:
+        return ("⏱️ 도로망 후보가 많아 이번 탐색을 3초 안에 마치지 못했어요. "
+                "같은 요청을 한 번 더 시도하거나, 거리를 조금 줄여 요청해 주세요.")
 
 
 def _serve_course(course, note: str = "") -> str:
@@ -356,7 +352,8 @@ ANIMAL_GUIDE_TAIL = ("💡 동물 GPS 아트 코스는 **강남·잠실처럼 �
                      "요청하시면 동물 코스를 찾아드릴게요.")
 
 
-def _no_animal_fallback(lat: float, lon: float, name: str) -> str:
+def _no_animal_fallback(lat: float, lon: float, name: str,
+                        timeout_s: float | None = None) -> str:
     """When no animal completes here, don't dead-end: serve a runner-friendly
     plain course at this exact start, then steer toward grid-street areas
     where GPS art works."""
@@ -365,15 +362,14 @@ def _no_animal_fallback(lat: float, lon: float, name: str) -> str:
             "대신 이 위치에서 바로 달릴 수 있는 러닝 친화적인 일반 코스를 추천해요.\n")
     params = CourseParams(lat=lat, lon=lon, location_name=name, distance_km=5.0)
     try:
-        course = _get_course(params)
+        course = _get_course(params, timeout_s=timeout_s)
         facs = facilities_along(route_points(course), None)
-        body = course_markdown(course, BASE_URL, facs).replace(
-            "\n\n" + atlas_line(BASE_URL), "")
-    except CourseError as e:
-        return (f"🔎 **{safe_name}에서는 동물 코스가 검색되지 않았어요.**\n⚠️ {e}\n"
-                + ANIMAL_GUIDE_TAIL + "\n\n" + atlas_line(BASE_URL))
-    return (head + body + "\n\n" + ANIMAL_GUIDE_TAIL
-            + "\n\n" + atlas_line(BASE_URL))
+        body = course_markdown(course, BASE_URL, facs)
+    except (CourseError, _GenerationTimeout) as e:
+        reason = f"⚠️ {e}\n" if isinstance(e, CourseError) else ""
+        return (f"🔎 **{safe_name}에서는 동물 코스가 검색되지 않았어요.**\n{reason}"
+                + ANIMAL_GUIDE_TAIL)
+    return head + body + "\n\n" + ANIMAL_GUIDE_TAIL
 
 
 def _animal_timeout_message(name: str, shape: str) -> str:
@@ -516,13 +512,11 @@ def _animal_survey(lat: float, lon: float, name: str,
                      "(더 길게 뛰고 싶으면 거리도 함께 말씀해 주세요)")
     elif timed_out_any:
         lines.append("도로망 후보가 많아 탐색을 멈췄어요. 원하는 동물 하나를 골라 다시 요청해 주세요.")
-        lines.append(atlas_line(BASE_URL))
         return "\n".join(lines)
     else:
         # Nothing completes here at all: fall back to a plain runner-friendly
         # course and steer toward grid-street areas where GPS art works.
-        return _no_animal_fallback(lat, lon, name)
-    lines.append(atlas_line(BASE_URL))
+        return _no_animal_fallback(lat, lon, name, timeout_s=timeout_s)
     # First try must already show a runnable course: feature the animal that
     # completes at the shortest distance here, then list the other choices.
     ready = {key: c for key, c in courses.items()
@@ -533,12 +527,10 @@ def _animal_survey(lat: float, lon: float, name: str,
     note = (f"⚡ **가장 빨리 완성되는 모양부터 바로 준비했어요** — "
             f"{spec.emoji} {spec.name_ko} {featured.length_km:.1f}km.\n"
             "다른 동물이 좋으면 아래 목록에서 골라주세요.\n")
-    featured_md = _serve_course(featured, note).replace(
-        "\n\n" + atlas_line(BASE_URL), "")
+    featured_md = _serve_course(featured, note)
     return featured_md + "\n\n" + "\n".join(lines)
 
 
-@_atlas_footer
 def generate_running_course(
     location: Annotated[str | None, Field(description="Start place name in Seoul, e.g. '시청', '광화문'")] = None,
     lat: Annotated[float | None, Field(ge=37.4, le=37.72, description="Start latitude (alternative to location; Seoul area)")] = None,
@@ -560,10 +552,9 @@ def generate_running_course(
                                      include_hills, night_mode, need_facilities)
     except CourseError as e:
         return f"⚠️ {e}"
-    return _run(params, note)
+    return _run(params, note, timeout_s=GENERAL_RESPONSE_BUDGET_S)
 
 
-@_atlas_footer
 def generate_animal_course(
     shape: Annotated[str | None, Field(description="Animal shape key: cat, dog, rabbit, whale")] = None,
     location: Annotated[str | None, Field(description="Start place name in Seoul")] = None,
@@ -652,10 +643,12 @@ def generate_animal_course(
                     f"11km 이내 최상 코스 {course.length_km:.1f}km로 그렸어요. "
                     f"{REFERENCE_FEATURES.get(shape, '')}\n")
             return _serve_course(course, note)
-        # Couldn't complete from this address in time: substitute the nearest
-        # station's verified preset.
-        nearby = find_nearest_animal_preset(probe)
-        if nearby is not None:
+        # Couldn't complete from this address in time: substitute one of the
+        # nearby stations' verified presets (random pick keeps repeat
+        # requests from always steering to the same station).
+        candidates = find_nearby_animal_presets(probe)
+        if candidates:
+            nearby = random.choice(candidates)
             _cache_animal_recommendation(nearby.course)
             note = _verified_animal_note(
                 name, shape, nearby.course,
@@ -754,7 +747,6 @@ def find_facilities_near_course(
     return "\n".join(lines)
 
 
-@_atlas_footer
 def refine_course(
     course_id: Annotated[str, Field(description="Course id to modify")],
     distance_km: Annotated[float | None, Field(ge=1, le=42.195, description="New target distance")] = None,

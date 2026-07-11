@@ -73,7 +73,7 @@ def test_new_mcp_tool_answers_are_concise_and_actionable():
     relay_out = server.extend_shape_relay(cid)
     assert "relay_token" in relay_out and "/relay/" in relay_out
     survey_out = server.generate_animal_course(location="시청")
-    assert "추천" in survey_out and "/animals" in survey_out
+    assert "추천" in survey_out and "/c/" in survey_out
 
 
 def test_atlas_is_not_exposed_as_competing_mcp_tool():

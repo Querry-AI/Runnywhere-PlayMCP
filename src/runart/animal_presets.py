@@ -154,23 +154,22 @@ def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 6_371_000.0 * math.hypot(x, y)
 
 
-def find_nearest_animal_preset(params: CourseParams,
+def find_nearby_animal_presets(params: CourseParams,
                                max_distance_m: float = 2000.0
-                               ) -> PresetMatch | None:
-    """Nearest verified preset for a shape, including arbitrary Seoul points.
+                               ) -> list[PresetMatch]:
+    """All verified presets for a shape within max_distance_m, nearest first.
 
-    This is a small in-memory scan (276 station points), used as a deterministic
-    sub-3-second fallback when the requested point has no clean silhouette.
-    """
+    This is a small in-memory scan (276 station points), used as a
+    deterministic sub-3-second fallback when the requested point has no
+    clean silhouette."""
     if (not params.shape or params.include_hills or params.night_mode
             or params.need_facilities):
-        return None
+        return []
     entries = _load()
     if entries is None:
-        return None
+        return []
     suffix = f",{params.shape}"
-    best = None
-    best_distance = max_distance_m + 1.0
+    matches: list[PresetMatch] = []
     for key, raw in entries.items():
         if raw is None or not key.endswith(suffix):
             continue
@@ -180,16 +179,25 @@ def find_nearest_animal_preset(params: CourseParams,
                                    float(lat_text), float(lon_text))
         except (TypeError, ValueError):
             continue
-        if distance < best_distance:
-            saved_params = CourseParams(**raw["params"])
-            best = Course(
-                params=saved_params, path=raw["path"],
-                points=[tuple(point) for point in raw["points"]],
-                length_m=raw["length_m"], ascent_m=raw["ascent_m"],
-                rfs=raw["rfs"], shape_similarity=raw.get("shape_similarity"),
-            )
-            best_distance = distance
-    return PresetMatch(best, best_distance) if best is not None else None
+        if distance > max_distance_m:
+            continue
+        saved_params = CourseParams(**raw["params"])
+        matches.append(PresetMatch(Course(
+            params=saved_params, path=raw["path"],
+            points=[tuple(point) for point in raw["points"]],
+            length_m=raw["length_m"], ascent_m=raw["ascent_m"],
+            rfs=raw["rfs"], shape_similarity=raw.get("shape_similarity"),
+        ), distance))
+    matches.sort(key=lambda m: m.distance_m)
+    return matches
+
+
+def find_nearest_animal_preset(params: CourseParams,
+                               max_distance_m: float = 2000.0
+                               ) -> PresetMatch | None:
+    """Nearest verified preset for a shape, including arbitrary Seoul points."""
+    matches = find_nearby_animal_presets(params, max_distance_m)
+    return matches[0] if matches else None
 
 
 def serialize_course(course: Course) -> dict:

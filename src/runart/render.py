@@ -19,11 +19,6 @@ from .shapes import SHAPES
 PREVIEW_FACILITY_TYPES = {"convenience_store", "restroom"}
 
 
-def atlas_line(base_url: str) -> str:
-    """Closing line appended to every course recommendation (PRD: always link
-    the Seoul animal atlas at the bottom of course answers)."""
-    return (f"다른 동네에서 동물 모양 코스를 찾아보세요! "
-            f"[서울 동물 지도 보기]({base_url}/animals)")
 
 
 def markdown_text(value: str) -> str:
@@ -74,8 +69,6 @@ def course_markdown(course: Course, base_url: str, facilities: list[dict]) -> st
         f"- ⬇️ GPX 다운로드: {base_url}/c/{cid}.gpx",
     ])
     lines.append("지도에서 통행·공사·날씨를 확인한 뒤 **러닝 시작**을 누르세요. 코스는 참고용이에요.")
-    lines.append("")
-    lines.append(atlas_line(base_url))
     return "\n".join(lines)
 
 
