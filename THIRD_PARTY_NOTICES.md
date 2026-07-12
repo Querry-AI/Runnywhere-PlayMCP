@@ -20,6 +20,7 @@ container and must be preserved when redistributing it.
 | jsonschema, referencing, rpds-py | MIT | https://github.com/python-jsonschema/jsonschema |
 | Click | BSD-3-Clause | https://github.com/pallets/click |
 | h11 | MIT | https://github.com/python-hyper/h11 |
+| Pretendard Variable 1.3.9 | SIL Open Font License 1.1 | https://github.com/orioncactus/pretendard |
 
 The `python:3.12-slim` base image and its Debian packages retain their respective
 upstream licences. A distributor of a built image should generate an SBOM and
@@ -28,3 +29,7 @@ retain the package licence files under the image's standard documentation paths.
 Data licences, including ODbL and KOGL attribution, are documented separately in
 `DATA_LICENSES.md`. Kakao Maps and Local APIs are network services governed by
 the Kakao Developers terms rather than bundled software.
+
+The self-hosted Pretendard font file is distributed with its licence text at
+`src/runart/assets/Pretendard-OFL.txt`. “Pretendard” is a Reserved Font Name
+under that licence.

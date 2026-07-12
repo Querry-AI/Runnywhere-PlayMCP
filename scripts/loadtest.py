@@ -9,16 +9,20 @@ animal/location combinations.
 """
 
 import asyncio
+import json
 import os
 import secrets
 import statistics
 import sys
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 URL = os.environ.get("RUNART_LOADTEST_URL", "http://localhost:8000/mcp")
+REPORT_PATH = os.environ.get("RUNART_LOADTEST_REPORT", "")
 SPOTS = ["시청", "강남역", "여의도한강공원", "석촌호수", "서울숲", "올림픽공원",
          "뚝섬한강공원", "홍대", "잠실", "왕십리"]
 SHAPES = [None, None, None, "whale", "cat", "dog"]  # ~50% GPS art
@@ -56,7 +60,11 @@ def _report(name: str, vals: list[float]):
     p99 = vals[int(len(vals) * 0.99)]
     print(f"  {name}: n={len(vals)} avg={avg:.0f}ms p50={vals[len(vals) // 2]:.0f}ms "
           f"p99={p99:.0f}ms max={vals[-1]:.0f}ms")
-    return avg, p99
+    return {
+        "name": name, "n": len(vals), "avg_ms": round(avg, 2),
+        "p50_ms": round(vals[len(vals) // 2], 2), "p99_ms": round(p99, 2),
+        "max_ms": round(vals[-1], 2),
+    }
 
 
 async def main():
@@ -70,13 +78,29 @@ async def main():
     wall = time.perf_counter() - t0
     all_vals = sorted(latencies["course"] + latencies["art"])
     print(f"n={len(all_vals)} conc={conc} wall={wall:.1f}s rps={len(all_vals) / wall:.1f}")
-    _report("일반 코스", latencies["course"])
-    _report("GPS 아트", latencies["art"])
+    course_report = _report("일반 코스", latencies["course"])
+    art_report = _report("GPS 아트", latencies["art"])
     avg = statistics.mean(all_vals)
     p99 = all_vals[int(len(all_vals) * 0.99)]
     print(f"전체: avg={avg:.0f}ms p99={p99:.0f}ms — "
           f"평균 100ms {'PASS' if avg <= 100 else 'FAIL'} / "
           f"p99 3000ms {'PASS' if p99 <= 3000 else 'FAIL'}")
+    if REPORT_PATH:
+        payload = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "endpoint": URL, "requests": len(all_vals), "concurrency": conc,
+            "wall_seconds": round(wall, 3), "rps": round(len(all_vals) / wall, 2),
+            "overall": {
+                "avg_ms": round(avg, 2), "p99_ms": round(p99, 2),
+                "avg_100ms_pass": avg <= 100, "p99_3000ms_pass": p99 <= 3000,
+            },
+            "groups": [report for report in (course_report, art_report) if report],
+        }
+        path = Path(REPORT_PATH)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8")
+        print(f"심사 증빙 저장: {path}")
 
 
 if __name__ == "__main__":

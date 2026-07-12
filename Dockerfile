@@ -10,7 +10,8 @@ COPY src ./src
 COPY data ./data
 
 RUN python -m pip install --no-cache-dir --upgrade pip==26.1.2 \
-    && pip install --no-cache-dir .
+    && pip install --no-cache-dir . \
+    && useradd --system --uid 10001 --home-dir /nonexistent --shell /usr/sbin/nologin runart
 
 ENV PORT=8000
 ENV HOST=0.0.0.0
@@ -19,4 +20,5 @@ ENV HOST=0.0.0.0
 # WEB_CONCURRENCY=1,
 # RUNART_POOL_WORKERS=2, and optional KAKAO_REST_API_KEY.
 EXPOSE 8000
+USER 10001:10001
 CMD ["python", "-m", "runart.server"]

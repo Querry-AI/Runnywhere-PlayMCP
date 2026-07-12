@@ -1,6 +1,8 @@
 """Tool-level tests: call the underlying functions the MCP tools wrap."""
 
-from runart import server
+import time
+
+from runart import geocode, server
 from runart.course import Course
 from runart.geocode import (
     _STATION_LOOKUP,
@@ -91,10 +93,46 @@ def test_location_error_does_not_ask_for_coordinates():
     assert "좌표" not in out
 
 
+def test_external_location_search_shares_one_wall_clock_deadline(monkeypatch):
+    monkeypatch.setenv("KAKAO_REST_API_KEY", "test-key")
+    seen = []
+
+    def slow_miss(location, deadline):
+        seen.append(deadline)
+        time.sleep(0.025)
+        return None
+
+    monkeypatch.setattr(geocode, "_run_keyword_search", slow_miss)
+    monkeypatch.setattr(geocode, "_run_address_search", slow_miss)
+    started = time.monotonic()
+    try:
+        geocode.resolve_location("새로운 임의 장소", None, None, timeout_s=0.015)
+    except Exception:
+        pass
+    assert time.monotonic() - started < 0.08
+    assert len(seen) <= 1
+
+
+def test_offloaded_tool_has_outer_three_second_response_cap(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(server, "MCP_OUTER_RESPONSE_BUDGET_S", 0.02)
+
+    @server.offloaded
+    def slow_tool():
+        time.sleep(0.08)
+        return "too late"
+
+    started = time.monotonic()
+    out = asyncio.run(slow_tool())
+    assert time.monotonic() - started < 0.07
+    assert out.startswith("⏱️") and "3초" in out
+
+
 def test_animal_request_surveys_verified_minimum_distances_first():
     out = server.generate_animal_course(**CITY_HALL)
-    # First try already renders the fastest-completing shape as a full course.
-    assert "가장 빨리 완성되는" in out
+    # First try already renders the best-fitting shape as a full course.
+    assert "요청 조건에 가장 잘 맞는" in out
     assert "## " in out and "/c/" in out
     # The choice list after the featured course keeps the survey order.
     survey = out[out.index("지금 선택할 수 있는"):]
@@ -102,7 +140,7 @@ def test_animal_request_surveys_verified_minimum_distances_first():
             < survey.index("고래") < survey.index("토끼"))
     assert "11km 이내" in out
     assert "추천" in out or "3초 안에" in out
-    assert "어떤 동물" in out or "다시 요청" in out
+    assert "다른 동물" in out or "다시 요청" in out
     assert "모양 완성도" not in out
     # No fixed promotional footer (PlayMCP ad-steering policy).
     assert "서울 동물 지도 보기" not in out
@@ -163,11 +201,13 @@ def test_animal_timeout_returns_actionable_guidance(monkeypatch):
     out = server.generate_animal_course(shape="whale", **CITY_HALL)
     # A verified nearby preset now wins before CPU generation, so a simulated
     # timeout is visible only when no preset fallback exists.
-    assert out.startswith(("⏱️", "✅"))
+    assert out.startswith(("⏱️", "✅", "🔎"))
     if out.startswith("⏱️"):
         assert "3초 안에" in out and "한 번 더 시도" in out
-    else:
+    elif out.startswith("✅"):
         assert "11km 이내 최상 코스" in out and "/c/" in out
+    else:
+        assert "이동해도 될까요?" in out and "/c/" in out
 
 
 def test_bounded_animal_generation_falls_back_when_pool_is_unavailable(monkeypatch):
@@ -196,7 +236,11 @@ def test_address_start_tries_exact_point_before_station_preset(monkeypatch):
     generation budget fails."""
     server._animal_recommendation_cache.clear()
 
+    calls = 0
+
     def timeout(*args, **kwargs):
+        nonlocal calls
+        calls += 1
         raise server._GenerationTimeout
 
     monkeypatch.setattr(server, "_offload", timeout)
@@ -205,17 +249,19 @@ def test_address_start_tries_exact_point_before_station_preset(monkeypatch):
     out = server.generate_animal_course(shape="dog", lat=37.5041, lon=127.0293)
     assert "검증 코스" in out
     assert "/c/" in out
+    repeated = server.generate_animal_course(shape="dog", lat=37.5041, lon=127.0293)
+    assert "검증 코스" in repeated and "이동" in repeated
+    assert calls == 1
 
 
-def test_no_animal_course_falls_back_to_general_course(monkeypatch):
+def test_no_animal_course_offers_relocation_not_general_course(monkeypatch):
     server._animal_recommendation_cache.clear()
     monkeypatch.setattr(server, "get_animal_preset", lambda p: None)
     monkeypatch.setattr(server, "find_nearest_animal_preset", lambda p: None)
     out = server.generate_animal_course(shape="whale", **CITY_HALL)
-    assert "동물 코스가 검색되지 않았어요" in out
-    assert "러닝 코스" in out and "/c/" in out
-    assert "강남" in out and "잠실" in out
-    assert "서울 동물 지도 보기" not in out
+    assert "일반 코스만 가능해요" in out
+    assert "이동해도 될까요?" in out and "/c/" in out
+    assert "일반 코스를 추천해요" not in out
 
 
 def test_shape_token_recreates_shape():
@@ -274,12 +320,15 @@ def test_mcp_tools_match_playmcp_required_annotations():
     }
     assert len(names) == len(set(names))
     assert 3 <= len(names) <= 10
+    open_world_tools = {
+        "generate_running_course", "generate_animal_course", "refine_course",
+    }
     for tool in tools:
         assert 1 <= len(tool.name) <= 128
         assert all(c.isascii() and (c.isalnum() or c in "_-") for c in tool.name)
         assert tool.inputSchema
         assert tool.annotations.title
-        assert tool.annotations.openWorldHint is False
+        assert tool.annotations.openWorldHint is (tool.name in open_world_tools)
         assert tool.annotations.idempotentHint is True
 
 
@@ -305,3 +354,145 @@ def test_http_middleware_adds_security_headers():
     assert headers[b"x-content-type-options"] == b"nosniff"
     assert headers[b"x-frame-options"] == b"DENY"
     assert b"frame-ancestors 'none'" in headers[b"content-security-policy"]
+
+
+def test_rate_limit_rejects_burst_but_health_remains_available():
+    import asyncio
+
+    calls = 0
+
+    async def inner(scope, receive, send):
+        nonlocal calls
+        calls += 1
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    middleware = server._TokenBucketMiddleware(inner, rps=1)
+
+    async def request(path):
+        messages = []
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+        async def send(message):
+            messages.append(message)
+        await middleware({"type": "http", "path": path,
+                          "client": ("203.0.113.1", 1), "headers": []},
+                         receive, send)
+        return messages[0]["status"]
+
+    async def scenario():
+        assert await request("/") == 200
+        assert await request("/") == 200
+        assert await request("/") == 429
+        # Readiness is deliberately outside the public request bucket.
+        assert await request("/healthz") == 200
+
+    asyncio.run(scenario())
+    assert calls == 3
+
+
+def test_mcp_request_body_limit_rejects_declared_and_chunked_oversize():
+    import asyncio
+
+    calls = 0
+
+    async def inner(scope, receive, send):
+        nonlocal calls
+        calls += 1
+        while True:
+            message = await receive()
+            if not message.get("more_body"):
+                break
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    middleware = server._TokenBucketMiddleware(inner, max_body_bytes=8)
+
+    async def request(headers, chunks):
+        messages = []
+        pending = list(chunks)
+        async def receive():
+            return pending.pop(0)
+        async def send(message):
+            messages.append(message)
+        await middleware({"type": "http", "path": "/mcp",
+                          "client": ("203.0.113.2", 1), "headers": headers},
+                         receive, send)
+        return messages[0]["status"]
+
+    async def scenario():
+        assert await request([(b"content-length", b"9")], []) == 413
+        assert await request([], [
+            {"type": "http.request", "body": b"12345", "more_body": True},
+            {"type": "http.request", "body": b"6789", "more_body": False},
+        ]) == 413
+
+    asyncio.run(scenario())
+    assert calls == 1  # declared oversize is rejected before reaching the app
+
+
+def test_mcp_concurrency_limit_fails_fast_and_recovers():
+    import asyncio
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def inner(scope, receive, send):
+        entered.set()
+        await release.wait()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    middleware = server._TokenBucketMiddleware(
+        inner, rps=100, max_concurrent_mcp=1)
+
+    async def request(client):
+        messages = []
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+        async def send(message):
+            messages.append(message)
+        await middleware({"type": "http", "path": "/mcp",
+                          "client": (client, 1), "headers": []},
+                         receive, send)
+        return messages[0]["status"]
+
+    async def scenario():
+        first = asyncio.create_task(request("203.0.113.3"))
+        await entered.wait()
+        assert await request("203.0.113.4") == 429
+        release.set()
+        assert await first == 200
+        assert await request("203.0.113.4") == 200
+
+    asyncio.run(scenario())
+
+
+def test_representative_tool_responses_stay_below_playmcp_24k_limit():
+    """PlayMCP rejects tool text above 24k; keep headroom for framing."""
+    from runart.models import CourseParams, encode_course_id
+
+    params = CourseParams(lat=37.5665, lon=126.9780,
+                          location_name="시청", distance_km=5.0)
+    cid = encode_course_id(params)
+    animal_params = params.model_copy(update={"shape": "whale"})
+    animal_cid = encode_course_id(animal_params)
+    outputs = [
+        server.generate_running_course(location="시청", distance_km=5),
+        server.generate_animal_course(location="시청"),
+        server.list_available_shapes(),
+        server.find_facilities_near_course(cid),
+        server.refine_course(cid, night_mode=True),
+        server.get_course_status(cid),
+        server.record_animal_completion(animal_cid),
+        server.extend_shape_relay(animal_cid),
+    ]
+    for output in outputs:
+        assert len(output.encode("utf-8")) < 24_000
+
+
+def test_container_runs_as_non_root_user():
+    from pathlib import Path
+
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    assert "USER 10001:10001" in dockerfile

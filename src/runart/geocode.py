@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -157,6 +158,16 @@ _SEARCH_CACHE: dict[tuple[str, str], tuple[float, float, str]] = {}
 _SEARCH_CACHE_MAX = 2048
 
 
+def _deadline_after(timeout_s: float | None) -> float | None:
+    return None if timeout_s is None else time.monotonic() + max(0.01, timeout_s)
+
+
+def _remaining(deadline: float | None) -> float | None:
+    if deadline is None:
+        return None
+    return max(0.0, deadline - time.monotonic())
+
+
 def _cache_get(kind: str, query: str):
     return _SEARCH_CACHE.get((kind, query))
 
@@ -167,7 +178,8 @@ def _cache_ok(kind: str, query: str, hit: tuple[float, float, str]) -> None:
     _SEARCH_CACHE[(kind, query)] = hit
 
 
-def _kakao_get(url: str, params: dict) -> list[dict]:
+def _kakao_get(url: str, params: dict,
+               deadline: float | None = None) -> list[dict]:
     """One Kakao Local API call with a single retry on transient failure.
     The key is read here and never leaves this function."""
     key = os.environ.get("KAKAO_REST_API_KEY")
@@ -180,10 +192,14 @@ def _kakao_get(url: str, params: dict) -> list[dict]:
         f"{url}?{urllib.parse.urlencode(params)}",
         headers={"Authorization": f"KakaoAK {key}"})
     for attempt in (0, 1):
+        remaining = _remaining(deadline)
+        if remaining is not None and remaining <= 0.02:
+            return []
+        request_timeout = min(_TIMEOUT_S, remaining) if remaining is not None else _TIMEOUT_S
         try:
             # URL scheme and host are allowlisted immediately above.
             with urllib.request.urlopen(  # nosec B310
-                    req, timeout=_TIMEOUT_S, context=_SSL_CTX) as r:
+                    req, timeout=max(0.02, request_timeout), context=_SSL_CTX) as r:
                 return json.load(r).get("documents", [])
         except urllib.error.HTTPError as exc:
             # Authentication/product errors cannot recover on retry. Distinguish
@@ -209,14 +225,15 @@ def _kakao_get(url: str, params: dict) -> list[dict]:
     return []
 
 
-def _keyword_search(query: str) -> tuple[float, float, str] | None:
+def _keyword_search(query: str, deadline: float | None = None
+                    ) -> tuple[float, float, str] | None:
     """Kakao Local keyword search, restricted to Seoul via `rect`."""
     hit = _cache_get("kw", query)
     if hit:
         return hit
     docs = _kakao_get(_LOCAL_SEARCH_URL, {
         "query": query, "size": 5, "rect": _SEOUL_RECT,
-    })
+    }, deadline)
     for doc in docs:
         lat, lon = float(doc["y"]), float(doc["x"])
         if _in_seoul(lat, lon):
@@ -226,7 +243,8 @@ def _keyword_search(query: str) -> tuple[float, float, str] | None:
     return None
 
 
-def _address_search(query: str) -> tuple[float, float, str] | None:
+def _address_search(query: str, deadline: float | None = None
+                    ) -> tuple[float, float, str] | None:
     """Kakao Local address search for user-entered current/home addresses.
 
     analyze_type=similar lets partial inputs like '관철동 7-14' (no 구/시)
@@ -238,7 +256,7 @@ def _address_search(query: str) -> tuple[float, float, str] | None:
         return hit
     docs = _kakao_get(_ADDRESS_SEARCH_URL, {
         "query": query, "size": 5, "analyze_type": "similar",
-    })
+    }, deadline)
     for doc in docs:
         lat, lon = float(doc["y"]), float(doc["x"])
         if _in_seoul(lat, lon):
@@ -309,20 +327,27 @@ def _address_query_variants(query: str) -> list[str]:
     return out
 
 
-def _run_keyword_search(location: str) -> tuple[float, float, str] | None:
-    return _keyword_search(location.strip())
+def _run_keyword_search(location: str, deadline: float | None = None
+                        ) -> tuple[float, float, str] | None:
+    return _keyword_search(location.strip(), deadline)
 
 
-def _run_address_search(location: str) -> tuple[float, float, str] | None:
+def _run_address_search(location: str, deadline: float | None = None
+                        ) -> tuple[float, float, str] | None:
     for query in _address_query_variants(location):
-        hit = _address_search(query)
+        remaining = _remaining(deadline)
+        if remaining is not None and remaining <= 0.02:
+            return None
+        hit = _address_search(query, deadline)
         if hit:
             return hit
     return None
 
 
 def resolve_location(location: str | None, lat: float | None, lon: float | None,
+                     timeout_s: float | None = None
                      ) -> tuple[float, float, str]:
+    deadline = _deadline_after(timeout_s)
     if lat is not None and lon is not None:
         if not _in_seoul(lat, lon):
             raise CourseError("서울 지역 좌표만 지원해요. 서울 시내 위치로 다시 알려주세요.")
@@ -347,7 +372,10 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
             else [_run_keyword_search, _run_address_search]
         )
         for search in searches:
-            hit = search(location)
+            remaining = _remaining(deadline)
+            if remaining is not None and remaining <= 0.02:
+                break
+            hit = search(location, deadline)
             if hit:
                 return hit
         # ④ fuzzy gazetteer LAST, and only for short place-like queries.

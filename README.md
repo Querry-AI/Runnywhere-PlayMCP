@@ -14,7 +14,16 @@ pytest                            # 테스트 (시나리오 수용 테스트 포
 python scripts/loadtest.py 1000 10 # 콜드 미스 포함 부하 테스트 (평균 100ms / p99 3s)
 ```
 
-환경변수: `HOST`(로컬 기본 127.0.0.1, 컨테이너 0.0.0.0) · `PORT`(기본 8000) · `RUNART_BASE_URL`(미리보기 링크 도메인) · `KAKAO_JAVASCRIPT_KEY`(카카오맵 Web API, 필수) · `KAKAO_REST_API_KEY`(지오코딩, 선택) · `RUNART_TOKEN_SECRET`(32자 이상 도감·릴레이 토큰 서명키, 운영 환경 필수) · `RUNART_LEGAL_CONTACT`(정책 문의 이메일, 공개 배포 시 필수) · `WEB_CONCURRENCY`(웹 워커 수, 기본 1) · `RUNART_POOL_WORKERS`(코스 탐색 프로세스 수, 기본 2) · `RATE_LIMIT_RPS`(IP당, 기본 20) · `RUNART_ETL_LOCAL_ONLY=1`(기존 OSM 속성은 보존하고 로컬 경사도/신호등/가로등만 재반영)
+PlayMCP 심사 증빙용 JSON 보고서는 다음과 같이 저장한다.
+
+```bash
+RUNART_LOADTEST_REPORT=artifacts/playmcp-loadtest.json python scripts/loadtest.py 1000 10
+```
+
+주소 검색, 재시도, 코스 생성을 포함한 MCP Tool 전체 응답에는 2.85초 상한을
+적용하며, 내부 코스 생성과 외부 지오코딩도 더 짧은 같은 데드라인을 공유한다.
+
+환경변수: `HOST`(로컬 기본 127.0.0.1, 컨테이너 0.0.0.0) · `PORT`(기본 8000) · `RUNART_BASE_URL`(미리보기 링크 도메인) · `KAKAO_JAVASCRIPT_KEY`(카카오맵 Web API, 필수) · `KAKAO_REST_API_KEY`(지오코딩, 선택) · `RUNART_TOKEN_SECRET`(32자 이상 도감·릴레이 토큰 서명키, 운영 환경 필수) · `RUNART_LEGAL_CONTACT`(정책 문의 이메일, 공개 배포 시 필수) · `WEB_CONCURRENCY`(웹 워커 수, 기본 1) · `RUNART_POOL_WORKERS`(코스 탐색 프로세스 수, 기본 2) · `RATE_LIMIT_RPS`(IP당, 기본 20) · `RUNART_MAX_BODY_BYTES`(MCP 요청 본문, 기본 65,536) · `RUNART_MAX_CONCURRENT_MCP`(동시 MCP HTTP 요청, 기본 16) · `RUNART_ETL_LOCAL_ONLY=1`(기존 OSM 속성은 보존하고 로컬 경사도/신호등/가로등만 재반영)
 
 실그래프(`data/seoul_graph.pkl`)가 없으면 **서울 시청 일대 데모 그리드**로 구동된다(전체 파이프라인 동작 확인용). 공모전 제출 전 반드시 ETL 실행:
 

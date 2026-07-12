@@ -57,6 +57,11 @@ def test_preview_uses_kakao_maps_without_leaflet():
     assert "Leaflet" not in page and "leaflet" not in page
     assert "basemaps.cartocdn.com" not in page
     assert "© OpenStreetMap contributors" in page
+    assert "PretendardVariable.woff2" in page
+    assert "mobile-dock" in page
+    assert "prefers-reduced-motion" in page
+    assert "동물 실루엣" not in page  # plain courses use the neutral label
+    assert "코스 라인" in page
 
 
 def test_preview_explains_missing_kakao_javascript_key():

@@ -303,6 +303,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
         for f in facilities
     ])
     highlights = html.escape(" · ".join(course.rfs.get("highlights", [])))
+    shape_view_label = "동물 실루엣" if shape else "코스 라인"
     kakao_key = html.escape(kakao_javascript_key, quote=True)
     map_sdk = (
         f'<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={kakao_key}'
@@ -318,40 +319,43 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
 <meta property="og:type" content="website">
 {map_sdk}
 <style>
- body{{margin:0;font-family:-apple-system,'Apple SD Gothic Neo',sans-serif;color:#17201b;background:#f5f7f3}}
- .brand{{height:54px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;
+ @font-face{{font-family:'Pretendard Variable';font-style:normal;font-weight:45 920;font-display:swap;src:url('/assets/PretendardVariable.woff2') format('woff2-variations')}}
+ *{{box-sizing:border-box}}
+ body{{margin:0;font-family:'Pretendard Variable',Pretendard,-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo',sans-serif;color:#17201b;background:#f4f7f4;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}}
+ .brand{{height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 22px;
       background:#fff;border-bottom:1px solid #e2e7df;box-sizing:border-box}}
- .brand strong{{font-size:18px;color:#142018}}
+ .brand strong{{font-size:18px;color:#142018;letter-spacing:-.03em}}
  .brand span{{font-size:12px;color:#66726a}}
- #map{{height:58vh;min-height:380px;background:#e8ece5}}
+ #map{{height:62vh;min-height:460px;background:#e8ece5}}
  .map-error{{height:100%;display:flex;align-items:center;justify-content:center;padding:24px;
       box-sizing:border-box;text-align:center;color:#536057;font-size:14px;background:#eef2ec}}
  .map-hud{{position:absolute;z-index:500;left:14px;right:14px;top:14px;display:flex;gap:8px;flex-wrap:wrap;pointer-events:none}}
- .pill{{background:rgba(255,255,255,.94);border:1px solid rgba(20,35,25,.08);border-radius:8px;
-      padding:8px 10px;font-size:13px;font-weight:700;box-shadow:0 4px 18px rgba(0,0,0,.08)}}
+ .pill{{background:rgba(255,255,255,.94);border:1px solid rgba(20,35,25,.08);border-radius:10px;
+      padding:9px 11px;font-size:13px;font-weight:720;box-shadow:0 4px 18px rgba(0,0,0,.08);backdrop-filter:blur(8px)}}
  .run-panel{{position:absolute;z-index:520;left:14px;right:14px;bottom:16px;display:flex;gap:8px;align-items:center;pointer-events:none}}
- .run-panel button,.run-status{{pointer-events:auto;border-radius:8px;box-shadow:0 4px 18px rgba(0,0,0,.14)}}
- .run-panel button{{border:0;background:#142018;color:#fff;padding:11px 14px;font-size:14px;font-weight:800}}
+ .run-panel button,.run-status{{pointer-events:auto;border-radius:12px;box-shadow:0 4px 18px rgba(0,0,0,.14)}}
+ .run-panel button{{min-height:48px;border:0;background:#142018;color:#fff;padding:0 16px;font-size:14px;font-weight:800;font-family:inherit}}
  .run-panel button:disabled{{background:#6f7972;cursor:not-allowed}}
  .run-panel button.on{{background:#0a7d43}}
  .run-status{{background:rgba(255,255,255,.96);border:1px solid rgba(20,35,25,.08);padding:10px 12px;
       color:#243028;font-size:13px;font-weight:700;line-height:1.35;min-width:128px}}
- .view-toggle{{position:absolute;z-index:530;right:14px;top:62px;display:flex;background:rgba(255,255,255,.96);
-      border:1px solid rgba(20,35,25,.1);border-radius:8px;box-shadow:0 4px 18px rgba(0,0,0,.1);overflow:hidden}}
- .view-toggle button{{border:0;background:transparent;color:#4b5a50;padding:9px 11px;font-size:12px;font-weight:800}}
+ .view-toggle{{position:absolute;z-index:530;right:14px;top:66px;display:flex;background:rgba(255,255,255,.96);
+      border:1px solid rgba(20,35,25,.1);border-radius:12px;box-shadow:0 4px 18px rgba(0,0,0,.1);overflow:hidden}}
+ .view-toggle button{{min-height:48px;border:0;background:transparent;color:#4b5a50;padding:0 13px;font-size:12px;font-weight:800;font-family:inherit}}
  .view-toggle button.active{{background:#142018;color:#fff}}
  body.shape-only .map-hud,body.shape-only .run-panel{{display:none}}
- .wrap{{padding:16px;max-width:760px;margin:0 auto}}
- .card,.panel{{background:#fff;border:1px solid #e2e7df;border-radius:8px;padding:16px;margin:0 0 12px}}
- h2{{margin:0 0 10px;font-size:22px;letter-spacing:0}}
- h3{{margin:0 0 12px;font-size:16px;letter-spacing:0}}
+ .wrap{{padding:22px;max-width:1040px;margin:0 auto;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}}
+ .card,.panel{{background:#fff;border:1px solid #dfe7e1;border-radius:18px;padding:22px;margin:0;box-shadow:0 12px 34px rgba(20,45,30,.045)}}
+ .course-summary{{grid-column:1/-1}}
+ h2{{margin:0 0 12px;font-size:26px;line-height:1.28;letter-spacing:-.035em}}
+ h3{{margin:0 0 12px;font-size:17px;letter-spacing:-.02em}}
  .stat{{color:#3d473f;line-height:1.65;font-size:15px}}
  .score{{font-size:1.35em;font-weight:800;color:#0a7d43}}
  .legend{{font-size:12px;color:#6b746d;margin:10px 0 0}}
- .btn{{display:inline-block;margin:6px 8px 0 0;padding:10px 13px;border-radius:8px;
+ .btn{{display:inline-flex;align-items:center;justify-content:center;min-height:48px;margin:6px 8px 0 0;padding:0 16px;border-radius:12px;
       background:#142018;color:#fff;text-decoration:none;font-size:14px;font-weight:700}}
  button.btn{{border:0;cursor:pointer;font-family:inherit;background:#0a7d43}}
- .actions{{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}}
+ .actions{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:16px}}
  .actions .btn{{margin:0}}
  details.panel summary{{cursor:pointer;font-size:15px;font-weight:800;color:#344238}}
  details.panel[open] summary{{margin-bottom:10px}}
@@ -360,13 +364,13 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .bar{{height:8px;background:#e8ede6;border-radius:999px;overflow:hidden}}
  .bar i{{display:block;height:100%;background:#2da85f;border-radius:999px}}
  .facts{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}}
- .fact{{border:1px solid #e1e7dd;background:#f7faf5;border-radius:8px;padding:10px;min-width:0}}
+ .fact{{border:1px solid #e1e7dd;background:#f7faf5;border-radius:12px;padding:12px;min-width:0}}
  .fact b{{display:block;font-size:18px;color:#142018;margin-bottom:3px;word-break:keep-all}}
  .fact span{{font-size:12px;color:#66726a}}
  .hint{{font-size:12px;color:#7b857d;margin:10px 0 0}}
  .steps{{margin:8px 0 0;padding-left:20px;color:#3d473f;line-height:1.65;font-size:14px}}
  .facility-list{{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}}
- .chip{{border:1px solid #dce3d8;background:#f7faf5;border-radius:999px;padding:5px 8px;font-size:12px;color:#344238}}
+ .chip{{border:1px solid #dce3d8;background:#f7faf5;border-radius:999px;padding:7px 10px;font-size:12px;color:#344238}}
  .km-marker{{background:#fff;border:2px solid #111;border-radius:999px;width:24px;height:24px;line-height:20px;
       text-align:center;font-size:11px;font-weight:800;box-shadow:0 2px 8px rgba(0,0,0,.2)}}
  .dir-marker span{{display:block;color:#142018;font-size:20px;text-shadow:0 0 3px #fff,0 1px 4px rgba(0,0,0,.2)}}
@@ -384,11 +388,18 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .poi-pop b{{display:block;font-size:13px;color:#142018;margin-bottom:2px;white-space:nowrap;
       overflow:hidden;text-overflow:ellipsis}}
  .poi-pop span{{font-size:12px;color:#5c675e;line-height:1.4;word-break:keep-all}}
- footer{{color:#7b857d;font-size:12px;padding:8px 20px 20px;text-align:center}}
+ .mobile-dock{{display:none}}
+ footer{{color:#7b857d;font-size:12px;padding:8px 20px 28px;text-align:center}}
  footer a{{color:inherit}}
- @media (max-width:560px){{.brand span{{font-size:11px}} .facts{{grid-template-columns:repeat(2,1fr)}}
-      #map{{height:54vh;min-height:320px}} .actions{{display:grid;grid-template-columns:1fr 1fr}}
-      .actions .btn{{text-align:center;padding:12px 8px}}}}
+ @media (max-width:760px){{.brand{{height:58px;padding:0 16px}}.brand span{{font-size:11px}} .facts{{grid-template-columns:repeat(2,1fr)}}
+      #map{{height:58svh;min-height:390px}}.map-hud{{left:10px;right:10px;top:10px;gap:6px}}.pill{{font-size:12px;padding:8px 9px}}
+      .view-toggle{{right:10px;top:60px}}.run-panel{{left:10px;right:10px;bottom:12px}}
+      .wrap{{display:block;padding:16px 16px 104px}}.card,.panel{{padding:18px;margin-bottom:12px;border-radius:16px}}h2{{font-size:23px}}
+      .actions{{grid-template-columns:1fr 1fr}}.actions .btn{{padding:0 8px;text-align:center}}
+      .mobile-dock{{position:fixed;z-index:950;display:grid;grid-template-columns:1fr 1.15fr;gap:8px;left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));padding:8px;background:rgba(255,255,255,.94);border:1px solid rgba(20,35,25,.1);border-radius:18px;box-shadow:0 16px 45px rgba(10,28,19,.24);backdrop-filter:blur(14px)}}
+      .mobile-dock a,.mobile-dock button{{display:flex;min-height:50px;align-items:center;justify-content:center;border:0;border-radius:12px;font-size:14px;font-weight:750;font-family:inherit;text-decoration:none}}.mobile-dock a{{background:#edf5f0;color:#142018}}.mobile-dock button{{background:#087b59;color:#fff}}.mobile-dock button:disabled{{background:#85928b}}
+      footer{{padding-bottom:112px}}}}
+ @media(prefers-reduced-motion:reduce){{*{{scroll-behavior:auto!important;animation-duration:.001ms!important;transition-duration:.001ms!important}}}}
 </style></head><body>
 <header class="brand"><strong>Runnywhere · 러니웨어</strong><span>어디서든 러닝 코스 짜기!</span></header>
 <div id="map"><div class="map-hud">
@@ -400,11 +411,11 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  <button id="runStart" type="button">내 위치 보기</button>
  <div id="runStatus" class="run-status" role="status" aria-live="polite">GPS 안내 대기</div>
 </div><div class="view-toggle" aria-label="지도 보기 전환">
- <button id="shapeView" type="button">코스만</button>
- <button id="guideView" type="button" class="active">안내 포함</button>
+ <button id="shapeView" type="button">{shape_view_label}</button>
+ <button id="guideView" type="button" class="active">러닝 안내</button>
 </div></div>
 <div class="wrap">
-<div class="card">
+<div class="card course-summary">
  <h2>{title}</h2>
  <div class="stat">
   <span class="score">러닝 친화도 {course.rfs["score"]}/100</span>
@@ -438,6 +449,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  </div>
 </section>
 </div>
+<div class="mobile-dock"><a href="{base_url}/c/{cid}.gpx">GPX 받기</a><button id="mobileRunStart" type="button">내 위치로 안내</button></div>
 <footer>러니웨어 · 배경 지도: Kakao Maps · 경로 데이터
 <a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors · ODbL</a> · NASA SRTM · 서울시 공공데이터<br>
 GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이용·안전</a> · <a href="/privacy">개인정보</a> · <a href="/data-licenses">데이터 출처</a></footer>
@@ -458,9 +470,12 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
        .catch(() => window.prompt('아래 링크를 복사하세요', url));
    else window.prompt('아래 링크를 복사하세요', url);
  }});
+ const mobileStartBtn = document.getElementById('mobileRunStart');
  const mapNode = document.getElementById('map');
  if (!window.kakao || !kakao.maps) {{
    mapNode.innerHTML = '<div class="map-error">카카오맵을 불러오지 못했습니다.<br>KAKAO_JAVASCRIPT_KEY와 등록 도메인을 확인해 주세요.</div>';
+   mobileStartBtn.disabled = true;
+   mobileStartBtn.textContent = '지도 연결 필요';
  }} else kakao.maps.load(() => {{
  const startPos = segs.length
    ? new kakao.maps.LatLng(segs[0][0], segs[0][1])
@@ -494,8 +509,22 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    addPolyline([new kakao.maps.LatLng(a,b),new kakao.maps.LatLng(c,d)],
      {{strokeColor:color(s),strokeWeight:5,strokeOpacity:.92}},routeLayers);
  const shapePath = shapeRoute.map(([lat, lon]) => new kakao.maps.LatLng(lat, lon));
- addPolyline(shapePath, {{strokeColor:'#ffffff',strokeWeight:13,strokeOpacity:.72}}, shapeLayers, false);
- addPolyline(shapePath, {{strokeColor:'#18a558',strokeWeight:8,strokeOpacity:.92}}, shapeLayers, false);
+ const shapeHalo = addPolyline(shapePath, {{strokeColor:'#ffffff',strokeWeight:13,strokeOpacity:.72}}, shapeLayers, false);
+ const shapeLine = addPolyline(shapePath, {{strokeColor:'#18a558',strokeWeight:8,strokeOpacity:.92}}, shapeLayers, false);
+ const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+ const animateShape = () => {{
+   if (reduceMotion || shapePath.length < 24) {{ shapeHalo.setPath(shapePath); shapeLine.setPath(shapePath); return; }}
+   let shown = 2;
+   shapeHalo.setPath(shapePath.slice(0, shown));
+   shapeLine.setPath(shapePath.slice(0, shown));
+   const step = () => {{
+     shown = Math.min(shapePath.length, shown + Math.max(2, Math.ceil(shapePath.length / 52)));
+     const partial = shapePath.slice(0, shown);
+     shapeHalo.setPath(partial); shapeLine.setPath(partial);
+     if (shown < shapePath.length) requestAnimationFrame(step);
+   }};
+   requestAnimationFrame(step);
+ }};
  const bounds = new kakao.maps.LatLngBounds();
  routePath.forEach(pos => bounds.extend(pos));
  if (routePath.length) map.setBounds(bounds, 42, 42, 42, 42);
@@ -566,6 +595,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      setLayers(routeLayers, false);
      setLayers(guideLayers, false);
      setLayers(shapeLayers, true);
+     animateShape();
    }} else {{
      setLayers(shapeLayers, false);
      setLayers(routeLayers, true);
@@ -604,6 +634,11 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    return best;
  }};
  const setStatus = text => runStatus.textContent = text;
+ const syncStartButtons = () => {{
+   mobileStartBtn.textContent = startBtn.textContent === '추적 중지' ? '추적 중지' : '내 위치로 안내';
+   mobileStartBtn.disabled = startBtn.disabled;
+ }};
+ mobileStartBtn.addEventListener('click', () => startBtn.click());
  const updatePosition = pos => {{
    const lat = pos.coords.latitude;
    const lon = pos.coords.longitude;
@@ -633,6 +668,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    setStatus(msg);
    startBtn.classList.remove('on');
    startBtn.textContent = '다시 시도';
+   syncStartButtons();
    watchId = null;
  }};
  startBtn.addEventListener('click', () => {{
@@ -649,12 +685,14 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      watchId = null;
      startBtn.classList.remove('on');
      startBtn.textContent = '내 위치 보기';
+     syncStartButtons();
      setStatus('GPS 안내 중지');
      return;
    }}
    setStatus('GPS 위치 확인 중');
    startBtn.classList.add('on');
    startBtn.textContent = '추적 중지';
+   syncStartButtons();
    watchId = navigator.geolocation.watchPosition(updatePosition, locationError, {{
      enableHighAccuracy:true, maximumAge:3000, timeout:12000
    }});
@@ -663,6 +701,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    startBtn.disabled = true;
    setStatus(!window.isSecureContext ? 'HTTPS 연결에서 위치 기능을 사용할 수 있어요' : '이 브라우저는 위치 기능을 지원하지 않아요');
  }}
+ syncStartButtons();
  }});
 </script></body></html>"""
 

@@ -89,6 +89,10 @@ def test_atlas_uses_kakao_map_sdk():
     assert "kakao.maps.load(bootAtlasMap)" in page
     assert "new kakao.maps.Map" in page
     assert "baseUrl=\"https://runnywhere.example\"" in page
+    assert "mapBuckets" in page
+    assert "atlas-detail" in page and "sheetHandle" in page
+    assert "mapNode.replaceChildren()" in page
+    assert "prefers-reduced-motion" in page
 
 
 def test_atlas_explains_missing_kakao_key():

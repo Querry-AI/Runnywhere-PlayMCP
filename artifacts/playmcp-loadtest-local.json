@@ -1,0 +1,32 @@
+{
+  "generated_at": "2026-07-11T08:10:36.365987+00:00",
+  "endpoint": "http://127.0.0.1:8003/mcp",
+  "requests": 80,
+  "concurrency": 5,
+  "wall_seconds": 0.994,
+  "rps": 80.46,
+  "overall": {
+    "avg_ms": 31.72,
+    "p99_ms": 810.53,
+    "avg_100ms_pass": true,
+    "p99_3000ms_pass": true
+  },
+  "groups": [
+    {
+      "name": "일반 코스",
+      "n": 42,
+      "avg_ms": 30.51,
+      "p50_ms": 11.25,
+      "p99_ms": 204.24,
+      "max_ms": 204.24
+    },
+    {
+      "name": "GPS 아트",
+      "n": 38,
+      "avg_ms": 33.05,
+      "p50_ms": 9.24,
+      "p99_ms": 810.53,
+      "max_ms": 810.53
+    }
+  ]
+}

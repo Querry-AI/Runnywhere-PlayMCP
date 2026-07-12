@@ -162,8 +162,8 @@ def decode_relay(token: str) -> dict:
 def _page(title: str, body: str) -> str:
     return f"""<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\">
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{html.escape(title)}</title>
-<style>:root{{--ink:#151b1e;--muted:#677176;--line:#e4e8e9;--paper:#fff;--card:#fff;--green:#08735a;--soft:#edf6f2;--navy:#17333d;--warm:#f6f5f1}}
-*{{box-sizing:border-box}}html{{font-size:16px}}body{{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,'Pretendard Variable',Pretendard,'Noto Sans KR','Apple SD Gothic Neo',sans-serif;letter-spacing:-.012em;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased}}
+<style>@font-face{{font-family:'Pretendard Variable';font-style:normal;font-weight:45 920;font-display:swap;src:url('/assets/PretendardVariable.woff2') format('woff2-variations')}}:root{{--ink:#151b1e;--muted:#677176;--line:#e4e8e9;--paper:#fff;--card:#fff;--green:#08735a;--soft:#edf6f2;--navy:#17333d;--warm:#f6f5f1}}
+*{{box-sizing:border-box}}html{{font-size:16px}}body{{margin:0;background:var(--paper);color:var(--ink);font-family:'Pretendard Variable',Pretendard,-apple-system,BlinkMacSystemFont,'Noto Sans KR','Apple SD Gothic Neo',sans-serif;letter-spacing:-.012em;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}}
 .wrap{{max-width:1160px;margin:auto;padding:0 32px 80px}}header{{height:76px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);margin-bottom:64px}}
 .brand{{font-weight:760;letter-spacing:-.035em;font-size:18px}}.brand:before{{content:'';display:inline-block;width:10px;height:10px;border:3px solid var(--green);border-radius:50%;margin-right:9px;vertical-align:1px}}nav{{display:flex;gap:28px}}nav a{{color:#535d62;text-decoration:none;font-size:14px;font-weight:520}}nav a:hover{{color:var(--green)}}
 .eyebrow{{color:var(--green);font-weight:680;font-size:13px;letter-spacing:.01em;margin-bottom:14px}}.pill{{display:inline-block;background:var(--soft);color:var(--green);padding:5px 9px;border-radius:5px;font-weight:650;font-size:12px}}
@@ -235,7 +235,9 @@ def atlas_html(base_url: str, kakao_key: str) -> str:
               "emoji": SHAPES[c.params.shape].emoji, "name": c.params.location_name,
               "km": round(c.length_km, 1), "cid": encode_course_id(c.params)} for c in courses]
     data = json.dumps(items, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
-    buttons = "".join(f'<button data-shape="{k}">{s.emoji} {s.name_ko}</button>' for k, s in SHAPES.items())
+    buttons = "".join(
+        f'<button type="button" data-shape="{k}" aria-pressed="false">'
+        f'<span>{s.emoji}</span> {s.name_ko}</button>' for k, s in SHAPES.items())
     js_base = json.dumps(base_url, ensure_ascii=False)
     safe_key = html.escape(kakao_key, quote=True)
     map_sdk = (
@@ -244,67 +246,68 @@ def atlas_html(base_url: str, kakao_key: str) -> str:
     )
     stations = sorted({c.params.location_name for c in courses if c.params.location_name})
     station_options = "".join(f'<option value="{html.escape(name)}">' for name in stations)
-    body = f"""<section class=\"hero\"><div class=\"eyebrow\">러니웨어 동물 GPS 아트</div><h1>검증된 동물 코스를<br>지도에서 찾아보세요.</h1>
-<p>러니웨어의 맞춤 러닝 기능 중 GPS 아트를 더 쉽게 찾기 위한 탐험 지도입니다. 서울 역 주변에서 검증된 {len(courses)}개 코스를 동물별·역별로 확인할 수 있어요. 마커를 누르면 코스 모양이 지도 위에 그려집니다.</p></section>
-<style>#map{{height:58vh;min-height:430px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#edf1ec}}.map-message{{height:100%;display:flex;align-items:center;justify-content:center;padding:22px}}.map-message .card{{max-width:460px;margin:0}}.filters{{display:flex;gap:8px;overflow:auto;margin:14px 0 8px}}button{{border:1px solid var(--line);background:white;padding:9px 12px;border-radius:7px;font-weight:650;white-space:nowrap}}button.on{{background:var(--green);border-color:var(--green);color:white}}button:disabled{{opacity:.45}}.dot{{font-size:23px;filter:drop-shadow(0 3px 4px #0004);cursor:pointer;background:none;border:0;padding:0}}
-.station-filter{{display:flex;gap:8px;margin:0 0 14px}}.station-filter input{{flex:1;max-width:340px;border:1px solid var(--line);border-radius:7px;padding:9px 12px;font-size:14px;font-family:inherit}}
-.atlas-pop{{background:#fff;border:1px solid var(--line);border-radius:9px;box-shadow:0 8px 26px #0003;padding:10px 12px;min-width:190px}}.atlas-pop b{{display:block;font-size:14px;margin-bottom:3px}}.atlas-pop span{{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}}.atlas-pop a{{display:block;color:var(--green);font-weight:650;font-size:13px;text-decoration:none;margin-bottom:7px}}.atlas-pop .share-btn{{width:100%;background:var(--green);border-color:var(--green);color:#fff;font-size:13px;padding:8px 10px;cursor:pointer}}</style>
-<div class=\"filters\"><button class=\"on\" data-shape=\"all\">전체</button>{buttons}</div>
-<div class=\"station-filter\"><input id=\"stationInput\" list=\"stationList\" placeholder=\"역 이름으로 찾기 (예: 강남역)\" autocomplete=\"off\"><datalist id=\"stationList\">{station_options}</datalist><button id=\"stationClear\" type=\"button\">지우기</button></div>
-<div id=\"map\"><div class=\"map-message\"><div class=\"card\"><h2>지도를 불러오는 중이에요</h2><p class=\"muted\">지도 연결이 어려우면 AI에게 현재 역을 말해 주세요. 가장 가까운 동물을 바로 추천해 드려요.</p></div></div></div>
-<p class=\"muted\">마커를 누르면 코스 모양과 거리·출발역이 지도에 표시되고, 친구에게 공유하기 버튼으로 링크를 복사할 수 있어요. · <a href=\"https://www.openstreetmap.org/copyright\">경로 데이터 © OpenStreetMap contributors · ODbL</a></p>
-{map_sdk}<script>
-const items={data};const baseUrl={js_base};let overlays=[];let map=null;let routeLines=[];let infoOv=null;
-let shapeFilter='all';let stationFilter='';
-const mapNode=document.getElementById('map');
-function showMapError(message){{mapNode.innerHTML='<div class="map-message"><div class="card"><h2>카카오맵을 불러오지 못했습니다</h2><p class="muted">'+message+'</p></div></div>';document.querySelectorAll('[data-shape]').forEach(b=>b.disabled=true)}}
-function clearCourse(){{routeLines.forEach(l=>l.setMap(null));routeLines=[];if(infoOv){{infoOv.setMap(null);infoOv=null}}}}
-const ROUTE_COLORS=['#08735a','#f06d3b','#5677d8','#9c5cc8'];
-function coursePopup(x){{
- const el=document.createElement('div');el.className='atlas-pop';
- const t=document.createElement('b');t.textContent=x.emoji+' '+x.name;
- const s=document.createElement('span');s.textContent=x.km+'km 검증 코스';
- const a=document.createElement('a');a.href=baseUrl+'/c/'+x.cid;a.textContent='코스 상세·GPX 보기 →';
- const btn=document.createElement('button');btn.className='share-btn';btn.type='button';btn.textContent='친구에게 공유하기';
- btn.onclick=ev=>{{ev.stopPropagation();const url=baseUrl+'/c/'+x.cid;
-  const done=()=>{{btn.textContent='링크가 복사됐어요!';setTimeout(()=>btn.textContent='친구에게 공유하기',2200)}};
-  if(navigator.clipboard&&navigator.clipboard.writeText){{navigator.clipboard.writeText(url).then(done).catch(()=>window.prompt('아래 링크를 복사하세요',url))}}
-  else{{window.prompt('아래 링크를 복사하세요',url)}}
- }};
- el.append(t,s,a,btn);
- infoOv=new kakao.maps.CustomOverlay({{position:new kakao.maps.LatLng(x.lat,x.lon),content:el,yAnchor:1.25,zIndex:40}});
- infoOv.setMap(map);
-}}
-function showCourses(list){{clearCourse();
- const picks=list.slice(0,4);
- Promise.all(picks.map(x=>fetch(baseUrl+'/c/'+encodeURIComponent(x.cid)+'/route.json')
-   .then(r=>r.ok?r.json():null).catch(()=>null).then(d=>({{x,d}}))))
- .then(results=>{{
-  const bounds=new kakao.maps.LatLngBounds();let drawn=null;
-  results.forEach((r,i)=>{{if(!r.d)return;
-   const path=r.d.points.map(p=>new kakao.maps.LatLng(p[0],p[1]));
-   routeLines.push(new kakao.maps.Polyline({{map,path,strokeColor:'#ffffff',strokeWeight:11,strokeOpacity:.9}}));
-   routeLines.push(new kakao.maps.Polyline({{map,path,strokeColor:ROUTE_COLORS[i%ROUTE_COLORS.length],strokeWeight:6,strokeOpacity:.95}}));
-   path.forEach(p=>bounds.extend(p));if(!drawn)drawn=r.x;
-  }});
-  if(drawn){{map.setBounds(bounds,70,70,70,70);coursePopup(drawn)}}
-  else if(picks.length===1){{location.href=baseUrl+'/c/'+picks[0].cid}}
- }});
-}}
-function visibleItems(){{return items.filter(x=>(shapeFilter==='all'||x.shape===shapeFilter)&&(!stationFilter||x.name.includes(stationFilter)))}}
-function draw(){{overlays.forEach(o=>o.setMap(null));overlays=[];clearCourse();
- const vis=visibleItems();
- vis.forEach(x=>{{const el=document.createElement('button');el.className='dot';el.textContent=x.emoji;el.title=x.name+' '+x.km+'km';el.onclick=()=>showCourses([x]);const o=new kakao.maps.CustomOverlay({{position:new kakao.maps.LatLng(x.lat,x.lon),content:el,yAnchor:.5}});o.setMap(map);overlays.push(o)}});
- if(stationFilter&&vis.length){{showCourses(vis)}}
-}}
-function bootAtlasMap(){{map=new kakao.maps.Map(mapNode,{{center:new kakao.maps.LatLng(37.5665,126.978),level:8}});map.addControl(new kakao.maps.ZoomControl(),kakao.maps.ControlPosition.LEFT);
- document.querySelectorAll('[data-shape]').forEach(b=>b.onclick=()=>{{document.querySelectorAll('[data-shape]').forEach(x=>x.classList.remove('on'));b.classList.add('on');shapeFilter=b.dataset.shape;draw()}});
- const input=document.getElementById('stationInput');
- let timer=null;
- input.addEventListener('input',()=>{{clearTimeout(timer);timer=setTimeout(()=>{{stationFilter=input.value.trim();draw()}},250)}});
- document.getElementById('stationClear').onclick=()=>{{input.value='';stationFilter='';draw();map.setCenter(new kakao.maps.LatLng(37.5665,126.978));map.setLevel(8)}};
- draw()}}
-if(!"{safe_key}"){{showMapError('운영 환경의 KAKAO_JAVASCRIPT_KEY가 설정되어야 합니다.')}}else if(!window.kakao?.maps){{showMapError('KAKAO_JAVASCRIPT_KEY와 카카오 개발자 콘솔의 등록 도메인을 확인해 주세요.')}}else{{kakao.maps.load(bootAtlasMap)}}</script>"""
+    body = """<section class="hero atlas-hero"><div class="eyebrow">러니웨어 동물 GPS 아트</div>
+<h1>서울에서 발견한<br>동물 코스를 만나보세요.</h1>
+<p>검증된 <b>__COUNT__개 코스</b>를 지역별로 모았습니다. 발자국을 확대해 역을 고르고, 동물을 선택하면 코스가 지도 위에서 완성됩니다.</p></section>
+<style>
+.atlas-hero{max-width:760px;margin-bottom:32px}.atlas-hero b{color:var(--green)}
+.atlas-toolbar{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:14px}.filters{display:flex;gap:8px;overflow:auto;padding:2px;scrollbar-width:none}.filters::-webkit-scrollbar{display:none}
+button,.station-filter input{min-height:48px;border:1px solid var(--line);background:#fff;border-radius:12px;font:650 14px/1 "Pretendard Variable",Pretendard,sans-serif;color:var(--ink)}button{padding:0 14px;cursor:pointer;white-space:nowrap}button:hover{border-color:#a8bbb3}button:focus-visible,.station-filter input:focus-visible,a:focus-visible{outline:3px solid #64c8a3;outline-offset:2px}
+.filters button[aria-pressed="true"]{background:var(--green);border-color:var(--green);color:#fff}.filters button span{font-size:16px}.station-filter{display:flex;gap:8px;flex:0 1 410px}.station-filter input{min-width:0;flex:1;padding:0 14px}.station-filter button{flex:none}
+.atlas-workspace{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;position:relative;align-items:stretch}.map-shell{position:relative;min-width:0}.map-guide{position:absolute;z-index:20;left:16px;top:16px;background:#14231bdf;color:#fff;border-radius:999px;padding:9px 13px;font-size:12px;font-weight:650;backdrop-filter:blur(8px);pointer-events:none}
+#map{height:72vh;min-height:560px;border:1px solid var(--line);border-radius:18px;overflow:hidden;background:#edf1ec}.map-message{height:100%;display:flex;align-items:center;justify-content:center;padding:24px}.map-message .card{max-width:460px;margin:0}.map-message h2{font-size:22px;margin:0 0 8px}.map-message p{color:var(--muted);font-size:14px}.fallback-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;width:100%;max-width:520px}.fallback-grid button{text-align:left;height:auto;padding:12px}
+.atlas-marker{display:flex;align-items:center;justify-content:center;min-height:0;border:3px solid #fff;border-radius:999px;box-shadow:0 7px 18px #0d251b35;background:#173c2d;color:#fff;padding:0;transition:transform .18s ease,box-shadow .18s ease}.atlas-marker:hover{transform:translateY(-2px);box-shadow:0 10px 24px #0d251b45}.atlas-marker.cluster{width:48px;height:48px;font-size:12px}.atlas-marker.station{width:44px;height:44px;font-size:20px}.atlas-marker small{font-size:10px;margin-left:2px}
+.atlas-detail{background:#fff;border:1px solid var(--line);border-radius:18px;min-height:560px;height:72vh;overflow:auto;padding:22px;box-shadow:0 18px 50px #17333d12}.sheet-handle{display:none}.detail-empty{height:100%;display:flex;flex-direction:column;justify-content:center;align-items:flex-start}.detail-empty .emoji{font-size:42px}.detail-empty h2{font-size:24px;margin:16px 0 6px}.detail-empty p{font-size:14px;color:var(--muted)}
+.detail-eyebrow{font-size:12px;color:var(--green);font-weight:750;letter-spacing:.04em}.detail-head{display:flex;align-items:start;justify-content:space-between;gap:10px;margin:8px 0 16px}.detail-head h2{font-size:25px;line-height:1.22;margin:0}.detail-close{width:48px;padding:0;font-size:20px;color:var(--muted)}
+.animal-options{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:16px}.animal-option{height:auto;min-height:58px;padding:9px 10px;text-align:left}.animal-option[aria-pressed="true"]{background:#edf7f2;border-color:#82bea6;color:#075a43}.animal-option b,.animal-option small{display:block}.animal-option small{color:var(--muted);font-weight:550;margin-top:4px}
+.silhouette{height:148px;border-radius:14px;background:linear-gradient(145deg,#edf7f2,#f8faf7);display:flex;align-items:center;justify-content:center;overflow:hidden}.silhouette svg{width:90%;height:88%}.silhouette-loading{color:var(--muted);font-size:13px}.course-title{font-size:19px;font-weight:760;margin:16px 0 4px}.course-meta{color:var(--muted);font-size:14px}.detail-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}.detail-actions a,.detail-actions button{display:flex;align-items:center;justify-content:center;min-height:48px;border-radius:12px;text-decoration:none;font-size:13px;font-weight:700}.detail-actions a{background:#14231b;color:#fff}.detail-actions button{background:var(--green);color:#fff;border-color:var(--green)}.compare-btn{width:100%;margin-top:8px;background:#fff!important;color:var(--green)!important;border-color:#9bc9b6!important}.atlas-note{font-size:12px!important;color:var(--muted);margin-top:12px!important}.atlas-note a{color:inherit}
+@media(max-width:900px){.atlas-toolbar{align-items:stretch;flex-direction:column}.station-filter{flex-basis:auto}.atlas-workspace{display:block}.map-shell{height:calc(100svh - 150px);min-height:570px}#map{height:100%;min-height:0;border-radius:16px}.atlas-detail{position:absolute;z-index:40;left:10px;right:10px;bottom:10px;min-height:0;height:auto;max-height:64%;padding:8px 18px 18px;border-radius:20px;transform:translateY(calc(100% - 82px));transition:transform .28s cubic-bezier(.2,.8,.2,1);overflow:auto;box-shadow:0 18px 55px #0b211a45}.atlas-detail.has-selection{transform:translateY(0)}.atlas-detail.collapsed{transform:translateY(calc(100% - 82px))}.sheet-handle{display:flex;width:100%;height:38px;min-height:38px;border:0;background:transparent;padding:0;align-items:center;justify-content:center}.sheet-handle:before{content:"";width:42px;height:5px;border-radius:999px;background:#c8d2cd}.detail-empty{min-height:54px;height:auto;display:block}.detail-empty .emoji,.detail-empty p{display:none}.detail-empty h2{font-size:16px;margin:4px 0}.detail-head{margin-top:2px}.map-guide{top:12px;left:12px}}
+@media(max-width:480px){.atlas-hero{margin-bottom:24px}.atlas-hero h1{font-size:34px}.atlas-toolbar{gap:10px}.filters{margin:0 -18px;padding:2px 18px}.filters button{min-height:46px}.station-filter input,.station-filter button{min-height:48px}.map-shell{height:calc(100svh - 116px);min-height:560px}.map-guide{font-size:11px}.atlas-detail{left:8px;right:8px;bottom:8px}.detail-head h2{font-size:22px}.silhouette{height:124px}.detail-actions{position:sticky;bottom:-18px;background:#fff;padding:10px 0 calc(8px + env(safe-area-inset-bottom));margin-bottom:-18px}}
+@media(prefers-reduced-motion:reduce){.atlas-marker,.atlas-detail{transition:none!important}}
+</style>
+<div class="atlas-toolbar"><div class="filters" role="group" aria-label="동물 종류">
+<button type="button" data-shape="all" aria-pressed="true">전체</button>__BUTTONS__</div>
+<div class="station-filter"><input id="stationInput" list="stationList" placeholder="역 이름으로 찾기 (예: 강남역)" aria-label="역 이름으로 찾기" autocomplete="off"><datalist id="stationList">__OPTIONS__</datalist><button id="stationClear" type="button">지우기</button></div></div>
+<div class="atlas-workspace"><div class="map-shell"><div class="map-guide">발자국을 누르면 역별 동물이 펼쳐져요</div><div id="map"><div class="map-message"><div class="card"><h2>서울의 동물을 찾는 중이에요</h2><p>검증된 코스를 지역별로 묶어 지도를 준비하고 있습니다.</p></div></div></div></div>
+<aside id="atlasDetail" class="atlas-detail" aria-live="polite"><button id="sheetHandle" class="sheet-handle" type="button" aria-label="상세 패널 접기 또는 펼치기"></button><div id="detailContent" class="detail-empty"><div class="emoji">🐾</div><h2>발자국을 선택해 보세요</h2><p>역을 고르면 달릴 수 있는 동물과 거리를 한 번에 비교할 수 있어요.</p></div></aside></div>
+<p class="atlas-note">코스는 검증된 보행 도로를 따르며 현장 통행·공사 여부는 출발 전에 확인해 주세요. · <a href="https://www.openstreetmap.org/copyright">경로 데이터 © OpenStreetMap contributors · ODbL</a></p>
+__MAP_SDK__<script>
+const items=__DATA__;const baseUrl=__BASE__;const mapNode=document.getElementById('map');
+const detail=document.getElementById('atlasDetail');const detailContent=document.getElementById('detailContent');
+const ROUTE_COLORS={rabbit:'#9c5cc8',cat:'#d98916',dog:'#ec684b',whale:'#4385d7'};
+let map=null;let overlays=[];let routeLines=[];let shapeFilter='all';let stationFilter='';let selectedStation=null;let selectedCourse=null;let mapReady=false;
+const reduceMotion=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function stationGroups(list){const groups=new Map();for(const x of list){const key=x.name+'|'+x.lat.toFixed(5)+'|'+x.lon.toFixed(5);if(!groups.has(key))groups.set(key,{name:x.name,lat:x.lat,lon:x.lon,courses:[]});groups.get(key).courses.push(x)}return [...groups.values()]}
+const allStations=stationGroups(items);
+function filteredStations(){return allStations.map(s=>({...s,courses:s.courses.filter(x=>shapeFilter==='all'||x.shape===shapeFilter)})).filter(s=>s.courses.length&&(!stationFilter||s.name.includes(stationFilter)))}
+function mapBuckets(stations,level){const cell=level>=9?.075:level>=8?.05:level>=7?.03:level>=6?.016:0;if(!cell)return stations.map(s=>({lat:s.lat,lon:s.lon,stations:[s]}));const buckets=new Map();for(const s of stations){const key=Math.round(s.lat/cell)+'|'+Math.round(s.lon/cell);if(!buckets.has(key))buckets.set(key,{lat:0,lon:0,stations:[]});const b=buckets.get(key);b.stations.push(s);b.lat+=s.lat;b.lon+=s.lon}return [...buckets.values()].map(b=>({...b,lat:b.lat/b.stations.length,lon:b.lon/b.stations.length}))}
+function clearRoutes(){routeLines.forEach(line=>line.setMap(null));routeLines=[]}
+function clearMarkers(){overlays.forEach(o=>o.setMap(null));overlays=[]}
+function markerButton(bucket){const el=document.createElement('button');const station=bucket.stations[0];const count=bucket.stations.reduce((n,s)=>n+s.courses.length,0);const clustered=bucket.stations.length>1;el.type='button';el.className='atlas-marker '+(clustered?'cluster':'station');el.setAttribute('aria-label',clustered?`${bucket.stations.length}개 역, ${count}개 동물 코스`:`${station.name}, ${count}개 동물 코스`);if(clustered){el.textContent='🐾';const small=document.createElement('small');small.textContent=count;el.appendChild(small)}else{el.textContent=station.courses.length===1?station.courses[0].emoji:'🐾'}el.onclick=()=>{if(clustered){map.setCenter(new kakao.maps.LatLng(bucket.lat,bucket.lon));map.setLevel(Math.max(4,map.getLevel()-2))}else selectStation(station,true)};return el}
+function drawMarkers(){if(!mapReady)return;clearMarkers();const stations=filteredStations();for(const bucket of mapBuckets(stations,map.getLevel())){const overlay=new kakao.maps.CustomOverlay({position:new kakao.maps.LatLng(bucket.lat,bucket.lon),content:markerButton(bucket),xAnchor:.5,yAnchor:.5,zIndex:8});overlay.setMap(map);overlays.push(overlay)}if(stationFilter&&stations.length){selectStation(stations[0],true)}}
+function setPressedCourse(cid){detail.querySelectorAll('.animal-option').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.cid===cid)))}
+function silhouette(points,color){const ns='http://www.w3.org/2000/svg';const svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 240 140');svg.setAttribute('role','img');svg.setAttribute('aria-label','선택한 동물 코스 실루엣');if(!points.length)return svg;const lats=points.map(p=>p[0]),lons=points.map(p=>p[1]);const minLat=Math.min(...lats),maxLat=Math.max(...lats),minLon=Math.min(...lons),maxLon=Math.max(...lons);const spanLat=Math.max(.0001,maxLat-minLat),spanLon=Math.max(.0001,maxLon-minLon);const pts=points.map(p=>`${18+(p[1]-minLon)/spanLon*204},${122-(p[0]-minLat)/spanLat*104}`).join(' ');const halo=document.createElementNS(ns,'polyline');halo.setAttribute('points',pts);halo.setAttribute('fill','none');halo.setAttribute('stroke','#fff');halo.setAttribute('stroke-width','12');halo.setAttribute('stroke-linejoin','round');halo.setAttribute('stroke-linecap','round');const line=document.createElementNS(ns,'polyline');line.setAttribute('points',pts);line.setAttribute('fill','none');line.setAttribute('stroke',color);line.setAttribute('stroke-width','6');line.setAttribute('stroke-linejoin','round');line.setAttribute('stroke-linecap','round');svg.append(halo,line);return svg}
+function shareCourse(course,button){const url=baseUrl+'/c/'+course.cid;const done=()=>{button.textContent='링크가 복사됐어요';setTimeout(()=>button.textContent='공유하기',1800)};if(navigator.clipboard?.writeText)navigator.clipboard.writeText(url).then(done).catch(()=>window.prompt('아래 링크를 복사하세요',url));else window.prompt('아래 링크를 복사하세요',url)}
+function detailBase(station){detailContent.className='';detailContent.replaceChildren();const eye=document.createElement('div');eye.className='detail-eyebrow';eye.textContent='선택한 출발역';const head=document.createElement('div');head.className='detail-head';const h=document.createElement('h2');h.textContent=station.name+'에서 만난 동물';const close=document.createElement('button');close.type='button';close.className='detail-close';close.setAttribute('aria-label','상세 패널 닫기');close.textContent='×';close.onclick=()=>detail.classList.add('collapsed');head.append(h,close);const options=document.createElement('div');options.className='animal-options';for(const c of station.courses){const b=document.createElement('button');b.type='button';b.className='animal-option';b.dataset.cid=c.cid;b.setAttribute('aria-pressed','false');const strong=document.createElement('b');strong.textContent=c.emoji+' '+({rabbit:'토끼',cat:'고양이',dog:'강아지',whale:'고래'}[c.shape]||c.shape);const small=document.createElement('small');small.textContent=c.km+'km 검증 코스';b.append(strong,small);b.onclick=()=>selectCourse(station,c);options.appendChild(b)}const main=document.createElement('div');main.id='courseDetail';detailContent.append(eye,head,options,main)}
+function renderCourseCard(course,points){const main=document.getElementById('courseDetail');main.replaceChildren();const visual=document.createElement('div');visual.className='silhouette';if(points)visual.appendChild(silhouette(points,ROUTE_COLORS[course.shape]));else{const loading=document.createElement('span');loading.className='silhouette-loading';loading.textContent='코스 실루엣을 그리는 중…';visual.appendChild(loading)}const title=document.createElement('div');title.className='course-title';title.textContent=course.emoji+' '+course.name+' '+course.km+'km';const meta=document.createElement('div');meta.className='course-meta';meta.textContent='출발·도착 '+course.name+' · 실제 보행 도로 검증';const actions=document.createElement('div');actions.className='detail-actions';const open=document.createElement('a');open.href=baseUrl+'/c/'+course.cid;open.textContent='상세·GPX 보기';const share=document.createElement('button');share.type='button';share.textContent='공유하기';share.onclick=()=>shareCourse(course,share);const compare=document.createElement('button');compare.type='button';compare.className='compare-btn';compare.textContent='이 역의 동물 코스 겹쳐보기';compare.onclick=()=>drawCourses(selectedStation.courses,true);actions.append(open,share,compare);main.append(visual,title,meta,actions)}
+function animateLine(line,path){if(reduceMotion||path.length<24){line.setPath(path);return}let shown=2;const step=()=>{shown=Math.min(path.length,shown+Math.max(2,Math.ceil(path.length/48)));line.setPath(path.slice(0,shown));if(shown<path.length)requestAnimationFrame(step)};requestAnimationFrame(step)}
+async function drawCourses(courses,compare=false){clearRoutes();const picks=courses.slice(0,4);const results=await Promise.all(picks.map(x=>fetch(baseUrl+'/c/'+encodeURIComponent(x.cid)+'/route.json').then(r=>r.ok?r.json():null).catch(()=>null).then(data=>({x,data}))));if(!mapReady){const selected=results.find(r=>r.x.cid===selectedCourse?.cid);if(selected?.data)renderCourseCard(selected.x,selected.data.points);return}const bounds=new kakao.maps.LatLngBounds();for(const result of results){if(!result.data)continue;const path=result.data.points.map(p=>new kakao.maps.LatLng(p[0],p[1]));const halo=new kakao.maps.Polyline({map,path:compare?path:path.slice(0,2),strokeColor:'#fff',strokeWeight:12,strokeOpacity:.9});const line=new kakao.maps.Polyline({map,path:compare?path:path.slice(0,2),strokeColor:ROUTE_COLORS[result.x.shape],strokeWeight:6,strokeOpacity:.96});routeLines.push(halo,line);if(compare){path.forEach(p=>bounds.extend(p))}else{animateLine(halo,path);animateLine(line,path);path.forEach(p=>bounds.extend(p))}if(result.x.cid===selectedCourse?.cid)renderCourseCard(result.x,result.data.points)}if(results.some(r=>r.data))map.setBounds(bounds,56,56,56,56)}
+function selectCourse(station,course){selectedStation=station;selectedCourse=course;setPressedCourse(course.cid);renderCourseCard(course,null);drawCourses([course],false);detail.classList.add('has-selection');detail.classList.remove('collapsed')}
+function selectStation(station,focus){selectedStation=station;detailBase(station);detail.classList.add('has-selection');detail.classList.remove('collapsed');selectCourse(station,station.courses[0]);if(focus&&mapReady)map.setCenter(new kakao.maps.LatLng(station.lat,station.lon))}
+function refresh(){drawMarkers();if(!mapReady)showFallback()}
+function showFallback(message='지도 없이도 역별 코스를 선택할 수 있어요.'){mapNode.replaceChildren();const wrap=document.createElement('div');wrap.className='map-message';const box=document.createElement('div');box.className='card';const h=document.createElement('h2');h.textContent='지도를 불러오지 못했습니다';const p=document.createElement('p');p.textContent=message;const grid=document.createElement('div');grid.className='fallback-grid';for(const station of filteredStations().slice(0,12)){const b=document.createElement('button');b.type='button';b.textContent='🐾 '+station.name+' · '+station.courses.length+'종';b.onclick=()=>selectStation(station,false);grid.appendChild(b)}box.append(h,p,grid);wrap.appendChild(box);mapNode.appendChild(wrap)}
+function setupControls(){document.querySelectorAll('[data-shape]').forEach(b=>b.onclick=()=>{shapeFilter=b.dataset.shape;document.querySelectorAll('[data-shape]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));refresh()});const input=document.getElementById('stationInput');let timer=null;input.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(()=>{stationFilter=input.value.trim();refresh()},220)});document.getElementById('stationClear').onclick=()=>{input.value='';stationFilter='';selectedStation=null;clearRoutes();detail.className='atlas-detail';detailContent.className='detail-empty';detailContent.innerHTML='<div class="emoji">🐾</div><h2>발자국을 선택해 보세요</h2><p>역을 고르면 달릴 수 있는 동물과 거리를 한 번에 비교할 수 있어요.</p>';if(mapReady){map.setCenter(new kakao.maps.LatLng(37.5665,126.978));map.setLevel(8)}refresh()};document.getElementById('sheetHandle').onclick=()=>detail.classList.toggle('collapsed')}
+function bootAtlasMap(){mapNode.replaceChildren();map=new kakao.maps.Map(mapNode,{center:new kakao.maps.LatLng(37.5665,126.978),level:8});map.addControl(new kakao.maps.ZoomControl(),kakao.maps.ControlPosition.LEFT);mapReady=true;kakao.maps.event.addListener(map,'zoom_changed',drawMarkers);drawMarkers()}
+setupControls();
+if(!"__SAFE_KEY__")showFallback('운영 환경의 KAKAO_JAVASCRIPT_KEY가 설정되어야 합니다.');else if(!window.kakao?.maps)showFallback('지도 SDK와 등록 도메인을 확인해 주세요.');else kakao.maps.load(bootAtlasMap);
+</script>"""
+    body = (body.replace("__COUNT__", str(len(courses)))
+            .replace("__BUTTONS__", buttons)
+            .replace("__OPTIONS__", station_options)
+            .replace("__MAP_SDK__", map_sdk)
+            .replace("__DATA__", data)
+            .replace("__BASE__", js_base)
+            .replace("__SAFE_KEY__", safe_key))
     return _page("서울 동물지도", body)
 
 
