@@ -71,7 +71,7 @@ FONT_PATH = Path(__file__).resolve().parent / "assets" / "PretendardVariable.wof
 mcp = FastMCP(
     "Runnywhere",
     instructions=(
-        "Runnywhere(러니웨어) — 어디서든 러닝 코스 짜기! "
+        "Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!). "
         "It designs running courses in Seoul through conversation: "
         "loop courses by distance, animal-shaped GPS-art courses, hill/flat "
         "preference, night-safety routing, and nearby facilities. "
@@ -598,7 +598,7 @@ def generate_running_course(
     night_mode: Annotated[bool, Field(description="Prefer well-lit streets with safety CCTV coverage for night runs")] = False,
     need_facilities: Annotated[list[str] | None, Field(description="Facility types the course should pass: convenience_store, restroom, water, park")] = None,
 ) -> str:
-    """Generates a loop running course in Seoul from Runnywhere(러니웨어), snapped to
+    """Generates a loop running course in Seoul from Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!), snapped to
     real pedestrian roads and scored with the Running Friendliness Score built
     from Seoul open data (sidewalk width, slope, lighting, safety CCTV, parks).
     Safe, runner-friendly streets are preferred by default. Provide a start
@@ -632,7 +632,7 @@ def generate_animal_course(
 ) -> str:
     """Generates a GPS-art running course shaped like an animal (cat, dog,
     rabbit, whale) snapped to real pedestrian roads in Seoul, from
-    Runnywhere(러니웨어). Shape quality decides the distance: call WITHOUT a shape
+    Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!). Shape quality decides the distance: call WITHOUT a shape
     to get, for each animal, the shortest distance at which it completes as
     a clean reference-like silhouette at this location, so the user can
     choose. Call with a shape and no distance to draw that animal at its own
@@ -786,7 +786,7 @@ def generate_animal_course(
 
 def list_available_shapes() -> str:
     """Lists animal shapes available for GPS-art running courses in
-    Runnywhere(러니웨어), with the minimum recommended distance for each shape."""
+    Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!), with the minimum recommended distance for each shape."""
     lines = ["러니웨어에서 그릴 수 있는 모양:"]
     for s in list_shapes():
         lines.append(f"- {s['emoji']} {s['name_ko']} (`{s['shape']}`) — {s['min_km']:g}km 이상 권장")
@@ -800,7 +800,7 @@ def find_facilities_near_course(
     facility_types: Annotated[list[str] | None, Field(description="Filter: convenience_store, restroom, water, park")] = None,
 ) -> str:
     """Lists convenience stores, restrooms, drinking fountains, and parks
-    within 10m of a Runnywhere(러니웨어) course line, with the km mark where the
+    within 10m of a Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) course line, with the km mark where the
     course passes each one."""
     try:
         params = decode_course_id(course_id)
@@ -826,7 +826,7 @@ def refine_course(
     location: Annotated[str | None, Field(description="New start place name")] = None,
     need_facilities: Annotated[list[str] | None, Field(description="New facility requirements")] = None,
 ) -> str:
-    """Regenerates an existing Runnywhere(러니웨어) course with changed conditions
+    """Regenerates an existing Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) course with changed conditions
     (distance, hills, night mode, shape, start location, facilities) —
     conversational iteration on a course the user already received."""
     started = time.monotonic()
@@ -864,7 +864,7 @@ def refine_course(
 def get_course_status(
     course_id: Annotated[str, Field(description="Course id from a previously generated course")],
 ) -> str:
-    """Retrieves an existing Runnywhere(러니웨어) course by id and re-issues its
+    """Retrieves an existing Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) course by id and re-issues its
     summary, map preview link, GPX download link, and shape share link."""
     try:
         params = decode_course_id(course_id)
@@ -877,7 +877,7 @@ def record_animal_completion(
     course_id: Annotated[str, Field(description="Completed animal course id")],
     passport_token: Annotated[str | None, Field(description="Existing passport token; omit for the first completed animal")] = None,
 ) -> str:
-    """Records a completed Runnywhere(러니웨어) animal course by returning a
+    """Records a completed Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) animal course by returning a
     new self-contained passport token. No account, session, or server-side
     personal data is stored; repeating the same input is idempotent."""
     try:
@@ -908,7 +908,7 @@ def extend_shape_relay(
     course_id: Annotated[str, Field(description="Animal course id to add as the next relay leg")],
     relay_token: Annotated[str | None, Field(description="Existing relay token; omit to start a new relay")] = None,
 ) -> str:
-    """Starts or extends a Runnywhere(러니웨어) Shape Relay with another
+    """Starts or extends a Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) Shape Relay with another
     neighborhood's version of the same animal. The self-contained relay token
     supports up to eight legs and stores no user account or server session."""
     try:
