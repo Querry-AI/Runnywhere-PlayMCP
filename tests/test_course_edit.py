@@ -195,9 +195,174 @@ def test_mobile_preview_uses_compact_summary_and_accessible_edit_controls():
     assert 'body.editing .map-hud' in page
     assert 'body.editing.tool-active .facility-marker' in page
     assert "map.setDraggable(!editMode)" in page
-    assert 'id="editBar" class="sr-only"' in page
     assert 'class="edit-bar"' not in page
     assert 'body.editing .edit-bar' not in page
+
+
+def _hidden_text(page: str) -> str:
+    """Concatenated text of every element carrying the sr-only class.
+
+    Substring checks alone cannot tell "the page says X" from "the page says X
+    where nobody can read it" -- the sr-only edit bar passed such checks for two
+    commits while showing users nothing.
+    """
+    from html.parser import HTMLParser
+
+    class Collector(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.depth = 0
+            self.stack: list[bool] = []
+            self.text: list[str] = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag in ("br", "img", "input", "meta", "link"):
+                return
+            classes = dict(attrs).get("class", "") or ""
+            self.stack.append("sr-only" in classes.split())
+            if any(self.stack):
+                self.depth = 1
+
+        def handle_endtag(self, tag):
+            if self.stack:
+                self.stack.pop()
+
+        def handle_data(self, data):
+            if any(self.stack):
+                self.text.append(data)
+
+    parser = Collector()
+    parser.feed(page)
+    return " ".join(parser.text)
+
+
+def test_edit_feedback_is_visible_not_only_screen_reader_text():
+    """F-01 regression guard: edit status must not live in an sr-only node."""
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    # The toast is the single feedback channel: visible *and* announced.
+    assert 'id="editToast"' in page
+    assert 'role="status" aria-live="polite"' in page
+    assert 'class="edit-toast"' in page
+    assert 'id="editToastText"' in page
+    # ...and the old invisible bar is gone for good.
+    assert 'id="editBar"' not in page
+    assert "editStatus" not in page
+    assert "펜이나 지우개를 선택하세요" not in _hidden_text(page)
+
+
+def test_edit_toast_distinguishes_blocking_errors_from_transient_hints():
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    # Errors and blocked states must not auto-dismiss; hints must.
+    assert "AUTO_DISMISS_MS" in page
+    assert "busy:0" in page and "error:0" in page and "blocked:0" in page
+    assert "info:3600" in page
+    assert '.edit-toast[data-tone="error"]' in page
+    assert '.edit-toast[data-tone="blocked"]' in page
+    # Errors carry a dismiss control rather than lingering forever.
+    assert "label:'닫기'" in page
+
+
+def test_edit_shows_live_distance_from_the_snap_response():
+    """F-03 regression guard: the server returns length_km; the UI must use it."""
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    assert 'id="editDistance"' in page
+    assert "setEditDistance(payload.length_km)" in page
+    assert "body.editing .edit-distance{display:flex}" in page
+    # Undo has to restore the distance that came back with that path.
+    assert "km:editLengthKm" in page
+
+
+def test_edit_blocks_duplicate_requests_while_one_is_in_flight():
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    assert "setEditBusy" in page
+    assert "editBusy" in page
+    # every entry point guards on the busy flag
+    assert "if(editBusy)return" in page                        # setMode
+    assert "if(editBusy){clearGesture();return;}" in page      # finishGesture
+    assert "if(!editing||editBusy)return" in page              # save
+    assert "!editing||!editMode||editBusy" in page             # pointerdown
+
+
+def test_edit_toolbar_keeps_small_icon_only_buttons():
+    """Product requirement: small top-left icons, no text labels."""
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    assert "width:40px;height:40px" in page
+    assert '.edit-tools{position:absolute;z-index:950;left:10px;top:10px' in page
+    # Icon-only: labels stay in aria-label/title, never as visible text nodes.
+    for label in ("펜으로 코스 선 그리기", "직선 지우개로 코스 구간 지우기",
+                  "마지막 선 수정 되돌리기", "원본 코스로 복구", "수정한 코스를 새 코스로 저장"):
+        assert f'aria-label="{label}"' in page
+
+
+def test_edit_tools_have_44px_tap_targets_without_growing():
+    """F-07: the icons stay 40px by product requirement, so the touch area is
+    widened invisibly instead of enlarging the buttons."""
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    assert "width:40px;height:40px" in page                      # visual size unchanged
+    assert ".edit-tool-circle::before" in page
+    assert "top:-2px;right:-2px;bottom:-2px;left:-2px" in page   # 40 + 2 + 2 = 44
+    # 12px facility dots are unhittable by finger, but only widen them on touch:
+    # a 44px box under a mouse would swallow map drags near a marker.
+    assert "@media (pointer:coarse)" in page
+    assert ".facility-marker::before" in page
+    assert "top:-16px;right:-16px;\n      bottom:-16px;left:-16px" in page  # 12 + 32 = 44
+
+
+def test_revert_is_undoable_and_separated_from_save():
+    """F-04: reverting is the only irreversible action, so it is made
+    reversible rather than guarded by a map-covering confirm sheet."""
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    assert "label:'실행 취소'" in page
+    assert "원본 코스로 되돌렸어요." in page
+    assert "const hadEdits=" in page          # no undo offer when nothing was discarded
+    assert "setEditDistance(initialLengthKm)" in page
+    # mis-tap guard: extra room between revert and the confirming action
+    assert ".edit-tool-circle.save{margin-left:8px" in page
+    # and no confirmation dialog was introduced
+    assert "confirm(" not in page
+
+
+def test_revert_icon_is_not_a_house():
+    """A home glyph on a destructive control reads as 'go to homepage'."""
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    assert 'aria-label="원본 코스로 복구"' in page
+    assert "M6.5 10v9h11v-9" not in page       # old roof/door house path
+    assert "M12 7v5l4 2" in page               # history glyph: clock hands
+
+
+def test_zoom_control_is_removed_while_editing():
+    """F-10: setZoomable(false) only stops wheel/pinch; a zoom press mid-gesture
+    would move the ground under the screen-space stroke being collected."""
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    assert "const zoomControl = new kakao.maps.ZoomControl()" in page
+    assert "map.removeControl(zoomControl)" in page
+    assert "showZoomControl(!value)" in page
+
+
+def test_map_container_is_positioned_for_its_absolute_controls():
+    """The HUD, toolbar and toast are absolutely positioned inside #map; do not
+    rely on the Kakao SDK setting position:relative at runtime."""
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+    assert "#map{position:relative" in page
 
 
 def test_animal_preview_explains_save_as_new_editing():
@@ -207,6 +372,17 @@ def test_animal_preview_explains_save_as_new_editing():
     assert 'id="editRoute"' in page
     assert "원본 동물 코스는 유지" in page
     assert "직접 편집한 코스" in page
+    # F-02: the warning has to be shown, not buried in screen-reader-only text.
+    assert "원본 동물 코스는 유지" not in _hidden_text(page)
+    assert "const editNotice =" in page
+    assert "setEditStatus(editNotice" in page
+
+
+def test_plain_course_has_no_animal_edit_notice():
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+    assert 'const editNotice = ""' in page
+    assert "원본 동물 코스는 유지" not in page
 
 
 def test_preview_keeps_a_local_course_editor_available_without_map_sdk():
