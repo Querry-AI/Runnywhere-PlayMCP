@@ -195,6 +195,7 @@ def test_mobile_preview_uses_compact_summary_and_accessible_edit_controls():
     assert 'body.editing .map-hud' in page
     assert 'body.editing.tool-active .facility-marker' in page
     assert "map.setDraggable(!editMode)" in page
+    assert "map.panBy(panCenter.x-next.x,panCenter.y-next.y)" in page
     assert 'class="edit-bar"' not in page
     assert 'body.editing .edit-bar' not in page
 
@@ -318,6 +319,33 @@ def test_edit_tools_have_44px_tap_targets_without_growing():
     assert "@media (pointer:coarse)" in page
     assert ".facility-marker::before" in page
     assert "top:-16px;right:-16px;\n      bottom:-16px;left:-16px" in page  # 12 + 32 = 44
+
+
+def test_mobile_map_gestures_and_facility_taps_do_not_conflict():
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    markers = [{"type": "restroom", "name": "화장실", "at_km": 0.1, "lat": 37.566, "lon": 126.978}]
+    page = preview_html(course, markers, "https://runnywhere.example")
+
+    # An active tool owns one finger; two touch pointers pan the map instead of
+    # accidentally submitting a stroke.
+    assert "event.pointerType==='touch'&&editPointers.size>=2" in page
+    assert "twoFingerPan=true" in page
+    assert "map.panBy(panCenter.x-next.x,panCenter.y-next.y)" in page
+    # Facility markers distinguish a short tap from a drag and use Kakao's own
+    # propagation guard rather than relying on DOM bubbling alone.
+    assert "const FACILITY_TAP_SLOP = 8" in page
+    assert "kakao.maps.event.preventMap" in page
+    assert "if(!facilityPointer.moved)toggle()" in page
+    assert "map.panBy(facilityPointer.lastX-ev.clientX" in page
+    assert "clickable:true" in page
+    assert "kakao.maps.event.addListener(map, 'click', closePop)" in page
+
+
+def test_edit_projection_uses_container_coordinates():
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+    assert "projection.containerPointFromCoords" in page
+    assert "projection.coordsFromContainerPoint" in page
 
 
 def test_revert_is_undoable_and_separated_from_save():

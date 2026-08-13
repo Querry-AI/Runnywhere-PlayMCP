@@ -824,6 +824,8 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    if(drawTool)drawTool.setAttribute('aria-pressed',String(editMode==='draw'));
    if(eraseTool)eraseTool.setAttribute('aria-pressed',String(editMode==='erase'));
    document.body.classList.toggle('tool-active',Boolean(editMode));
+   // One finger belongs to the active drawing tool. Two-finger movement is
+   // forwarded to map.panBy() by the overlay handlers below.
    map.setDraggable(!editMode);map.setZoomable(!editMode);
    // A cleared gap blocks saving; that reason has to stay on screen until it
    // is resolved, so it outranks the per-tool hint.
@@ -850,10 +852,10 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    setEditStatus(editNotice||'펜이나 지우개를 선택하세요.','info');
  }};
  const projection=map.getProjection();
- const screenPoint = node => projection.pointFromCoords(new kakao.maps.LatLng(node[1],node[2]));
+ const screenPoint = node => projection.containerPointFromCoords(new kakao.maps.LatLng(node[1],node[2]));
  const nearestIndex = point => editNodes.reduce((best,node,index)=>{{const p=screenPoint(node),d=(p.x-point.x)**2+(p.y-point.y)**2;return d<best.d?{{index,d}}:best;}},{{index:0,d:Infinity}}).index;
  const overlayPoint = event => {{const rect=editOverlay.getBoundingClientRect();return {{x:event.clientX-rect.left,y:event.clientY-rect.top}};}};
- const toCoord = point => {{const p=projection.coordsFromPoint(new kakao.maps.Point(point.x,point.y));return {{lat:p.getLat(),lon:p.getLng()}};}};
+ const toCoord = point => {{const p=projection.coordsFromContainerPoint(new kakao.maps.Point(point.x,point.y));return {{lat:p.getLat(),lon:p.getLng()}};}};
  const paintGesture = () => {{
    if(!editOverlay)return;
    editOverlay.setAttribute('viewBox',`0 0 ${{editOverlay.clientWidth||1}} ${{editOverlay.clientHeight||1}}`);
@@ -902,10 +904,43 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  if(drawTool)drawTool.addEventListener('click',()=>setMode('draw'));
  if(eraseTool)eraseTool.addEventListener('click',()=>setMode('erase'));
  if(editOverlay){{
-   editOverlay.addEventListener('pointerdown',event=>{{if(!editing||!editMode||editBusy)return;gesturePointer=event.pointerId;rawStroke=[overlayPoint(event)];editOverlay.setPointerCapture(event.pointerId);paintGesture();}});
-   editOverlay.addEventListener('pointermove',event=>{{if(event.pointerId!==gesturePointer)return;const point=overlayPoint(event),last=rawStroke[rawStroke.length-1];if(!last||Math.hypot(point.x-last.x,point.y-last.y)>4)rawStroke.push(point);paintGesture();}});
-   editOverlay.addEventListener('pointerup',event=>{{if(event.pointerId===gesturePointer)finishGesture();}});
-   editOverlay.addEventListener('pointercancel',clearGesture);
+   const editPointers=new Map();
+   let twoFingerPan=false,panCenter=null;
+   const centerOfPointers=()=>{{const points=[...editPointers.values()];return {{x:points.reduce((sum,p)=>sum+p.x,0)/points.length,y:points.reduce((sum,p)=>sum+p.y,0)/points.length}};}};
+   const endOverlayPointer=event=>{{
+     if(!editPointers.has(event.pointerId))return;
+     editPointers.delete(event.pointerId);
+     if(twoFingerPan){{
+       if(editPointers.size===0){{twoFingerPan=false;panCenter=null;clearGesture();}}
+       else panCenter=centerOfPointers();
+       return;
+     }}
+     if(event.pointerId===gesturePointer)finishGesture();
+   }};
+   editOverlay.addEventListener('pointerdown',event=>{{
+     if(!editing||!editMode||editBusy)return;
+     const point=overlayPoint(event);editPointers.set(event.pointerId,point);
+     editOverlay.setPointerCapture(event.pointerId);
+     if(event.pointerType==='touch'&&editPointers.size>=2){{
+       twoFingerPan=true;panCenter=centerOfPointers();clearGesture();return;
+     }}
+     if(twoFingerPan)return;
+     gesturePointer=event.pointerId;rawStroke=[point];paintGesture();
+   }});
+   editOverlay.addEventListener('pointermove',event=>{{
+     if(!editPointers.has(event.pointerId))return;
+     const point=overlayPoint(event);editPointers.set(event.pointerId,point);
+     if(twoFingerPan){{
+       if(editPointers.size<2)return;
+       const next=centerOfPointers();
+       if(panCenter)map.panBy(panCenter.x-next.x,panCenter.y-next.y);
+       panCenter=next;return;
+     }}
+     if(event.pointerId!==gesturePointer)return;
+     const last=rawStroke[rawStroke.length-1];if(!last||Math.hypot(point.x-last.x,point.y-last.y)>4)rawStroke.push(point);paintGesture();
+   }});
+   editOverlay.addEventListener('pointerup',endOverlayPointer);
+   editOverlay.addEventListener('pointercancel',endOverlayPointer);
  }}
  if(editUndo)editUndo.addEventListener('click',()=>{{if(editBusy||!undoStack.length)return;restore(undoStack.pop());setEditStatus('마지막 선 수정을 되돌렸어요.','info');}});
  // Reverting is the only irreversible action in the editor, so it is made
@@ -947,10 +982,16 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  let openPop = null;
  const closePop = () => {{ if (openPop) {{ openPop.style.display = 'none'; openPop = null; }} }};
  kakao.maps.event.addListener(map, 'click', closePop);
+ const preventKakaoMap = () => {{if(kakao.maps.event.preventMap)kakao.maps.event.preventMap();}};
+ const canHover = window.matchMedia&&window.matchMedia('(hover: hover)').matches;
+ const FACILITY_TAP_SLOP = 8;
  const addFacility = m => {{
    const el = document.createElement('div');
    el.className = 'facility-marker ' + m.type;
    el.title = m.label;
+   el.tabIndex = 0;
+   el.setAttribute('role','button');
+   el.setAttribute('aria-label',m.name+' · '+m.label);
    const pop = document.createElement('div');
    pop.className = 'poi-pop';
    pop.style.display = 'none';
@@ -978,15 +1019,38 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      }}
    }};
    const hide = () => {{ pop.style.display = 'none'; if (openPop === pop) openPop = null; }};
-   el.addEventListener('mouseenter', show);
-   el.addEventListener('mouseleave', hide);
-   el.addEventListener('click', ev => {{
-     ev.stopPropagation();
-     pop.style.display === 'none' ? show() : hide();
+   const toggle=()=>{{pop.style.display==='none'?show():hide();}};
+   let facilityPointer=null,suppressClickUntil=0;
+   if(canHover){{el.addEventListener('mouseenter',show);el.addEventListener('mouseleave',hide);}}
+   el.addEventListener('pointerdown',ev=>{{
+     facilityPointer={{id:ev.pointerId,startX:ev.clientX,startY:ev.clientY,lastX:ev.clientX,lastY:ev.clientY,moved:false}};
+     el.setPointerCapture(ev.pointerId);preventKakaoMap();
    }});
+   el.addEventListener('pointermove',ev=>{{
+     if(!facilityPointer||facilityPointer.id!==ev.pointerId)return;
+     if(Math.hypot(ev.clientX-facilityPointer.startX,ev.clientY-facilityPointer.startY)>FACILITY_TAP_SLOP)facilityPointer.moved=true;
+     if(facilityPointer.moved){{
+       closePop();
+       map.panBy(facilityPointer.lastX-ev.clientX,facilityPointer.lastY-ev.clientY);
+     }}
+     facilityPointer.lastX=ev.clientX;facilityPointer.lastY=ev.clientY;preventKakaoMap();
+   }});
+   el.addEventListener('pointerup',ev=>{{
+     if(!facilityPointer||facilityPointer.id!==ev.pointerId)return;
+     preventKakaoMap();suppressClickUntil=performance.now()+600;
+     if(!facilityPointer.moved)toggle();
+     facilityPointer=null;
+   }});
+   el.addEventListener('pointercancel',()=>{{facilityPointer=null;}});
+   el.addEventListener('click',ev=>{{
+     ev.stopPropagation();preventKakaoMap();
+     if(performance.now()<suppressClickUntil)return;
+     toggle();
+   }});
+   el.addEventListener('keydown',ev=>{{if(ev.key==='Enter'||ev.key===' '){{ev.preventDefault();preventKakaoMap();toggle();}}}});
    const overlay = new kakao.maps.CustomOverlay({{
      position: new kakao.maps.LatLng(m.lat, m.lon), content: el,
-     xAnchor:.5, yAnchor:.5, zIndex:6
+     xAnchor:.5, yAnchor:.5, zIndex:6, clickable:true
    }});
    overlay.setMap(map);
    guideLayers.push(overlay);

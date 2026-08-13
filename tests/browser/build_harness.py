@@ -56,12 +56,13 @@ KAKAO_DOUBLE = """<script>
   Map.prototype.setBounds=function(){};
   Map.prototype.setDraggable=function(v){ this.draggable=v; };
   Map.prototype.setZoomable=function(v){ this.zoomable=v; };
+  Map.prototype.panBy=function(x,y){ this.lastPan=[x,y]; this.panCount=(this.panCount||0)+1; };
   Map.prototype.getProjection=function(){ return {
-    pointFromCoords: ll => new Point((ll.getLng()-126.97)*100000, (37.57-ll.getLat())*100000),
-    coordsFromPoint: p => new LatLng(37.57 - p.y/100000, 126.97 + p.x/100000) }; };
+    containerPointFromCoords: ll => new Point((ll.getLng()-126.97)*100000, (37.57-ll.getLat())*100000),
+    coordsFromContainerPoint: p => new LatLng(37.57 - p.y/100000, 126.97 + p.x/100000) }; };
   window.kakao = { maps: { load: fn => fn(), Map, LatLng, Point, Polyline, CustomOverlay,
     Circle, LatLngBounds, ZoomControl: function(){}, ControlPosition: { LEFT: 'LEFT' },
-    event: { addListener: function(){} }, services: { Status: { OK: 'OK' } } } };
+    event: { addListener: function(){}, preventMap: function(){ window.__preventMapCount=(window.__preventMapCount||0)+1; } }, services: { Status: { OK: 'OK' } } } };
 })();
 </script>
 """
