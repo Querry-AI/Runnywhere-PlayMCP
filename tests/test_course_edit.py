@@ -195,6 +195,9 @@ def test_mobile_preview_uses_compact_summary_and_accessible_edit_controls():
     assert 'body.editing .map-hud' in page
     assert 'body.editing.tool-active .facility-marker' in page
     assert "map.setDraggable(!editMode)" in page
+    assert 'id="editBar" class="sr-only"' in page
+    assert 'class="edit-bar"' not in page
+    assert 'body.editing .edit-bar' not in page
 
 
 def test_animal_preview_explains_save_as_new_editing():

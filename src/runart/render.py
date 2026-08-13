@@ -330,7 +330,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
         facility_tally += f" · 가까운 {FACILITY_CHIP_LIMIT}곳 표시"
     edit_enabled = os.environ.get("RUNART_ROUTE_EDIT", "1") == "1"
     edit_notice = (
-        '<p class="edit-notice">원본 동물 코스는 유지되고, 저장하면 새 <b>직접 편집한 코스</b>가 만들어져요.</p>'
+        '<span>원본 동물 코스는 유지되고, 저장하면 새 직접 편집한 코스가 만들어져요.</span>'
         if shape else ""
     )
     g = graphmod.get_graph()
@@ -451,10 +451,8 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
       overflow:hidden;text-overflow:ellipsis}}
  .poi-pop span{{font-size:13px;color:#5c675e;line-height:1.4;word-break:keep-all}}
  .mobile-dock{{display:none}}
- .edit-bar{{display:none;position:absolute;z-index:940;left:12px;right:12px;bottom:12px;align-items:center;gap:8px;padding:8px 10px;background:rgba(255,255,255,.92);border-radius:12px;box-shadow:0 4px 16px rgba(10,28,19,.12)}}
+ .sr-only{{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}}
  #editRoute{{position:absolute;z-index:540;left:14px;top:66px;min-height:46px;border:0;border-radius:12px;padding:0 14px;background:#fff;color:#142018;font-family:inherit;font-size:13px;font-weight:700;box-shadow:0 4px 18px rgba(0,0,0,.12)}}
- .edit-status{{font-size:13px;line-height:1.35;color:#344238;flex:1;min-width:0}}
- .edit-notice{{width:100%;margin:0;padding:8px 10px;border-radius:10px;background:#fff5d6;color:#594600;font-size:13px;line-height:1.4}}
  .edit-tools{{position:absolute;z-index:950;left:10px;top:10px;display:none;gap:6px}}
  .edit-tool-circle{{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;min-height:40px!important;padding:0!important;border:0;border-radius:50%!important;background:#fff!important;color:#142018!important;box-shadow:0 2px 8px rgba(10,28,19,.18)!important;cursor:pointer}}
  .edit-tool-circle svg{{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}}
@@ -462,7 +460,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .edit-tool-circle.save{{background:#087b59!important;color:#fff!important}}
  .edit-tool-circle[aria-pressed="true"]{{background:#142018!important;color:#fff!important;outline:3px solid #8ee0bb;outline-offset:2px}}
  .edit-overlay{{position:absolute;z-index:930;inset:0;width:100%;height:100%;touch-action:none;pointer-events:none}}
- body.editing .edit-bar,body.editing .edit-tools{{display:flex}}body.editing .mobile-dock{{display:none!important}}
+ body.editing .edit-tools{{display:flex}}body.editing .mobile-dock{{display:none!important}}
  body.editing .map-hud,body.editing .run-panel,body.editing .view-toggle,body.editing #editRoute{{display:none!important}}
  body.editing.tool-active .facility-marker{{pointer-events:none;opacity:.2}}
  body.editing.tool-active .edit-overlay{{pointer-events:auto}}
@@ -495,7 +493,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
 </div><div class="view-toggle" aria-label="지도 보기 전환">
  <button id="shapeView" type="button">{shape_view_label}</button>
  <button id="guideView" type="button" class="active">러닝 안내</button>
- </div>{'<button id="editRoute" type="button">코스 선 수정</button>' if edit_enabled else ''}<svg id="editOverlay" class="edit-overlay" aria-hidden="true"></svg><div class="edit-tools" role="toolbar" aria-label="코스 선 도구"><button id="drawTool" class="edit-tool-circle" type="button" aria-label="펜으로 코스 선 그리기" title="펜" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4.3-1 10.4-10.4a2.1 2.1 0 0 0-3-3L5.3 16Z"/><path d="m14.5 6.8 3 3"/></svg></button><button id="eraseTool" class="edit-tool-circle" type="button" aria-label="직선 지우개로 코스 구간 지우기" title="지우개" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.7 14.7 8.6-8.6a2 2 0 0 1 2.8 0l2 2a2 2 0 0 1 0 2.8l-7.4 7.4a2 2 0 0 1-2.8 0Z"/><path d="m11 18 7 0M8.3 11.1l4.6 4.6"/></svg></button><button id="editUndo" class="edit-tool-circle" type="button" aria-label="마지막 선 수정 되돌리기" title="되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8v5h5"/><path d="M5.5 12a7 7 0 1 0 2-5"/></svg></button><button id="editCancel" class="edit-tool-circle" type="button" aria-label="원본 코스로 복구" title="원본으로"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 11.5 12 4l8.5 7.5"/><path d="M6.5 10v9h11v-9"/><path d="M9.5 19v-5h5v5"/></svg></button><button id="editSave" class="edit-tool-circle save" type="button" aria-label="수정한 코스를 새 코스로 저장" title="저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></svg></button></div><div id="editBar" class="edit-bar" aria-label="코스 선 수정 상태" aria-busy="false">{edit_notice}<span id="editStatus" class="edit-status" role="status" aria-live="polite">펜이나 지우개를 선택하세요.</span></div></div>
+ </div>{'<button id="editRoute" type="button">코스 선 수정</button>' if edit_enabled else ''}<svg id="editOverlay" class="edit-overlay" aria-hidden="true"></svg><div class="edit-tools" role="toolbar" aria-label="코스 선 도구"><button id="drawTool" class="edit-tool-circle" type="button" aria-label="펜으로 코스 선 그리기" title="펜" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4.3-1 10.4-10.4a2.1 2.1 0 0 0-3-3L5.3 16Z"/><path d="m14.5 6.8 3 3"/></svg></button><button id="eraseTool" class="edit-tool-circle" type="button" aria-label="직선 지우개로 코스 구간 지우기" title="지우개" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.7 14.7 8.6-8.6a2 2 0 0 1 2.8 0l2 2a2 2 0 0 1 0 2.8l-7.4 7.4a2 2 0 0 1-2.8 0Z"/><path d="m11 18 7 0M8.3 11.1l4.6 4.6"/></svg></button><button id="editUndo" class="edit-tool-circle" type="button" aria-label="마지막 선 수정 되돌리기" title="되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8v5h5"/><path d="M5.5 12a7 7 0 1 0 2-5"/></svg></button><button id="editCancel" class="edit-tool-circle" type="button" aria-label="원본 코스로 복구" title="원본으로"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 11.5 12 4l8.5 7.5"/><path d="M6.5 10v9h11v-9"/><path d="M9.5 19v-5h5v5"/></svg></button><button id="editSave" class="edit-tool-circle save" type="button" aria-label="수정한 코스를 새 코스로 저장" title="저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></svg></button></div><div id="editBar" class="sr-only" aria-label="코스 선 수정 상태" aria-busy="false">{edit_notice}<span id="editStatus" role="status" aria-live="polite">펜이나 지우개를 선택하세요.</span></div></div>
 <div class="wrap">
 <div class="card course-summary">
  <h1>{title}</h1>
