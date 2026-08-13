@@ -16,8 +16,8 @@ import networkx as nx
 
 from . import graph as graphmod
 from .facilities import facility_requirement_score
-from .geo import to_latlon, to_xy
-from .models import CourseParams
+from .geo import haversine_m, to_latlon, to_xy
+from .models import CourseParams, CourseWaypoint
 from .rfs import route_rfs_summary, routing_weight
 
 DISTANCE_TOLERANCE = 0.05  # ±5% (PRD §7.2)
@@ -117,6 +117,87 @@ def _route(g, weight, a, b) -> list:
     return nx.bidirectional_dijkstra(g, a, b, weight=weight)[1]
 
 
+def _manual_waypoint_course(params: CourseParams) -> Course:
+    """Route a user-edited loop through bounded, ordered street waypoints."""
+    start_node, start_snap = graphmod.nearest_node(params.lat, params.lon)
+    if start_snap > 1500:
+        raise CourseError("출발점이 현재 지원 지역 밖이에요.")
+    max_radius_m = min(8000.0, params.distance_km * 1000.0)
+    requested_points = [(p.lat, p.lon) for p in params.manual_waypoints]
+    if len(requested_points) < 2:
+        raise CourseError("경유점은 두 곳 이상 추가해 주세요.")
+    perimeter = sum(
+        haversine_m(a[0], a[1], b[0], b[1])
+        for a, b in zip(
+            [(params.lat, params.lon), *requested_points],
+            [*requested_points, (params.lat, params.lon)],
+        )
+    )
+    if perimeter > 42195.0:
+        raise CourseError("수정한 코스가 42.195km를 넘어요. 경유점을 가까이 옮겨 주세요.")
+    farthest = max(
+        haversine_m(params.lat, params.lon, lat, lon)
+        for lat, lon in requested_points
+    )
+    if farthest > max_radius_m:
+        raise CourseError(
+            f"경유점은 출발점에서 {max_radius_m / 1000:g}km 안에 둬야 해요."
+        )
+
+    snapped: list[tuple[object, tuple[float, float]]] = []
+    for lat, lon in requested_points:
+        node, snap_m = graphmod.nearest_node(lat, lon)
+        if node is None or snap_m > 300:
+            raise CourseError(
+                "경유점이 달릴 수 있는 도로에서 너무 멀어요. 경유점을 도로 가까이 옮겨 주세요."
+            )
+        if node == start_node or (snapped and node == snapped[-1][0]):
+            raise CourseError("경유점이 출발점 또는 다른 경유점과 너무 가까워요.")
+        node_data = graphmod.get_graph().nodes[node]
+        snapped.append((node, (node_data["lat"], node_data["lon"])))
+
+    g = graphmod.subgraph_around(
+        params.lat, params.lon, min(6000.0, max(2000.0, farthest * 1.35 + 600.0))
+    )
+    stops = [start_node, *(node for node, _ in snapped), start_node]
+    if any(node not in g for node in stops):
+        raise CourseError("경유점이 현재 도로망 범위를 벗어났어요. 경유점을 가까이 옮겨 주세요.")
+    weight = easy_route_weight(routing_weight(params.night_mode, params.include_hills))
+    deadline = time.perf_counter() + 0.8
+    path: list = []
+    for a, b in zip(stops, stops[1:]):
+        if time.perf_counter() > deadline:
+            raise CourseError("경로 다시 계산에 시간이 걸렸어요. 경유점을 줄여 다시 시도해 주세요.")
+        try:
+            segment = _route(g, weight, a, b)
+        except (nx.NetworkXNoPath, nx.NodeNotFound) as exc:
+            raise CourseError(
+                "경유점을 잇는 보행 경로를 찾지 못했어요. 경유점을 가까운 도로로 옮겨 주세요."
+            ) from exc
+        path.extend(segment if not path else segment[1:])
+
+    length, ascent = _path_metrics(g, path)
+    if not 1000.0 <= length <= 42195.0:
+        raise CourseError("수정한 코스는 1km 이상 42.195km 이하가 되도록 경유점을 조정해 주세요.")
+    summary = route_rfs_summary(g, path, params.night_mode, params.include_hills)
+    points = [(g.nodes[node]["lat"], g.nodes[node]["lon"]) for node in path]
+    normalized = params.model_copy(
+        update={
+            "manual_waypoints": [
+                CourseWaypoint(lat=lat, lon=lon) for _, (lat, lon) in snapped
+            ]
+        }
+    )
+    return Course(
+        params=normalized,
+        path=path,
+        points=points,
+        length_m=length,
+        ascent_m=ascent,
+        rfs=summary,
+    )
+
+
 def easy_route_weight(base_weight: str):
     """Prefer roads that are easier to follow without exposing a new score.
 
@@ -203,6 +284,8 @@ def _loop_via_circle(g, weight, start_node, target_m: float, bearing_deg: float)
 
 
 def generate_course(params: CourseParams) -> Course:
+    if params.manual_waypoints:
+        return _manual_waypoint_course(params)
     start_node, snap_dist = graphmod.nearest_node(params.lat, params.lon)
     if snap_dist > 1500:
         raise CourseError(

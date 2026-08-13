@@ -25,7 +25,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from typing import Annotated
 
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
@@ -41,7 +41,7 @@ from .gpx import to_gpx
 from .exploration import (atlas_html, create_relay, decode_relay,
                           passport_html, home_html, legal_html, record_run,
                           relay_html)
-from .models import (CourseParams, DEFAULT_PACE_MIN_PER_KM, decode_course_id,
+from .models import (CourseParams, CourseWaypoint, DEFAULT_PACE_MIN_PER_KM, decode_course_id,
                      decode_shape_token, encode_course_id)
 from .render import (card_svg, course_markdown, markdown_text,
                      preview_html, route_points)
@@ -60,6 +60,7 @@ if (_BASE_PARTS.scheme not in {"http", "https"} or not _BASE_PARTS.hostname
         or _BASE_PARTS.params or _BASE_PARTS.query or _BASE_PARTS.fragment):
     raise RuntimeError("RUNART_BASE_URL must be an HTTP(S) origin without credentials or a path")
 KAKAO_JAVASCRIPT_KEY = os.environ.get("KAKAO_JAVASCRIPT_KEY", "")
+ROUTE_EDIT_ENABLED = os.environ.get("RUNART_ROUTE_EDIT", "1") == "1"
 if KAKAO_JAVASCRIPT_KEY and not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", KAKAO_JAVASCRIPT_KEY):
     raise RuntimeError("KAKAO_JAVASCRIPT_KEY has an invalid format")
 LEGAL_CONTACT = os.environ.get("RUNART_LEGAL_CONTACT", "")
@@ -112,6 +113,8 @@ MCP_OUTER_RESPONSE_BUDGET_S = 2.85
 ANIMAL_RESPONSE_BUDGET_S = 2.65
 # Plain-course generation must also stay inside the PlayMCP p99 3s budget.
 GENERAL_RESPONSE_BUDGET_S = 2.65
+ROUTE_EDIT_RESPONSE_BUDGET_S = 2.65
+ROUTE_EDIT_MAX_CONCURRENT = max(1, int(os.environ.get("RUNART_MAX_CONCURRENT_ROUTE_EDITS", "1")))
 # At an arbitrary address (no station preset), we first try to draw the animal
 # from that exact start briefly; if it cannot complete, we substitute a nearby
 # station's verified preset and cache that decision under the requested point.
@@ -253,6 +256,15 @@ def offloaded(fn):
         except TimeoutError:
             return ("⏱️ 요청 처리를 3초 안에 마치지 못했어요. 같은 요청을 한 번 더 "
                     "시도하거나 위치·거리를 조금 단순하게 알려주세요.")
+        except Exception:  # noqa: BLE001
+            # Tools must never surface a raw exception: FastMCP would turn it
+            # into an MCP error carrying the internal message (a corrupt
+            # course_id used to leak "Error -3 while decompressing data").
+            # Cancellation derives from BaseException and is deliberately
+            # left to propagate.
+            log.exception("tool %s failed", getattr(fn, "__name__", "?"))
+            return ("⚠️ 요청을 처리하지 못했어요. 입력값을 다시 확인하거나 "
+                    "잠시 후 한 번 더 시도해 주세요.")
     return wrapper
 
 
@@ -328,11 +340,19 @@ def _build_params(location, lat, lon, distance_km, duration_min, include_hills,
     if distance_km is None:
         distance_km = 5.0
         note = "거리를 말씀하지 않으셔서 기본 5km로 잡았어요. 바꾸고 싶으면 말씀해 주세요.\n"
-    params = CourseParams(
-        lat=rlat, lon=rlon, location_name=name, distance_km=distance_km,
-        include_hills=include_hills, night_mode=night_mode,
-        need_facilities=need_facilities or [], shape=shape,
-    )
+    try:
+        params = CourseParams(
+            lat=rlat, lon=rlon, location_name=name, distance_km=distance_km,
+            include_hills=include_hills, night_mode=night_mode,
+            need_facilities=need_facilities or [], shape=shape,
+        )
+    except ValidationError as exc:
+        # The tool schema no longer bounds distance/duration, so an out-of-range
+        # value lands here. Answer in Korean instead of leaking a pydantic dump.
+        raise CourseError(
+            "거리는 1km에서 42.195km 사이로 알려주세요. "
+            "시간으로 요청하실 때는 10분에서 360분 사이가 가능해요."
+        ) from exc
     return params, note
 
 
@@ -590,10 +610,13 @@ def _animal_survey(lat: float, lon: float, name: str,
 
 def generate_running_course(
     location: Annotated[str | None, Field(description="Start place name in Seoul, e.g. '시청', '광화문'")] = None,
-    lat: Annotated[float | None, Field(ge=37.4, le=37.72, description="Start latitude (alternative to location; Seoul area)")] = None,
-    lon: Annotated[float | None, Field(ge=126.76, le=127.19, description="Start longitude (alternative to location; Seoul area)")] = None,
-    distance_km: Annotated[float | None, Field(ge=1, le=42.195, description="Target distance in km")] = None,
-    duration_min: Annotated[float | None, Field(ge=10, le=360, description="Target duration in minutes; converted to distance at 6:30/km if distance_km is absent")] = None,
+    # Ranges live in the descriptions, not as ge/le: a schema rejection happens
+    # before the tool body and surfaces a raw pydantic dump instead of the
+    # Korean guidance the user needs (e.g. asking for a course in Busan).
+    lat: Annotated[float | None, Field(description="Start latitude (alternative to location). Seoul only: 37.4-37.72")] = None,
+    lon: Annotated[float | None, Field(description="Start longitude (alternative to location). Seoul only: 126.76-127.19")] = None,
+    distance_km: Annotated[float | None, Field(description="Target distance in km, 1-42.195")] = None,
+    duration_min: Annotated[float | None, Field(description="Target duration in minutes, 10-360; converted to distance at 6:30/km if distance_km is absent")] = None,
     include_hills: Annotated[bool, Field(description="True to include uphill training segments (3-8% grade); False prefers flat routes")] = False,
     night_mode: Annotated[bool, Field(description="Prefer well-lit streets with safety CCTV coverage for night runs")] = False,
     need_facilities: Annotated[list[str] | None, Field(description="Facility types the course should pass: convenience_store, restroom, water, park")] = None,
@@ -621,10 +644,10 @@ def generate_running_course(
 def generate_animal_course(
     shape: Annotated[str | None, Field(description="Animal shape key: cat, dog, rabbit, whale")] = None,
     location: Annotated[str | None, Field(description="Start place name in Seoul")] = None,
-    lat: Annotated[float | None, Field(ge=37.4, le=37.72, description="Start latitude (alternative to location; Seoul area)")] = None,
-    lon: Annotated[float | None, Field(ge=126.76, le=127.19, description="Start longitude (alternative to location; Seoul area)")] = None,
-    distance_km: Annotated[float | None, Field(ge=1, le=42.195, description="Target distance in km")] = None,
-    duration_min: Annotated[float | None, Field(ge=10, le=360, description="Target duration in minutes")] = None,
+    lat: Annotated[float | None, Field(description="Start latitude (alternative to location). Seoul only: 37.4-37.72")] = None,
+    lon: Annotated[float | None, Field(description="Start longitude (alternative to location). Seoul only: 126.76-127.19")] = None,
+    distance_km: Annotated[float | None, Field(description="Target distance in km, 1-42.195")] = None,
+    duration_min: Annotated[float | None, Field(description="Target duration in minutes, 10-360")] = None,
     include_hills: Annotated[bool, Field(description="Include uphill segments")] = False,
     night_mode: Annotated[bool, Field(description="Prefer well-lit, CCTV-covered streets")] = False,
     need_facilities: Annotated[list[str] | None, Field(description="Facility types to pass by")] = None,
@@ -839,16 +862,22 @@ def refine_course(
     except Exception:
         return "⚠️ course_id가 올바르지 않아요. 코스 응답에 있는 지도 링크의 id를 사용해 주세요."
     updates: dict = {}
+    has_requested_change = False
     if distance_km is not None:
         updates["distance_km"] = distance_km
+        has_requested_change = True
     if include_hills is not None:
         updates["include_hills"] = include_hills
+        has_requested_change = True
     if night_mode is not None:
         updates["night_mode"] = night_mode
+        has_requested_change = True
     if shape is not None:
         updates["shape"] = None if shape == "none" else shape
+        has_requested_change = True
     if need_facilities is not None:
         updates["need_facilities"] = need_facilities
+        has_requested_change = True
     if location is not None:
         try:
             rlat, rlon, name = resolve_location(
@@ -856,7 +885,11 @@ def refine_course(
         except CourseError as e:
             return f"⚠️ {e}"
         updates.update(lat=rlat, lon=rlon, location_name=name)
-    if not updates:
+        has_requested_change = True
+    # Conversational refinement starts a fresh automatic route. Manual editor
+    # state must never leak into a changed-distance/shape/location URL.
+    updates["manual_waypoints"] = []
+    if not has_requested_change:
         return "바꿀 조건을 말씀해 주세요 (거리, 오르막, 야간 모드, 모양, 출발점, 편의시설)."
     return _run(params.model_copy(update=updates), timeout_s=remaining())
 
@@ -1018,6 +1051,55 @@ async def course_route_json(request: Request) -> Response:
                         headers={"Cache-Control": "public, max-age=86400"})
 
 
+class _CourseEditPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    waypoints: list[CourseWaypoint] = Field(min_length=2, max_length=6)
+
+
+@mcp.custom_route("/c/{course_id}/edit", methods=["POST"])
+async def edit_course_route(request: Request) -> Response:
+    if not ROUTE_EDIT_ENABLED:
+        return JSONResponse({"error": "경로 수정 기능을 잠시 사용할 수 없어요."}, status_code=503)
+    content_type = request.headers.get("content-type", "").split(";", 1)[0]
+    if content_type != "application/json":
+        return JSONResponse({"error": "JSON 형식의 경유점이 필요해요."}, status_code=400)
+    try:
+        current = decode_course_id(request.path_params["course_id"])
+    except Exception:
+        return JSONResponse({"error": "잘못된 코스 링크입니다."}, status_code=404)
+    try:
+        payload = _CourseEditPayload.model_validate(await request.json())
+    except (ValidationError, ValueError, TypeError):
+        return JSONResponse({"error": "경유점 정보를 확인해 주세요."}, status_code=400)
+    # Editing an animal course is save-as-new: the source token stays intact and
+    # the result becomes an ordinary direct-edited route.
+    edited = current.model_copy(update={"shape": None, "manual_waypoints": payload.waypoints})
+    try:
+        with anyio.fail_after(ROUTE_EDIT_RESPONSE_BUDGET_S):
+            course = await anyio.to_thread.run_sync(
+                functools.partial(_get_course, edited, ROUTE_EDIT_RESPONSE_BUDGET_S),
+                abandon_on_cancel=True,
+            )
+    except CourseError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    except (TimeoutError, _GenerationTimeout):
+        return JSONResponse(
+            {"error": "경로 다시 계산에 시간이 걸렸어요. 경유점을 줄여 다시 시도해 주세요."},
+            status_code=503,
+        )
+    new_id = encode_course_id(course.params)
+    return JSONResponse(
+        {
+            "course_id": new_id,
+            "preview_url": f"{BASE_URL}/c/{new_id}",
+            "length_km": round(course.length_km, 2),
+            "ascent_m": round(course.ascent_m),
+            "rfs": course.rfs["score"],
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @mcp.custom_route("/c/{course_id}", methods=["GET"])
 async def preview(request: Request) -> Response:
     raw = request.path_params["course_id"]
@@ -1105,15 +1187,40 @@ class _TokenBucketMiddleware:
 
     def __init__(self, app, rps: float = 20.0,
                  max_body_bytes: int = 65_536,
-                 max_concurrent_mcp: int = 16):
+                 max_concurrent_mcp: int = 16,
+                 max_concurrent_route_edits: int = ROUTE_EDIT_MAX_CONCURRENT,
+                 trust_proxy_hops: int = 0):
         self.app = app
         self.rps = rps
         self.burst = rps * 2
         self.max_body_bytes = max_body_bytes
         self.max_concurrent_mcp = max_concurrent_mcp
+        self.max_concurrent_route_edits = max_concurrent_route_edits
+        self.trust_proxy_hops = max(0, trust_proxy_hops)
         self.buckets: dict[str, tuple[float, float]] = {}
         self._active_mcp = 0
+        self._active_route_edits = 0
         self._active_lock = asyncio.Lock()
+
+    def _client_key(self, scope) -> str:
+        """Bucket key. Behind a load balancer the TCP peer is the balancer, so
+        every Kakao Tools user would share one bucket. X-Forwarded-For fixes
+        that but is client-writable, so it is only read when the operator
+        declares how many trusted proxies sit in front (RUNART_TRUST_PROXY_HOPS)
+        and only the entry that a trusted hop appended is used."""
+        peer = (scope.get("client") or ("?",))[0]
+        if not self.trust_proxy_hops:
+            return peer
+        for key, value in scope.get("headers", []):
+            if key.lower() != b"x-forwarded-for":
+                continue
+            chain = [p.strip() for p in value.decode("latin-1").split(",") if p.strip()]
+            if not chain:
+                break
+            # Rightmost entries are appended by the proxies closest to us and
+            # cannot be forged by the caller; anything further left can.
+            return chain[max(0, len(chain) - self.trust_proxy_hops)]
+        return peer
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -1143,8 +1250,8 @@ class _TokenBucketMiddleware:
                 ])
                 message["headers"] = headers
             await send(message)
-        client = (scope.get("client") or ("?",))[0]
         path = scope.get("path", "")
+        client = self._client_key(scope)
         # Health/readiness must remain observable during abusive traffic; the
         # hosting platform needs it to distinguish overload from a dead server.
         if path == "/healthz":
@@ -1191,15 +1298,23 @@ class _TokenBucketMiddleware:
             self.buckets.clear()
         self.buckets[client] = (tokens - cost, now)
 
-        admitted = False
-        if path == "/mcp":
+        admitted_mcp = False
+        admitted_edit = False
+        is_edit = scope.get("method") == "POST" and path.startswith("/c/") and path.endswith("/edit")
+        if path == "/mcp" or is_edit:
             async with self._active_lock:
-                if self._active_mcp >= self.max_concurrent_mcp:
+                active = self._active_route_edits if is_edit else self._active_mcp
+                limit = self.max_concurrent_route_edits if is_edit else self.max_concurrent_mcp
+                if active >= limit:
                     from starlette.responses import PlainTextResponse as _P
                     return await _P("server busy", status_code=429)(
                         scope, receive, send_with_security_headers)
-                self._active_mcp += 1
-                admitted = True
+                if is_edit:
+                    self._active_route_edits += 1
+                    admitted_edit = True
+                else:
+                    self._active_mcp += 1
+                    admitted_mcp = True
         try:
             return await self.app(scope, limited_receive,
                                   send_with_security_headers)
@@ -1208,9 +1323,12 @@ class _TokenBucketMiddleware:
             return await _P("request body too large", status_code=413)(
                 scope, original_receive, send_with_security_headers)
         finally:
-            if admitted:
+            if admitted_mcp:
                 async with self._active_lock:
                     self._active_mcp -= 1
+            if admitted_edit:
+                async with self._active_lock:
+                    self._active_route_edits -= 1
 
 
 class _RequestBodyTooLarge(Exception):
@@ -1283,6 +1401,7 @@ def create_app():
     return _TokenBucketMiddleware(
         app,
         rps=float(os.environ.get("RATE_LIMIT_RPS", "20")),
+        trust_proxy_hops=int(os.environ.get("RUNART_TRUST_PROXY_HOPS", "0")),
         max_body_bytes=int(os.environ.get("RUNART_MAX_BODY_BYTES", "65536")),
         max_concurrent_mcp=int(os.environ.get("RUNART_MAX_CONCURRENT_MCP", "16")),
     )

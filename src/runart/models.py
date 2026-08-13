@@ -9,7 +9,7 @@ import base64
 import json
 import zlib
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 FACILITY_TYPES = ("convenience_store", "restroom", "water", "park")
 
@@ -28,6 +28,11 @@ def _safe_decompress(packed: bytes, max_bytes: int) -> bytes:
     return raw
 
 
+class CourseWaypoint(BaseModel):
+    lat: float = Field(ge=37.4, le=37.72)
+    lon: float = Field(ge=126.76, le=127.19)
+
+
 class CourseParams(BaseModel):
     lat: float = Field(ge=37.4, le=37.72, description="Start latitude (Seoul)")
     lon: float = Field(ge=126.76, le=127.19, description="Start longitude (Seoul)")
@@ -37,6 +42,13 @@ class CourseParams(BaseModel):
     night_mode: bool = False
     shape: str | None = Field(default=None, max_length=32)
     need_facilities: list[str] = Field(default_factory=list, max_length=8)
+    manual_waypoints: list[CourseWaypoint] = Field(default_factory=list, max_length=6)
+
+    @model_validator(mode="after")
+    def validate_manual_waypoints(self):
+        if self.manual_waypoints and len(self.manual_waypoints) < 2:
+            raise ValueError("manual courses require at least two waypoints")
+        return self
 
     def canonical(self) -> dict:
         d = self.model_dump()
@@ -44,6 +56,14 @@ class CourseParams(BaseModel):
         d["lon"] = round(d["lon"], 5)
         d["distance_km"] = round(d["distance_km"], 2)
         d["need_facilities"] = sorted(set(d["need_facilities"]) & set(FACILITY_TYPES))
+        if d["manual_waypoints"]:
+            d["manual_waypoints"] = [
+                {"lat": round(point["lat"], 5), "lon": round(point["lon"], 5)}
+                for point in d["manual_waypoints"]
+            ]
+        else:
+            # Preserve the compact legacy payload and therefore every existing id.
+            d.pop("manual_waypoints")
         return d
 
 
@@ -57,9 +77,17 @@ def decode_course_id(course_id: str) -> CourseParams:
     if not isinstance(course_id, str) or len(course_id) > 4096:
         raise ValueError("course_id too large")
     padded = course_id + "=" * (-len(course_id) % 4)
-    raw = _safe_decompress(base64.urlsafe_b64decode(padded), 16_384)
-    raw = raw.decode()
-    return CourseParams(**json.loads(raw))
+    try:
+        raw = _safe_decompress(base64.urlsafe_b64decode(padded), 16_384)
+        raw = raw.decode()
+        return CourseParams(**json.loads(raw))
+    except ValueError:
+        # binascii.Error and json.JSONDecodeError are both ValueError subclasses.
+        raise
+    except Exception as exc:
+        # zlib.error is NOT a ValueError; letting it escape leaked
+        # "Error -3 while decompressing data" through the MCP tool result.
+        raise ValueError("invalid course_id") from exc
 
 
 def encode_shape_token(shape: str, distance_km: float) -> str:
