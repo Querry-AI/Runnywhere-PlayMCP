@@ -26,6 +26,8 @@ _LOCAL_SEARCH_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 _ADDRESS_SEARCH_URL = "https://dapi.kakao.com/v2/local/search/address.json"
 # 1s was too tight for Kakao's p95 and made lookups fail intermittently.
 _TIMEOUT_S = 2.5
+# Longest user-supplied location echoed back in an error message.
+ECHO_LIMIT = 40
 _SEOUL_BOUNDS = (37.4, 37.72, 126.76, 127.19)
 # Kakao `rect` filter (lon,lat,lon,lat) covering all of Seoul. A center-point
 # `radius` filter cannot cover Seoul (max 20km) and silently dropped stations
@@ -386,12 +388,14 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
                 if name in key or key in name:
                     return glat, glon, name
         known = "신설동역, 시청, 강남역, 여의도한강공원, 서울숲"
-        no_key_hint = (
-            "" if os.environ.get("KAKAO_REST_API_KEY")
-            else " (서버에 KAKAO_REST_API_KEY가 설정되지 않아 지도 검색 없이 동작 중이에요.)"
-        )
+        # Echo the input back so the user sees what we searched for, but cap it:
+        # an LLM can pass a very long string and the whole thing would otherwise
+        # land in the tool result (PlayMCP asks for minimal result size).
+        shown = location if len(location) <= ECHO_LIMIT else location[:ECHO_LIMIT] + "…"
+        # The missing-API-key state is an operator concern; it is already logged
+        # at startup and must not be described to end users.
         raise CourseError(
-            f"'{location}' 위치를 찾지 못했어요. 역 이름이나 도로명·번지까지 포함한 "
-            f"서울 주소로 다시 알려주세요. 예: {known}{no_key_hint}"
+            f"'{shown}' 위치를 찾지 못했어요. 역 이름이나 도로명·번지까지 포함한 "
+            f"서울 주소로 다시 알려주세요. 예: {known}"
         )
     raise CourseError("출발 위치가 필요해요. 역 이름이나 서울 주소를 알려주세요. 예: 시청, 강남역")

@@ -68,4 +68,5 @@ def test_preview_explains_missing_kakao_javascript_key():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example")
     assert "dapi.kakao.com/v2/maps/sdk.js" not in page
-    assert "KAKAO_JAVASCRIPT_KEY와 등록 도메인을 확인" in page
+    assert "지도를 불러오지 못했어요" in page
+    assert "KAKAO_JAVASCRIPT_KEY" not in page

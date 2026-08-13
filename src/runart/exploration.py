@@ -56,14 +56,21 @@ def _decode(token: str, version: int) -> dict:
     if not hmac.compare_digest(signature, expected):
         raise ValueError("token signature")
     padded = payload + "=" * (-len(payload) % 4)
-    inflater = zlib.decompressobj()
-    raw = inflater.decompress(base64.urlsafe_b64decode(padded), 64_001)
-    if len(raw) > 64_000 or inflater.unconsumed_tail:
-        raise ValueError("token too large")
-    raw += inflater.flush(64_001 - len(raw))
-    if len(raw) > 64_000:
-        raise ValueError("token too large")
-    data = json.loads(raw.decode())
+    try:
+        inflater = zlib.decompressobj()
+        raw = inflater.decompress(base64.urlsafe_b64decode(padded), 64_001)
+        if len(raw) > 64_000 or inflater.unconsumed_tail:
+            raise ValueError("token too large")
+        raw += inflater.flush(64_001 - len(raw))
+        if len(raw) > 64_000:
+            raise ValueError("token too large")
+        data = json.loads(raw.decode())
+    except ValueError:
+        raise
+    except Exception as exc:
+        # zlib.error escapes ValueError handling; normalise it here so callers
+        # keep returning their Korean guidance instead of an MCP error.
+        raise ValueError("invalid token") from exc
     if data.get("v") != version:
         raise ValueError("token version")
     return data
