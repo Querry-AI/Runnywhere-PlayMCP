@@ -198,6 +198,78 @@ def _manual_waypoint_course(params: CourseParams) -> Course:
     )
 
 
+def course_from_path(params: CourseParams, path: list[int]) -> Course:
+    """Build metrics for an exact, already road-snapped path."""
+    g = graphmod.get_graph()
+    if len(path) < 3 or len(path) > 1200 or path[0] != path[-1]:
+        raise CourseError("코스 선이 출발점으로 이어지지 않았어요. 지운 구간을 펜으로 연결해 주세요.")
+    if any(node not in g for node in path):
+        raise CourseError("현재 보행 지도에서 찾을 수 없는 코스 구간이 있어요.")
+    if any(not g.has_edge(a, b) for a, b in zip(path, path[1:])):
+        raise CourseError("보행로로 연결되지 않은 구간이 있어요. 해당 구간을 다시 그려 주세요.")
+    length, ascent = _path_metrics(g, path)
+    if not 1000.0 <= length <= 42195.0:
+        raise CourseError("수정한 코스는 1km 이상 42.195km 이하로 만들어 주세요.")
+    summary = route_rfs_summary(g, path, params.night_mode, params.include_hills)
+    normalized = params.model_copy(update={
+        "shape": None,
+        "manual_waypoints": [],
+        "manual_path": path,
+        "distance_km": round(length / 1000.0, 2),
+    })
+    return Course(
+        params=normalized,
+        path=path,
+        points=[(g.nodes[node]["lat"], g.nodes[node]["lon"]) for node in path],
+        length_m=length,
+        ascent_m=ascent,
+        rfs=summary,
+    )
+
+
+def snap_drawn_segment(params: CourseParams, path: list[int], from_index: int,
+                       to_index: int, stroke: list[CourseWaypoint]) -> Course:
+    """Replace only one route section with the pedestrian path under a finger stroke."""
+    course_from_path(params, path)
+    if not (0 <= from_index < to_index < len(path) - 1):
+        raise CourseError("지울 구간의 양 끝을 기존 코스 선 위에서 선택해 주세요.")
+    if to_index - from_index > max(80, (len(path) - 1) // 2):
+        raise CourseError("한 번에 수정할 구간이 너무 길어요. 짧게 나눠 그려 주세요.")
+    if len(stroke) < 2:
+        raise CourseError("펜으로 기존 코스 선에서 시작해 다른 지점까지 그려 주세요.")
+
+    walked = sum(
+        haversine_m(a.lat, a.lon, b.lat, b.lon)
+        for a, b in zip(stroke, stroke[1:])
+    )
+    if walked < 20:
+        raise CourseError("그린 선이 너무 짧아요. 바꾸려는 길을 조금 더 길게 그려 주세요.")
+    if walked > 4000:
+        raise CourseError("한 번에 그린 선이 너무 길어요. 4km보다 짧게 나눠 그려 주세요.")
+
+    g = graphmod.get_graph()
+    step = max(1, math.ceil(len(stroke) / 18))
+    drawn_nodes = []
+    for point in stroke[1:-1:step]:
+        node, snap_m = graphmod.nearest_node(point.lat, point.lon)
+        if node is None or snap_m > 120:
+            raise CourseError("그린 선이 걸을 수 있는 길에서 너무 멀어요. 지도에 보이는 길을 따라 그려 주세요.")
+        if not drawn_nodes or drawn_nodes[-1] != node:
+            drawn_nodes.append(node)
+
+    stops = [path[from_index], *drawn_nodes, path[to_index]]
+    weight = easy_route_weight(routing_weight(params.night_mode, params.include_hills))
+    replacement: list[int] = []
+    for a, b in zip(stops, stops[1:]):
+        try:
+            segment = _route(g, weight, a, b)
+        except (nx.NetworkXNoPath, nx.NodeNotFound) as exc:
+            raise CourseError("그린 선을 잇는 보행로를 찾지 못했어요. 가까운 길을 따라 다시 그려 주세요.") from exc
+        replacement.extend(segment if not replacement else segment[1:])
+    edited_path = path[:from_index] + replacement + path[to_index + 1:]
+    return course_from_path(params, edited_path)
+
+
 def easy_route_weight(base_weight: str):
     """Prefer roads that are easier to follow without exposing a new score.
 
@@ -284,6 +356,8 @@ def _loop_via_circle(g, weight, start_node, target_m: float, bearing_deg: float)
 
 
 def generate_course(params: CourseParams) -> Course:
+    if params.manual_path:
+        return course_from_path(params, params.manual_path)
     if params.manual_waypoints:
         return _manual_waypoint_course(params)
     start_node, snap_dist = graphmod.nearest_node(params.lat, params.lon)

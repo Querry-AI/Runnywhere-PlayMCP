@@ -43,11 +43,14 @@ class CourseParams(BaseModel):
     shape: str | None = Field(default=None, max_length=32)
     need_facilities: list[str] = Field(default_factory=list, max_length=8)
     manual_waypoints: list[CourseWaypoint] = Field(default_factory=list, max_length=6)
+    manual_path: list[int] = Field(default_factory=list, max_length=1200)
 
     @model_validator(mode="after")
     def validate_manual_waypoints(self):
         if self.manual_waypoints and len(self.manual_waypoints) < 2:
             raise ValueError("manual courses require at least two waypoints")
+        if self.manual_path and len(self.manual_path) < 3:
+            raise ValueError("manual path requires at least three nodes")
         return self
 
     def canonical(self) -> dict:
@@ -64,6 +67,8 @@ class CourseParams(BaseModel):
         else:
             # Preserve the compact legacy payload and therefore every existing id.
             d.pop("manual_waypoints")
+        if not d["manual_path"]:
+            d.pop("manual_path")
         return d
 
 

@@ -225,25 +225,6 @@ def _shape_only_route(course: Course) -> list[list[float]]:
     return [[round(lat, 6), round(lon, 6)] for lat, lon in route_points(course)]
 
 
-def editable_waypoints(course: Course) -> list[tuple[float, float]]:
-    """Return persisted snapped handles or stable quarter-route handles."""
-    if course.params.manual_waypoints:
-        return [(p.lat, p.lon) for p in course.params.manual_waypoints]
-    points = route_points(course)
-    if len(points) < 4:
-        return points[1:-1]
-    distances = [0.0]
-    for a, b in zip(points, points[1:]):
-        distances.append(distances[-1] + haversine_m(a[0], a[1], b[0], b[1]))
-    total = distances[-1] or 1.0
-    handles = []
-    for fraction in (0.25, 0.5, 0.75):
-        target = total * fraction
-        index = next((i for i, value in enumerate(distances) if value >= target), len(points) - 2)
-        handles.append(points[min(index, len(points) - 2)])
-    return handles
-
-
 def _score_breakdown_html(course: Course) -> str:
     comps = course.rfs.get("components", {})
     weights = course.rfs.get("weights", {})
@@ -352,7 +333,11 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
         '<p class="edit-notice">원본 동물 코스는 유지되고, 저장하면 새 <b>직접 편집한 코스</b>가 만들어져요.</p>'
         if shape else ""
     )
-    edit_waypoints = json.dumps(editable_waypoints(course))
+    g = graphmod.get_graph()
+    edit_path = json.dumps([
+        [node, round(g.nodes[node]["lat"], 6), round(g.nodes[node]["lon"], 6)]
+        for node in course.path
+    ])
     kakao_key = html.escape(kakao_javascript_key, quote=True)
     map_sdk = (
         f'<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={kakao_key}'
@@ -380,12 +365,14 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .local-course-editor svg{{width:100%;height:100%;display:block;touch-action:none;background:linear-gradient(135deg,#f5f8f2 25%,#e9f0e7 25%,#e9f0e7 50%,#f5f8f2 50%,#f5f8f2 75%,#e9f0e7 75%);background-size:42px 42px}}
  .local-course-hint{{position:absolute;z-index:2;left:14px;right:14px;top:14px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.94);box-shadow:0 4px 18px rgba(0,0,0,.1);font-size:13px;font-weight:700;line-height:1.4;color:#243028}}
  .local-course-hint strong{{display:block;color:#087b59;margin-bottom:2px}}
- .local-editor-actions{{position:absolute;z-index:3;left:14px;right:14px;bottom:14px;display:flex;gap:8px;flex-wrap:wrap}}
+ .local-editor-actions{{position:absolute;z-index:3;inset:0;pointer-events:none}}
  .local-editor-actions button{{min-height:46px;padding:0 13px;border:0;border-radius:12px;background:#fff;color:#142018;box-shadow:0 4px 18px rgba(0,0,0,.14);font:700 14px inherit}}
  .local-editor-actions .local-primary{{background:#087b59;color:#fff}}
- .local-editor-actions .local-edit-tools{{display:none;gap:8px;flex-wrap:wrap;width:100%}}
+ #localEditRoute{{position:absolute;left:14px;bottom:14px;pointer-events:auto}}
+ .local-editor-actions .local-edit-tools{{display:none;position:absolute;left:10px;top:10px;gap:6px;pointer-events:auto}}
  .local-course-editor.editing .local-edit-tools{{display:flex}}
  .local-course-editor.editing #localEditRoute{{display:none}}
+ .local-course-editor.editing .local-course-hint{{top:60px;left:10px;right:auto;max-width:calc(100% - 20px);padding:7px 9px;box-shadow:none}}
  .map-error{{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;
       box-sizing:border-box;text-align:center;color:#44514a;font-size:14px;line-height:1.5;background:#eef2ec}}
  .map-error strong{{font-size:16px;color:#142018}}
@@ -464,17 +451,21 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
       overflow:hidden;text-overflow:ellipsis}}
  .poi-pop span{{font-size:13px;color:#5c675e;line-height:1.4;word-break:keep-all}}
  .mobile-dock{{display:none}}
- .edit-bar{{display:none;position:absolute;z-index:940;left:14px;right:14px;bottom:14px;gap:8px;align-items:center;padding:12px;background:rgba(255,255,255,.97);border:1px solid rgba(20,35,25,.1);border-radius:16px;box-shadow:0 10px 30px rgba(10,28,19,.24);flex-wrap:wrap}}
- .edit-bar button{{min-height:46px;border:0;border-radius:11px;padding:0 12px;background:#edf5f0;color:#142018;font-family:inherit;font-size:13px;font-weight:700}}
+ .edit-bar{{display:none;position:absolute;z-index:940;left:12px;right:12px;bottom:12px;align-items:center;gap:8px;padding:8px 10px;background:rgba(255,255,255,.92);border-radius:12px;box-shadow:0 4px 16px rgba(10,28,19,.12)}}
  #editRoute{{position:absolute;z-index:540;left:14px;top:66px;min-height:46px;border:0;border-radius:12px;padding:0 14px;background:#fff;color:#142018;font-family:inherit;font-size:13px;font-weight:700;box-shadow:0 4px 18px rgba(0,0,0,.12)}}
- .edit-disabled{{position:absolute;z-index:540;left:14px;top:66px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,.94);color:#66726a;font-size:13px}}
- .edit-bar button.primary{{background:#087b59;color:#fff}}
- .edit-status{{font-size:13px;line-height:1.35;color:#344238;flex:1;min-width:180px}}
+ .edit-status{{font-size:13px;line-height:1.35;color:#344238;flex:1;min-width:0}}
  .edit-notice{{width:100%;margin:0;padding:8px 10px;border-radius:10px;background:#fff5d6;color:#594600;font-size:13px;line-height:1.4}}
- .edit-points{{display:flex;gap:6px;width:100%;overflow:auto;padding:0;margin:0;list-style:none}}
- .edit-points button{{min-width:44px;padding:0 10px}}
- .edit-points button[aria-current="true"]{{background:#142018;color:#fff}}
- body.editing .edit-bar{{display:flex}}body.editing .mobile-dock{{display:none!important}}
+ .edit-tools{{position:absolute;z-index:950;left:10px;top:10px;display:none;gap:6px}}
+ .edit-tool-circle{{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;min-height:40px!important;padding:0!important;border:0;border-radius:50%!important;background:#fff!important;color:#142018!important;box-shadow:0 2px 8px rgba(10,28,19,.18)!important;cursor:pointer}}
+ .edit-tool-circle svg{{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}}
+ .edit-tool-circle:disabled{{opacity:.42;cursor:not-allowed}}
+ .edit-tool-circle.save{{background:#087b59!important;color:#fff!important}}
+ .edit-tool-circle[aria-pressed="true"]{{background:#142018!important;color:#fff!important;outline:3px solid #8ee0bb;outline-offset:2px}}
+ .edit-overlay{{position:absolute;z-index:930;inset:0;width:100%;height:100%;touch-action:none;pointer-events:none}}
+ body.editing .edit-bar,body.editing .edit-tools{{display:flex}}body.editing .mobile-dock{{display:none!important}}
+ body.editing .map-hud,body.editing .run-panel,body.editing .view-toggle,body.editing #editRoute{{display:none!important}}
+ body.editing.tool-active .facility-marker{{pointer-events:none;opacity:.2}}
+ body.editing.tool-active .edit-overlay{{pointer-events:auto}}
  footer{{color:#55605a;font-size:13px;padding:8px 20px 28px;text-align:center;line-height:1.6}}
  footer a{{display:inline-block;padding:8px 4px;color:inherit}}
  @media (max-width:760px){{.brand{{height:48px;padding:0 16px}}.brand span{{font-size:13px}} .facts{{grid-template-columns:repeat(2,1fr)}}
@@ -504,7 +495,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
 </div><div class="view-toggle" aria-label="지도 보기 전환">
  <button id="shapeView" type="button">{shape_view_label}</button>
  <button id="guideView" type="button" class="active">러닝 안내</button>
- </div>{'<button id="editRoute" type="button">경로 수정</button>' if edit_enabled else ''}<div id="editBar" class="edit-bar" aria-label="경로 수정 도구" aria-busy="false">{edit_notice}<span id="editStatus" class="edit-status" role="status" aria-live="polite">지점을 선택하거나 추가 모드를 켜세요.</span><ol id="editPointList" class="edit-points" aria-label="경유점 순서"></ol><button id="editAdd" type="button" aria-pressed="false">＋ 지점 추가</button><button id="editMove" type="button" aria-pressed="false">선택 이동</button><button id="editUp" type="button" aria-label="선택한 지점을 앞 순서로 이동">순서 ↑</button><button id="editDown" type="button" aria-label="선택한 지점을 뒤 순서로 이동">순서 ↓</button><button id="editUndo" type="button" aria-label="마지막 편집 취소">되돌리기</button><button id="editRedo" type="button" aria-label="취소한 편집 다시 실행">다시 실행</button><button id="editDelete" type="button">선택 삭제</button><button id="editCancel" type="button">전체 취소</button><button id="editSave" class="primary" type="button">이 경로로 다시 계산</button></div></div>
+ </div>{'<button id="editRoute" type="button">코스 선 수정</button>' if edit_enabled else ''}<svg id="editOverlay" class="edit-overlay" aria-hidden="true"></svg><div class="edit-tools" role="toolbar" aria-label="코스 선 도구"><button id="drawTool" class="edit-tool-circle" type="button" aria-label="펜으로 코스 선 그리기" title="펜" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4.3-1 10.4-10.4a2.1 2.1 0 0 0-3-3L5.3 16Z"/><path d="m14.5 6.8 3 3"/></svg></button><button id="eraseTool" class="edit-tool-circle" type="button" aria-label="직선 지우개로 코스 구간 지우기" title="지우개" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.7 14.7 8.6-8.6a2 2 0 0 1 2.8 0l2 2a2 2 0 0 1 0 2.8l-7.4 7.4a2 2 0 0 1-2.8 0Z"/><path d="m11 18 7 0M8.3 11.1l4.6 4.6"/></svg></button><button id="editUndo" class="edit-tool-circle" type="button" aria-label="마지막 선 수정 되돌리기" title="되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8v5h5"/><path d="M5.5 12a7 7 0 1 0 2-5"/></svg></button><button id="editCancel" class="edit-tool-circle" type="button" aria-label="원본 코스로 복구" title="원본으로"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 11.5 12 4l8.5 7.5"/><path d="M6.5 10v9h11v-9"/><path d="M9.5 19v-5h5v5"/></svg></button><button id="editSave" class="edit-tool-circle save" type="button" aria-label="수정한 코스를 새 코스로 저장" title="저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></svg></button></div><div id="editBar" class="edit-bar" aria-label="코스 선 수정 상태" aria-busy="false">{edit_notice}<span id="editStatus" class="edit-status" role="status" aria-live="polite">펜이나 지우개를 선택하세요.</span></div></div>
 <div class="wrap">
 <div class="card course-summary">
  <h1>{title}</h1>
@@ -556,7 +547,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const shapeRoute = {shape_route};
  const kms = {km_markers};
  const dirs = {dir_markers};
- const initialEditWaypoints = {edit_waypoints};
+ const initialEditPath = {edit_path};
  const editEnabled = {str(edit_enabled).lower()};
  const editEndpoint = '{base_url}/c/{cid}/edit';
  const inlineStartBtn = document.getElementById('inlineRunStart');
@@ -576,84 +567,54 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const mobileStartBtn = document.getElementById('mobileRunStart');
  const editButton = document.getElementById('editRoute');
  const editCancel = document.getElementById('editCancel');
- const editDelete = document.getElementById('editDelete');
  const editSave = document.getElementById('editSave');
  const editStatus = document.getElementById('editStatus');
- const editAdd = document.getElementById('editAdd');
- const editMove = document.getElementById('editMove');
- const editUp = document.getElementById('editUp');
- const editDown = document.getElementById('editDown');
+ const drawTool = document.getElementById('drawTool');
+ const eraseTool = document.getElementById('eraseTool');
  const editUndo = document.getElementById('editUndo');
- const editRedo = document.getElementById('editRedo');
- const editPointList = document.getElementById('editPointList');
  const editBar = document.getElementById('editBar');
- const editN = document.getElementById('editN');
- const editS = document.getElementById('editS');
- const editW = document.getElementById('editW');
- const editE = document.getElementById('editE');
  const mapNode = document.getElementById('map');
  const initLocalCourseEditor = () => {{
-   const source = segs.length ? [
-     [segs[0][0], segs[0][1]],
-     ...segs.map(segment => [segment[2], segment[3]])
-   ] : [[{p.lat}, {p.lon}]];
-   const all = [...source, ...initialEditWaypoints];
+   const source = initialEditPath.map(([,lat,lon])=>[lat,lon]);
+   const all = source;
    const latMin=Math.min(...all.map(point=>point[0])), latMax=Math.max(...all.map(point=>point[0]));
    const lonMin=Math.min(...all.map(point=>point[1])), lonMax=Math.max(...all.map(point=>point[1]));
    const latSpan=Math.max(latMax-latMin,.003), lonSpan=Math.max(lonMax-lonMin,.003);
    const toSvg=([lat,lon]) => [70+(lon-lonMin)/lonSpan*860, 650-(lat-latMin)/latSpan*580];
-   const fromSvg=(x,y) => [latMin+(650-y)/580*latSpan, lonMin+(x-70)/860*lonSpan];
    const pathFor=points => points.map((point,index) => `${{index?'L':'M'}} ${{toSvg(point).map(value=>value.toFixed(1)).join(' ')}}`).join(' ');
-   mapNode.innerHTML='<div class="local-course-editor"><div class="local-course-hint"><strong>지도를 불러오지 못했어요 · 로컬 코스 편집 체험</strong><span id="localCourseHint">경로 수정을 눌러 지점을 선택하세요.</span></div><svg id="localCourseCanvas" viewBox="0 0 1000 720" role="application" aria-label="로컬 코스 편집 캔버스"></svg><div class="local-editor-actions"><button id="localEditRoute" class="local-primary" type="button">경로 수정</button><div class="local-edit-tools" role="toolbar" aria-label="로컬 경로 수정 도구"><ol id="localPointList" class="edit-points" aria-label="경유점 순서"></ol><button id="localEditAdd" type="button" aria-pressed="false">＋ 지점 추가</button><button id="localEditUndo" type="button">되돌리기</button><button id="localEditRedo" type="button">다시 실행</button><button id="localEditN" type="button" aria-label="선택한 경유점을 북쪽으로 이동">↑</button><button id="localEditS" type="button" aria-label="선택한 경유점을 남쪽으로 이동">↓</button><button id="localEditW" type="button" aria-label="선택한 경유점을 서쪽으로 이동">←</button><button id="localEditE" type="button" aria-label="선택한 경유점을 동쪽으로 이동">→</button><button id="localEditCancel" type="button">전체 취소</button><button id="localEditDelete" type="button">선택 삭제</button><button id="localEditSave" class="local-primary" type="button">이 경로로 다시 계산</button></div></div></div>';
+   mapNode.innerHTML='<div class="local-course-editor"><div class="local-course-hint"><strong>지도를 불러오지 못했어요 · 로컬 코스 편집 체험</strong><span id="localCourseHint">펜이나 지우개를 선택하세요.</span></div><svg id="localCourseCanvas" viewBox="0 0 1000 720" role="application" aria-label="로컬 코스 선 편집 캔버스"></svg><div class="local-editor-actions"><button id="localEditRoute" class="local-primary" type="button">코스 선 수정</button><div class="local-edit-tools" role="toolbar" aria-label="로컬 코스 선 도구"><button id="localDraw" class="edit-tool-circle" type="button" aria-label="펜으로 그리기" title="펜" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4.3-1 10.4-10.4a2.1 2.1 0 0 0-3-3L5.3 16Z"/><path d="m14.5 6.8 3 3"/></svg></button><button id="localErase" class="edit-tool-circle" type="button" aria-label="직선 지우개" title="지우개" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.7 14.7 8.6-8.6a2 2 0 0 1 2.8 0l2 2a2 2 0 0 1 0 2.8l-7.4 7.4a2 2 0 0 1-2.8 0Z"/><path d="m11 18 7 0M8.3 11.1l4.6 4.6"/></svg></button><button id="localEditUndo" class="edit-tool-circle" type="button" aria-label="마지막 선 수정 되돌리기" title="되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8v5h5"/><path d="M5.5 12a7 7 0 1 0 2-5"/></svg></button><button id="localEditCancel" class="edit-tool-circle" type="button" aria-label="원본 코스로 복구" title="원본으로"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 11.5 12 4l8.5 7.5"/><path d="M6.5 10v9h11v-9"/><path d="M9.5 19v-5h5v5"/></svg></button><button id="localEditSave" class="edit-tool-circle save" type="button" aria-label="수정한 코스를 새 코스로 저장" title="저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></svg></button></div></div></div>';
    const canvas=document.getElementById('localCourseCanvas');
    const hint=document.getElementById('localCourseHint');
    const localShell=mapNode.querySelector('.local-course-editor');
    const localEditButton=document.getElementById('localEditRoute');
    const localCancel=document.getElementById('localEditCancel');
-   const localDelete=document.getElementById('localEditDelete');
    const localSave=document.getElementById('localEditSave');
-   const localAdd=document.getElementById('localEditAdd'), localUndo=document.getElementById('localEditUndo'), localRedo=document.getElementById('localEditRedo'), localPointList=document.getElementById('localPointList');
-   let localEditing=false, selected=-1, localPoints=initialEditWaypoints.map(point=>[...point]), dragIndex=-1, localMode='select', localUndoStack=[], localRedoStack=[];
+   const localDraw=document.getElementById('localDraw'), localErase=document.getElementById('localErase');
+   const localUndo=document.getElementById('localEditUndo');
+   let localEditing=false, localMode=null, raw=[], gap=null, localUndoStack=[];
    const announce=text => {{ hint.textContent=text; if (editStatus) editStatus.textContent=text; }};
-   const localSnapshot=()=>localPoints.map(point=>[...point]);
-   const localRemember=()=>{{localUndoStack.push(localSnapshot());localRedoStack=[];}};
+   const localSnapshot=()=>({{gap:gap?[...gap]:null}});
+   const localRemember=()=>{{localUndoStack.push(localSnapshot());}};
    const renderLocal=() => {{
-     const controlPath=localPoints.length ? pathFor([[{p.lat},{p.lon}],...localPoints,[{p.lat},{p.lon}]]) : '';
-     canvas.innerHTML=`<path d="${{pathFor(source)}}" fill="none" stroke="#78867c" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" opacity=".5"/><path d="${{controlPath}}" fill="none" stroke="#087b59" stroke-width="6" stroke-dasharray="12 10" stroke-linecap="round" stroke-linejoin="round" opacity="${{localEditing?1:.75}}"/>${{localPoints.map((point,index)=>{{const [x,y]=toSvg(point);return `<circle data-index="${{index}}" cx="${{x}}" cy="${{y}}" r="${{selected===index?22:18}}" fill="${{selected===index?'#087b59':'#fff'}}" stroke="#142018" stroke-width="4"/><text x="${{x}}" y="${{y+6}}" text-anchor="middle" pointer-events="none" font-family="Arial" font-size="16" font-weight="700" fill="${{selected===index?'#fff':'#142018'}}">${{index+1}}</text>`;}}).join('')}}`;
-     localPointList.replaceChildren(...localPoints.map((point,index)=>{{const li=document.createElement('li'),button=document.createElement('button');button.type='button';button.textContent=`${{index+1}}번`;button.setAttribute('aria-current',String(index===selected));button.onclick=()=>{{selected=index;renderLocal();}};li.appendChild(button);return li;}}));
-     localUndo.disabled=!localUndoStack.length;localRedo.disabled=!localRedoStack.length;
+     const parts=gap?[source.slice(0,gap[0]+1),source.slice(gap[1])]:[source];
+     canvas.innerHTML=parts.map(points=>`<path d="${{pathFor(points)}}" fill="none" stroke="#087b59" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>`).join('')+(raw.length?`<path d="M ${{raw.map(point=>point.join(' ')).join(' L ')}}" fill="none" stroke="${{localMode==='erase'?'#e05252':'#142018'}}" stroke-width="12" stroke-linecap="round" opacity=".75"/>`:'');
+     localUndo.disabled=!localUndoStack.length;
    }};
-   const localPointEvent=event => {{
-     const rect=canvas.getBoundingClientRect(); const SVGPoint=canvas.createSVGPoint();
-     SVGPoint.x=(event.clientX-rect.left)*1000/rect.width; SVGPoint.y=(event.clientY-rect.top)*720/rect.height;
-     return fromSvg(SVGPoint.x,SVGPoint.y);
-   }};
+   const localPointEvent=event => {{const rect=canvas.getBoundingClientRect();const SVGPoint=canvas.createSVGPoint();SVGPoint.x=(event.clientX-rect.left)*1000/rect.width;SVGPoint.y=(event.clientY-rect.top)*720/rect.height;return [SVGPoint.x,SVGPoint.y];}};
+   const nearestIndex=point=>source.reduce((best,p,index)=>{{const q=toSvg(p),d=(q[0]-point[0])**2+(q[1]-point[1])**2;return d<best.d?{{index,d}}:best;}},{{index:0,d:Infinity}}).index;
+   const setMode=mode=>{{localMode=localMode===mode?null:mode;localDraw.setAttribute('aria-pressed',String(localMode==='draw'));localErase.setAttribute('aria-pressed',String(localMode==='erase'));announce(localMode==='draw'?'기존 코스 선에서 시작해 바꾸려는 길을 따라 그리세요.':localMode==='erase'?'지울 구간의 시작과 끝을 직선으로 그으세요.':'펜이나 지우개를 선택하세요.');}};
    const setLocalEditing=value => {{
      localEditing=value; localShell.classList.toggle('editing',value); renderLocal();
-     announce(value ? '지점을 선택하세요. 추가하려면 지점 추가를 먼저 누르세요.' : '로컬 코스 편집을 마쳤어요.');
+     announce(value ? '펜이나 지우개를 선택하세요.' : '로컬 코스 편집을 마쳤어요.');
    }};
-   canvas.addEventListener('pointerdown',event => {{
-     if (!localEditing) return; const marker=event.target.closest('[data-index]');
-     if (marker) {{ selected=Number(marker.dataset.index); localRemember(); dragIndex=selected; canvas.setPointerCapture(event.pointerId); renderLocal(); announce(`${{selected+1}}번 경유점을 이동 중이에요.`); return; }}
-     if (localMode!=='add') return;
-     if (localPoints.length>=6) return announce('경유점은 최대 6개까지 추가할 수 있어요.');
-     localRemember(); localPoints.push(localPointEvent(event)); selected=localPoints.length-1; localMode='select'; localAdd.setAttribute('aria-pressed','false'); renderLocal(); announce(`${{selected+1}}번 경유점을 추가했어요.`);
-   }});
-   canvas.addEventListener('pointermove',event => {{ if (dragIndex<0) return; localPoints[dragIndex]=localPointEvent(event); renderLocal(); }});
-   canvas.addEventListener('pointerup',event => {{ if (dragIndex>=0) {{ dragIndex=-1; announce(`${{selected+1}}번 경유점을 옮겼어요. 다시 계산해 결과를 확인하세요.`); }} }});
+   canvas.addEventListener('pointerdown',event=>{{if(!localEditing||!localMode)return;raw=[localPointEvent(event)];canvas.setPointerCapture(event.pointerId);renderLocal();}});
+   canvas.addEventListener('pointermove',event=>{{if(!raw.length)return;raw.push(localPointEvent(event));renderLocal();}});
+   canvas.addEventListener('pointerup',()=>{{if(raw.length<2)return;localRemember();let a=nearestIndex(raw[0]),b=nearestIndex(raw[raw.length-1]);gap=[Math.min(a,b),Math.max(a,b)];raw=[];renderLocal();announce(localMode==='erase'?'선택한 구간을 지웠어요. 펜으로 새 길을 그려 연결하세요.':'로컬 체험에서는 그린 선을 표시했어요. 실제 지도에서는 보행로로 보정됩니다.');}});
    localEditButton.addEventListener('click', () => setLocalEditing(true));
-   localAdd.addEventListener('click',()=>{{localMode=localMode==='add'?'select':'add';localAdd.setAttribute('aria-pressed',String(localMode==='add'));announce(localMode==='add'?'캔버스에서 추가할 위치를 누르세요.':'지점 추가를 취소했어요.');}});
-   localUndo.addEventListener('click',()=>{{if(!localUndoStack.length)return;localRedoStack.push(localSnapshot());localPoints=localUndoStack.pop();selected=-1;renderLocal();announce('마지막 편집을 되돌렸어요.');}});
-   localRedo.addEventListener('click',()=>{{if(!localRedoStack.length)return;localUndoStack.push(localSnapshot());localPoints=localRedoStack.pop();selected=-1;renderLocal();announce('편집을 다시 실행했어요.');}});
-   localCancel.addEventListener('click', () => {{ localPoints=initialEditWaypoints.map(point=>[...point]); selected=-1; setLocalEditing(false); }});
-   localDelete.addEventListener('click', () => {{
-     if (selected<0) return announce('먼저 삭제할 경유점을 선택하세요.');
-     if (localPoints.length<=2) return announce('경유점은 두 곳 이상 필요해요.');
-     localRemember(); localPoints.splice(selected,1); selected=Math.min(selected,localPoints.length-1); renderLocal(); announce('선택한 경유점을 삭제했어요.');
-   }});
-   const localNudge=(dlat,dlon) => {{ if (selected<0) return announce('먼저 이동할 경유점을 선택하세요.'); localRemember(); localPoints[selected][0]+=dlat; localPoints[selected][1]+=dlon; renderLocal(); announce('선택한 경유점을 이동했어요.'); }};
-   document.getElementById('localEditN').addEventListener('click', () => localNudge(.00045,0)); document.getElementById('localEditS').addEventListener('click', () => localNudge(-.00045,0)); document.getElementById('localEditW').addEventListener('click', () => localNudge(0,-.00055)); document.getElementById('localEditE').addEventListener('click', () => localNudge(0,.00055));
-   localSave.addEventListener('click', () => {{ if (!localEditing) return; setLocalEditing(false); announce('로컬 체험에서 경로를 다시 계산했어요. 실제 지도에서는 도로망 기준 거리·안전 점수가 갱신됩니다.'); }});
+   localDraw.addEventListener('click',()=>setMode('draw'));localErase.addEventListener('click',()=>setMode('erase'));
+   localUndo.addEventListener('click',()=>{{if(!localUndoStack.length)return;gap=localUndoStack.pop().gap;renderLocal();announce('마지막 수정을 되돌렸어요.');}});
+   localCancel.addEventListener('click', () => {{gap=null;localUndoStack=[];setLocalEditing(false);}});
+   localSave.addEventListener('click', () => announce(gap?'지운 구간을 펜으로 연결한 뒤 저장할 수 있어요.':'카카오 지도가 연결되면 보행로 보정 결과를 저장할 수 있어요.'));
    renderLocal();
  }};
  if (inlineStartBtn && mobileDock && 'IntersectionObserver' in window) {{
@@ -725,113 +686,100 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  for (const k of kms) addOverlay(new kakao.maps.LatLng(k.lat,k.lon),
    '<div class="km-marker" title="'+k.km+'km 지점">'+k.km+'</div>',guideLayers);
  let editing = false;
- let selectedEdit = -1;
- let editPoints = initialEditWaypoints.map(([lat, lon]) => [lat, lon]);
- let editMarkers = [];
- let editMode = 'select';
- let undoStack = [], redoStack = [];
- let draftLine = null;
- let lastGestureAt = 0;
- const editImage = (index, selected=false) => new kakao.maps.MarkerImage(
-   'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
-     '<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44"><circle cx="22" cy="22" r="17" fill="'+(selected?'%23087b59':'%23ffffff')+'" stroke="%23142018" stroke-width="3"/><text x="22" y="28" text-anchor="middle" font-family="Arial" font-size="16" font-weight="700" fill="'+(selected?'%23ffffff':'%23142018')+'">'+(index+1)+'</text></svg>'
-   ), new kakao.maps.Size(44,44), {{offset:new kakao.maps.Point(22,22)}}
- );
+ let editMode = null;
+ let editNodes = initialEditPath.map(point => [...point]);
+ let erasedGap = null;
+ let rawStroke = [];
+ let undoStack = [];
+ let draftLines = [];
+ let gesturePointer = null;
  const setEditStatus = text => {{ if (editStatus) editStatus.textContent = text; }};
- const snapshot = () => editPoints.map(point => [...point]);
- const remember = () => {{ undoStack.push(snapshot()); if (undoStack.length > 30) undoStack.shift(); redoStack=[]; }};
- const refreshPointList = () => {{
-   if (!editPointList) return;
-   editPointList.replaceChildren(...editPoints.map((point,index) => {{
-     const item=document.createElement('li'); const button=document.createElement('button');
-     button.type='button'; button.textContent=`${{index+1}}번`;
-     button.setAttribute('aria-current',String(index===selectedEdit));
-     button.onclick=()=>{{selectedEdit=index;refreshEditMarkers();}};
-     item.appendChild(button); return item;
-   }}));
-   editUndo.disabled=!undoStack.length; editRedo.disabled=!redoStack.length;
- }};
- const refreshEditMarkers = () => {{
-   editMarkers.forEach(marker => marker.setMap(null));
-   editMarkers = editPoints.map(([lat, lon], index) => {{
-     const marker = new kakao.maps.Marker({{
-       position:new kakao.maps.LatLng(lat, lon), draggable:editing,
-       image:editImage(index, index === selectedEdit), zIndex:20
-     }});
-     marker.setMap(editing ? map : null);
-     kakao.maps.event.addListener(marker, 'click', () => {{ selectedEdit=index; refreshEditMarkers(); setEditStatus(`${{index+1}}번 지점을 선택했어요.`); }});
-     kakao.maps.event.addListener(marker, 'dragstart', () => {{ lastGestureAt=Date.now(); remember(); }});
-     kakao.maps.event.addListener(marker, 'dragend', () => {{
-       lastGestureAt=Date.now(); const p=marker.getPosition(); editPoints[index]=[p.getLat(),p.getLng()]; selectedEdit=index; refreshEditMarkers();
-     }});
-     return marker;
-   }});
-   if (draftLine) draftLine.setMap(null);
+ const snapshot = () => ({{nodes:editNodes.map(point=>[...point]),gap:erasedGap?[...erasedGap]:null}});
+ const restore = state => {{editNodes=state.nodes.map(point=>[...point]);erasedGap=state.gap?[...state.gap]:null;renderDraft();}};
+ const remember = () => {{undoStack.push(snapshot());if(undoStack.length>40)undoStack.shift();}};
+ const pointPath = points => points.map(([,lat,lon])=>new kakao.maps.LatLng(lat,lon));
+ const renderDraft = () => {{
+   draftLines.forEach(line=>line.setMap(null));draftLines=[];
    if (editing) {{
-     const draft=[[{p.lat},{p.lon}],...editPoints,[{p.lat},{p.lon}]].map(([lat,lon])=>new kakao.maps.LatLng(lat,lon));
-     draftLine=new kakao.maps.Polyline({{map,path:draft,strokeColor:'#087b59',strokeWeight:6,strokeOpacity:.9,strokeStyle:'dash'}});
+     const parts=erasedGap?[editNodes.slice(0,erasedGap[0]+1),editNodes.slice(erasedGap[1])]:[editNodes];
+     for (const part of parts) if(part.length>1) draftLines.push(new kakao.maps.Polyline({{map,path:pointPath(part),strokeColor:'#087b59',strokeWeight:7,strokeOpacity:.96,strokeStyle:'solid'}}));
    }}
-   refreshPointList();
+   if(editUndo)editUndo.disabled=!undoStack.length;
+   if(editSave)editSave.disabled=Boolean(erasedGap);
+ }};
+ const setMode = mode => {{
+   editMode=editMode===mode?null:mode;
+   if(drawTool)drawTool.setAttribute('aria-pressed',String(editMode==='draw'));
+   if(eraseTool)eraseTool.setAttribute('aria-pressed',String(editMode==='erase'));
+   document.body.classList.toggle('tool-active',Boolean(editMode));
+   map.setDraggable(!editMode);map.setZoomable(!editMode);
+   setEditStatus(editMode==='draw'?'기존 선에서 시작해 원하는 길을 따라 그리세요. 손을 떼면 보행로로 보정됩니다.':editMode==='erase'?'지울 구간의 시작과 끝을 직선으로 그으세요.':'지도를 움직이거나 편의시설을 확인할 수 있어요.');
  }};
  const setEditing = value => {{
-   editing=value; document.body.classList.toggle('editing', editing);
-   if (!editing) {{ selectedEdit=-1; refreshEditMarkers(); }}
-   else {{ refreshEditMarkers(); setEditStatus('지점을 선택하세요. 추가하려면 지점 추가를 먼저 누르세요.'); }}
+   editing=value;document.body.classList.toggle('editing',value);
+   setLayers(routeLayers,!value);setLayers(shapeLayers,false);setLayers(guideLayers,!value);
+   if(!value){{editMode=null;document.body.classList.remove('tool-active');map.setDraggable(true);map.setZoomable(true);}}
+   renderDraft();setEditStatus(value?'펜이나 지우개를 선택하세요.':'코스 선 수정을 닫았어요.');
  }};
- const nudge = (dlat, dlon) => {{
-   if (selectedEdit < 0) {{ setEditStatus('먼저 이동할 경유점을 선택하세요.'); return; }}
-   editPoints[selectedEdit][0] += dlat; editPoints[selectedEdit][1] += dlon;
-   refreshEditMarkers(); setEditStatus('선택한 경유점을 이동했어요.');
+ const projection=map.getProjection();
+ const screenPoint = node => projection.pointFromCoords(new kakao.maps.LatLng(node[1],node[2]));
+ const nearestIndex = point => editNodes.reduce((best,node,index)=>{{const p=screenPoint(node),d=(p.x-point.x)**2+(p.y-point.y)**2;return d<best.d?{{index,d}}:best;}},{{index:0,d:Infinity}}).index;
+ const overlayPoint = event => {{const rect=editOverlay.getBoundingClientRect();return {{x:event.clientX-rect.left,y:event.clientY-rect.top}};}};
+ const toCoord = point => {{const p=projection.coordsFromPoint(new kakao.maps.Point(point.x,point.y));return {{lat:p.getLat(),lon:p.getLng()}};}};
+ const paintGesture = () => {{
+   if(!editOverlay)return;
+   editOverlay.setAttribute('viewBox',`0 0 ${{editOverlay.clientWidth||1}} ${{editOverlay.clientHeight||1}}`);
+   editOverlay.innerHTML=rawStroke.length?`<path d="M ${{rawStroke.map(point=>`${{point.x}} ${{point.y}}`).join(' L ')}}" fill="none" stroke="${{editMode==='erase'?'#e05252':'#142018'}}" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" opacity=".78"/>`:'';
  }};
- if (editEnabled && editButton) editButton.addEventListener('click', () => setEditing(true));
- if (editCancel) editCancel.addEventListener('click', () => {{ editPoints=initialEditWaypoints.map(p=>[...p]); setEditing(false); }});
- if (editDelete) editDelete.addEventListener('click', () => {{
-   if (selectedEdit < 0) return setEditStatus('먼저 삭제할 경유점을 선택하세요.');
-   if (editPoints.length <= 2) return setEditStatus('경유점은 두 곳 이상 필요해요.');
-   remember(); editPoints.splice(selectedEdit,1); selectedEdit=Math.min(selectedEdit, editPoints.length-1); refreshEditMarkers();
- }});
- if (editAdd) editAdd.addEventListener('click', () => {{ editMode=editMode==='add'?'select':'add'; editAdd.setAttribute('aria-pressed',String(editMode==='add')); setEditStatus(editMode==='add'?'지도에서 추가할 위치를 누르세요.':'지점 추가를 취소했어요.'); }});
- if (editMove) editMove.addEventListener('click', () => {{
-   if (selectedEdit<0) return setEditStatus('먼저 이동할 지점을 선택하세요.');
-   editMode=editMode==='move'?'select':'move'; editMove.setAttribute('aria-pressed',String(editMode==='move'));
-   setEditStatus(editMode==='move'?'지도에서 새 위치를 누르세요.':'지점 이동을 취소했어요.');
- }});
- const reorder = delta => {{
-   if (selectedEdit<0) return setEditStatus('먼저 순서를 바꿀 지점을 선택하세요.');
-   const next=selectedEdit+delta; if (next<0 || next>=editPoints.length) return setEditStatus('더 이동할 수 없는 순서예요.');
-   remember(); [editPoints[selectedEdit],editPoints[next]]=[editPoints[next],editPoints[selectedEdit]]; selectedEdit=next; refreshEditMarkers(); setEditStatus('경유점 순서를 바꿨어요.');
+ const clearGesture = () => {{rawStroke=[];gesturePointer=null;if(editOverlay)editOverlay.replaceChildren();}};
+ const postEdit = async body => {{
+   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),3500);
+   try{{const response=await fetch(editEndpoint,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body),signal:controller.signal}});const payload=await response.json();if(!response.ok)throw new Error(payload.error||'코스 선을 처리하지 못했어요.');return payload;}}
+   finally{{clearTimeout(timer);}}
  }};
- if (editUp) editUp.addEventListener('click',()=>reorder(-1));
- if (editDown) editDown.addEventListener('click',()=>reorder(1));
- if (editUndo) editUndo.addEventListener('click', () => {{ if (!undoStack.length) return; redoStack.push(snapshot()); editPoints=undoStack.pop(); selectedEdit=-1; refreshEditMarkers(); setEditStatus('마지막 편집을 되돌렸어요.'); }});
- if (editRedo) editRedo.addEventListener('click', () => {{ if (!redoStack.length) return; undoStack.push(snapshot()); editPoints=redoStack.pop(); selectedEdit=-1; refreshEditMarkers(); setEditStatus('편집을 다시 실행했어요.'); }});
- if (editN) editN.addEventListener('click', () => nudge(.00045,0));
- if (editS) editS.addEventListener('click', () => nudge(-.00045,0));
- if (editW) editW.addEventListener('click', () => nudge(0,-.00055));
- if (editE) editE.addEventListener('click', () => nudge(0,.00055));
- if (editSave) editSave.addEventListener('click', async () => {{
-   if (!editing) return;
-   editSave.disabled=true; editBar.setAttribute('aria-busy','true'); setEditStatus('경로 다시 계산 중…');
-   const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),3500);
-   try {{
-     const response=await fetch(editEndpoint, {{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{waypoints:editPoints.map(([lat,lon])=>({{lat,lon}}))}}),signal:controller.signal}});
-     const payload=await response.json();
-     if (!response.ok) throw new Error(payload.error || '경로를 다시 계산하지 못했어요.');
-     location.assign(payload.preview_url);
-   }} catch (error) {{
-     setEditStatus(error.name === 'AbortError' ? '시간이 초과됐어요. 다시 시도해 주세요.' : (error.message || '연결이 불안정해 다시 계산하지 못했어요.'));
-     editSave.disabled=false; editCancel.disabled=false;
-   }} finally {{ clearTimeout(timer); editBar.setAttribute('aria-busy','false'); }}
- }});
- kakao.maps.event.addListener(map, 'dragstart', () => {{ lastGestureAt=Date.now(); }});
- kakao.maps.event.addListener(map, 'dragend', () => {{ lastGestureAt=Date.now(); }});
- kakao.maps.event.addListener(map, 'zoom_changed', () => {{ lastGestureAt=Date.now(); }});
- kakao.maps.event.addListener(map, 'click', event => {{
-   if (!editing || !['add','move'].includes(editMode) || Date.now()-lastGestureAt < 250) return;
-   const p=event.latLng; remember();
-   if (editMode==='move') {{ editPoints[selectedEdit]=[p.getLat(),p.getLng()]; editMove.setAttribute('aria-pressed','false'); setEditStatus(`${{selectedEdit+1}}번 지점을 옮겼어요.`); }}
-   else {{ if (editPoints.length >= 6) {{ undoStack.pop(); return setEditStatus('경유점은 최대 6개까지 추가할 수 있어요.'); }} editPoints.push([p.getLat(),p.getLng()]); selectedEdit=editPoints.length-1; editAdd.setAttribute('aria-pressed','false'); setEditStatus(`${{selectedEdit+1}}번 지점을 추가했어요.`); }}
-   editMode='select'; refreshEditMarkers();
+ const finishGesture = async () => {{
+   if(rawStroke.length<2){{clearGesture();return;}}
+   const start=nearestIndex(rawStroke[0]),end=nearestIndex(rawStroke[rawStroke.length-1]);
+   let lo=Math.min(start,end),hi=Math.max(start,end);
+   if(hi-lo<2){{clearGesture();setEditStatus('조금 더 긴 구간을 선택해 주세요.');setMode(editMode);return;}}
+   if(editMode==='erase'){{
+     if(erasedGap){{clearGesture();setEditStatus('지운 구간을 먼저 펜으로 연결해 주세요.');setMode('erase');return;}}
+     remember();erasedGap=[lo,hi];clearGesture();renderDraft();setMode('erase');setEditStatus('선택한 구간을 지웠어요. 펜으로 새 길을 그려 연결하세요.');return;
+   }}
+   if(editMode==='draw'){{
+     if(erasedGap){{
+       const connectsGap=(Math.abs(start-erasedGap[0])<=2&&Math.abs(end-erasedGap[1])<=2)||(Math.abs(end-erasedGap[0])<=2&&Math.abs(start-erasedGap[1])<=2);
+       if(!connectsGap){{clearGesture();setMode('draw');setEditStatus('펜 선을 지운 구간의 양 끝에 이어 주세요.');return;}}
+       lo=erasedGap[0];hi=erasedGap[1];
+     }}
+     const before=snapshot();editBar.setAttribute('aria-busy','true');setEditStatus('그린 선을 보행 가능한 길로 보정 중…');
+     try{{
+       const directed=start<=end?rawStroke:[...rawStroke].reverse();
+       const sample=directed.filter((_,index)=>index===0||index===directed.length-1||index%Math.max(1,Math.floor(directed.length/40))===0).map(toCoord);
+       const payload=await postEdit({{action:'snap',path:editNodes.map(point=>point[0]),from_index:lo,to_index:hi,stroke:sample}});
+       undoStack.push(before);if(undoStack.length>40)undoStack.shift();editNodes=payload.path.map(point=>[...point]);erasedGap=null;
+       setEditStatus('그린 선을 보행로에 맞췄어요.');
+     }}catch(error){{setEditStatus(error.name==='AbortError'?'보정 시간이 초과됐어요. 선은 저장되지 않았습니다.':(error.message||'보행로 보정에 실패했어요.'));}}
+     finally{{const result=editStatus.textContent;editBar.setAttribute('aria-busy','false');clearGesture();renderDraft();setMode('draw');setEditStatus(result);}}
+   }}
+ }};
+ if(editEnabled&&editButton)editButton.addEventListener('click',()=>setEditing(true));
+ if(drawTool)drawTool.addEventListener('click',()=>setMode('draw'));
+ if(eraseTool)eraseTool.addEventListener('click',()=>setMode('erase'));
+ if(editOverlay){{
+   editOverlay.addEventListener('pointerdown',event=>{{if(!editing||!editMode)return;gesturePointer=event.pointerId;rawStroke=[overlayPoint(event)];editOverlay.setPointerCapture(event.pointerId);paintGesture();}});
+   editOverlay.addEventListener('pointermove',event=>{{if(event.pointerId!==gesturePointer)return;const point=overlayPoint(event),last=rawStroke[rawStroke.length-1];if(!last||Math.hypot(point.x-last.x,point.y-last.y)>4)rawStroke.push(point);paintGesture();}});
+   editOverlay.addEventListener('pointerup',event=>{{if(event.pointerId===gesturePointer)finishGesture();}});
+   editOverlay.addEventListener('pointercancel',clearGesture);
+ }}
+ if(editUndo)editUndo.addEventListener('click',()=>{{if(!undoStack.length)return;restore(undoStack.pop());setEditStatus('마지막 선 수정을 되돌렸어요.');}});
+ if(editCancel)editCancel.addEventListener('click',()=>{{editNodes=initialEditPath.map(point=>[...point]);erasedGap=null;undoStack=[];setEditing(false);}});
+ if(editSave)editSave.addEventListener('click',async()=>{{
+   if(!editing)return;if(erasedGap)return setEditStatus('지운 구간을 펜으로 연결한 뒤 저장해 주세요.');
+   editSave.disabled=true;editBar.setAttribute('aria-busy','true');setEditStatus('수정한 코스를 저장 중…');
+   try{{const payload=await postEdit({{action:'save',path:editNodes.map(point=>point[0])}});location.assign(payload.preview_url);}}
+   catch(error){{setEditStatus(error.name==='AbortError'?'저장 시간이 초과됐어요. 수정한 선은 그대로 남아 있습니다.':(error.message||'저장하지 못했어요. 다시 시도해 주세요.'));editSave.disabled=false;}}
+   finally{{editBar.setAttribute('aria-busy','false');}}
  }});
  const geocoder = (kakao.maps.services && kakao.maps.services.Geocoder)
    ? new kakao.maps.services.Geocoder() : null;

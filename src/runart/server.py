@@ -29,11 +29,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
+from . import graph as graphmod
 from .animal_presets import (MISSING as PRESET_MISSING, PresetMatch,
                              find_nearby_animal_presets,
                              find_nearest_animal_preset, get_animal_preset,
                              preset_status)
-from .course import Course, CourseError, generate_course
+from .course import (Course, CourseError, course_from_path, generate_course,
+                     snap_drawn_segment)
 from .facilities import LABELS_KO, facilities_along
 from .geocode import resolve_location
 from .geo import haversine_m
@@ -1053,7 +1055,11 @@ async def course_route_json(request: Request) -> Response:
 
 class _CourseEditPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    waypoints: list[CourseWaypoint] = Field(min_length=2, max_length=6)
+    action: str
+    path: list[int] = Field(min_length=3, max_length=1200)
+    stroke: list[CourseWaypoint] = Field(default_factory=list, max_length=96)
+    from_index: int | None = None
+    to_index: int | None = None
 
 
 @mcp.custom_route("/c/{course_id}/edit", methods=["POST"])
@@ -1062,7 +1068,7 @@ async def edit_course_route(request: Request) -> Response:
         return JSONResponse({"error": "경로 수정 기능을 잠시 사용할 수 없어요."}, status_code=503)
     content_type = request.headers.get("content-type", "").split(";", 1)[0]
     if content_type != "application/json":
-        return JSONResponse({"error": "JSON 형식의 경유점이 필요해요."}, status_code=400)
+        return JSONResponse({"error": "JSON 형식의 코스 선이 필요해요."}, status_code=400)
     try:
         current = decode_course_id(request.path_params["course_id"])
     except Exception:
@@ -1070,24 +1076,46 @@ async def edit_course_route(request: Request) -> Response:
     try:
         payload = _CourseEditPayload.model_validate(await request.json())
     except (ValidationError, ValueError, TypeError):
-        return JSONResponse({"error": "경유점 정보를 확인해 주세요."}, status_code=400)
-    # Editing an animal course is save-as-new: the source token stays intact and
-    # the result becomes an ordinary direct-edited route.
-    edited = current.model_copy(update={"shape": None, "manual_waypoints": payload.waypoints})
+        return JSONResponse({"error": "코스 선 정보를 확인해 주세요."}, status_code=400)
+    edited = current.model_copy(update={"shape": None, "manual_waypoints": [], "manual_path": []})
     try:
         with anyio.fail_after(ROUTE_EDIT_RESPONSE_BUDGET_S):
-            course = await anyio.to_thread.run_sync(
-                functools.partial(_get_course, edited, ROUTE_EDIT_RESPONSE_BUDGET_S),
-                abandon_on_cancel=True,
-            )
+            if payload.action == "snap":
+                if payload.from_index is None or payload.to_index is None:
+                    return JSONResponse({"error": "지운 구간의 양 끝을 확인해 주세요."}, status_code=400)
+                course = await anyio.to_thread.run_sync(
+                    functools.partial(
+                        snap_drawn_segment, edited, payload.path,
+                        payload.from_index, payload.to_index, payload.stroke,
+                    ), abandon_on_cancel=True,
+                )
+            elif payload.action == "save":
+                course = await anyio.to_thread.run_sync(
+                    functools.partial(course_from_path, edited, payload.path),
+                    abandon_on_cancel=True,
+                )
+            else:
+                return JSONResponse({"error": "지원하지 않는 편집 동작입니다."}, status_code=400)
     except CourseError as exc:
         return JSONResponse({"error": str(exc)}, status_code=422)
     except (TimeoutError, _GenerationTimeout):
         return JSONResponse(
-            {"error": "경로 다시 계산에 시간이 걸렸어요. 경유점을 줄여 다시 시도해 주세요."},
+            {"error": "그린 선을 보행로에 맞추는 데 시간이 걸렸어요. 더 짧게 나눠 그려 주세요."},
             status_code=503,
         )
+    if payload.action == "snap":
+        g = graphmod.get_graph()
+        return JSONResponse({
+            "path": [[node, round(g.nodes[node]["lat"], 6), round(g.nodes[node]["lon"], 6)]
+                     for node in course.path],
+            "length_km": round(course.length_km, 2),
+        }, headers={"Cache-Control": "no-store"})
     new_id = encode_course_id(course.params)
+    if len(new_id) > 4096:
+        return JSONResponse(
+            {"error": "수정한 코스 선이 너무 복잡해 링크로 저장할 수 없어요. 더 짧은 구간으로 단순하게 그려 주세요."},
+            status_code=422,
+        )
     return JSONResponse(
         {
             "course_id": new_id,

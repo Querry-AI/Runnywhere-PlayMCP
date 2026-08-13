@@ -14,6 +14,13 @@ from runart import server
 CITY_HALL = dict(lat=37.5665, lon=126.9780, location_name="서울시청")
 
 
+def test_exact_manual_path_roundtrip():
+    original = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    params = original.params.model_copy(update={"manual_path": original.path})
+    restored = decode_course_id(encode_course_id(params))
+    assert restored.manual_path == original.path
+
+
 def test_manual_waypoints_roundtrip_in_order():
     params = CourseParams(
         **CITY_HALL,
@@ -105,39 +112,61 @@ def _json_request(course_id: str, payload: dict, content_type="application/json"
     )
 
 
-def test_edit_endpoint_returns_new_stateless_url():
-    cid = encode_course_id(CourseParams(**CITY_HALL, distance_km=5))
+def test_edit_endpoint_saves_exact_path_as_new_stateless_url():
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    cid = encode_course_id(source.params)
     request = _json_request(
         cid,
-        {"waypoints": [{"lat": 37.570, "lon": 126.982}, {"lat": 37.561, "lon": 126.986}]},
+        {"action": "save", "path": source.path},
     )
     response = asyncio.run(server.edit_course_route(request))
     payload = json.loads(response.body)
     assert response.status_code == 200
     assert payload["preview_url"].endswith("/c/" + payload["course_id"])
-    assert len(decode_course_id(payload["course_id"]).manual_waypoints) == 2
+    assert decode_course_id(payload["course_id"]).manual_path == source.path
+
+
+def test_edit_endpoint_snaps_a_drawn_segment_to_walkable_edges():
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    cid = encode_course_id(source.params)
+    response = asyncio.run(server.edit_course_route(_json_request(cid, {
+        "action": "snap",
+        "path": source.path,
+        "from_index": 10,
+        "to_index": 40,
+        "stroke": [
+            {"lat": source.points[10][0], "lon": source.points[10][1]},
+            {"lat": source.points[40][0], "lon": source.points[40][1]},
+        ],
+    })))
+    payload = json.loads(response.body)
+    assert response.status_code == 200
+    assert payload["path"][0][0] == source.path[0]
+    assert payload["path"][-1][0] == source.path[-1]
+    assert all(len(point) == 3 for point in payload["path"])
 
 
 def test_edit_endpoint_separates_bad_course_id_from_bad_payload():
-    bad_id = _json_request("not-a-course", {"waypoints": []})
+    bad_id = _json_request("not-a-course", {"action": "save", "path": [1, 2, 1]})
     response = asyncio.run(server.edit_course_route(bad_id))
     assert response.status_code == 404
     good_id = encode_course_id(CourseParams(**CITY_HALL))
-    bad_payload = _json_request(good_id, {"waypoints": []})
+    bad_payload = _json_request(good_id, {"action": "save", "path": []})
     response = asyncio.run(server.edit_course_route(bad_payload))
     assert response.status_code == 400
 
 
 def test_edit_endpoint_converts_animal_course_to_direct_edit():
-    cid = encode_course_id(CourseParams(**CITY_HALL, shape="dog"))
-    response = asyncio.run(server.edit_course_route(_json_request(
-        cid, {"waypoints": [{"lat": 37.570, "lon": 126.982}, {"lat": 37.561, "lon": 126.986}]}
-    )))
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    cid = encode_course_id(source.params.model_copy(update={"shape": "dog"}))
+    response = asyncio.run(server.edit_course_route(_json_request(cid, {
+        "action": "save", "path": source.path,
+    })))
     payload = json.loads(response.body)
     edited = decode_course_id(payload["course_id"])
     assert response.status_code == 200
     assert edited.shape is None
-    assert len(edited.manual_waypoints) == 2
+    assert edited.manual_path == source.path
     assert decode_course_id(cid).shape == "dog"
 
 
@@ -150,16 +179,22 @@ def test_mobile_preview_uses_compact_summary_and_accessible_edit_controls():
     assert 'repeat(2,minmax(0,1fr))' in page
     assert '.course-metrics dt,.course-metrics dd{margin:0}' in page
     assert '내 위치 추적 시작' in page
-    assert '이 경로로 다시 계산' in page
+    assert 'aria-label="수정한 코스를 새 코스로 저장"' in page
     assert 'aria-live="polite"' in page
     assert 'AbortController' in page and '3500' in page
-    assert 'draggable:editing' in page.replace(' ', '')
-    assert 'id="editAdd"' in page
-    assert 'id="editMove"' in page
-    assert 'id="editUp"' in page and 'id="editDown"' in page
-    assert 'id="editUndo"' in page and 'id="editRedo"' in page
-    assert 'id="editPointList"' in page
-    assert 'draftLine' in page
+    assert "action:'snap'" in page
+    assert "action:'save'" in page
+    assert 'id="drawTool"' in page
+    assert 'id="eraseTool"' in page
+    assert 'id="editUndo"' in page
+    assert 'id="editRedo"' not in page
+    assert 'class="edit-tool-circle"' in page
+    assert '.edit-tools{position:absolute;z-index:950;left:10px;top:10px' in page
+    assert 'width:40px;height:40px' in page
+    assert 'edit-overlay' in page
+    assert 'body.editing .map-hud' in page
+    assert 'body.editing.tool-active .facility-marker' in page
+    assert "map.setDraggable(!editMode)" in page
 
 
 def test_animal_preview_explains_save_as_new_editing():
@@ -178,7 +213,6 @@ def test_preview_keeps_a_local_course_editor_available_without_map_sdk():
     assert "initLocalCourseEditor" in page
     assert "로컬 코스 편집 체험" in page
     assert "SVGPoint" in page
-    assert "지점 추가를 먼저 누르세요" in page
-    assert 'id="localEditAdd"' in page
+    assert "펜이나 지우개를 선택하세요" in page
     assert 'id="localEditRoute"' in page
     assert 'id="localEditSave"' in page
