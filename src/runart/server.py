@@ -45,7 +45,7 @@ from .exploration import (atlas_html, create_relay, decode_relay,
                           relay_html)
 from .models import (CourseParams, CourseWaypoint, DEFAULT_PACE_MIN_PER_KM, decode_course_id,
                      decode_shape_token, encode_course_id)
-from .render import (card_svg, course_markdown, markdown_text,
+from .render import (card_svg, course_edit_summary, course_markdown, markdown_text,
                      preview_html, route_points)
 from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
                      generate_shape_course, list_shapes)
@@ -1109,6 +1109,10 @@ async def edit_course_route(request: Request) -> Response:
             "path": [[node, round(g.nodes[node]["lat"], 6), round(g.nodes[node]["lon"], 6)]
                      for node in course.path],
             "length_km": round(course.length_km, 2),
+            # The detail panels below the map describe *this* course, so they
+            # have to follow the edit rather than keep describing the original.
+            # Measured cost of the extra work: ~25ms, well inside the budget.
+            "summary": course_edit_summary(course),
         }, headers={"Cache-Control": "no-store"})
     new_id = encode_course_id(course.params)
     if len(new_id) > 4096:

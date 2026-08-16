@@ -385,6 +385,100 @@ def test_zoom_control_is_removed_while_editing():
     assert "showZoomControl(!value)" in page
 
 
+def test_detail_panels_follow_an_edit():
+    """The panels under the map describe the course; once the course changes
+    they must follow, or the page shows one route and describes another."""
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    # every element the summary rewrites has to be addressable
+    for element_id in ("courseTitle", "courseBadges", "mLength", "mDuration", "mAscent",
+                       "mRfs", "mRfsGrade", "courseHighlights", "factSignals",
+                       "factStores", "factRestrooms", "facilityTally", "facilityList"):
+        assert f'id="{element_id}"' in page, element_id
+    assert "applySummary(payload.summary)" in page
+    assert "const initialSummary =" in page
+    # undo and revert restore the panels too, not just the line
+    assert "applySummary(state.summary)" in page
+    assert "applySummary(initialSummary)" in page
+
+
+def test_edit_summary_matches_what_a_full_page_load_shows():
+    """course_edit_summary() feeds the live update; if it drifts from
+    preview_html() the page would change on save for no reason."""
+    from runart.facilities import facilities_along
+    from runart.naming import course_title
+    from runart.render import course_edit_summary, route_points
+
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    summary = course_edit_summary(course)
+    facilities = [f for f in facilities_along(route_points(course),
+                                              ["convenience_store", "restroom"], limit=80)]
+    page = preview_html(course, facilities, "https://runnywhere.example")
+
+    assert summary["title"] == course_title(course)
+    assert summary["length_km"] == round(course.length_km, 2)
+    assert summary["ascent_m"] == round(course.ascent_m)
+    assert summary["rfs"] == course.rfs["score"]
+    assert summary["facility_tally"] in page
+    assert f'{course.rfs["score"]}/100' in page
+
+
+def test_editing_offers_an_explicit_map_pan_tool():
+    """Two-finger panning exists but nothing on screen says so; one-finger drag
+    is the gesture people reach for."""
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    assert 'id="panTool"' in page
+    assert 'aria-label="지도 이동"' in page
+    assert "setMode('pan')" in page
+    # pan is the default on entering edit mode, and it leaves the map draggable
+    assert 'id="panTool" class="edit-tool-circle" type="button" aria-label="지도 이동" title="지도 이동" aria-pressed="true"' in page
+    assert "map.setDraggable(!editMode)" in page
+
+
+def test_drawing_overlay_is_absent_unless_a_drawing_tool_is_active():
+    """A full-bleed touch-action:none layer over the map is exactly what eats a
+    drag on mobile -- keep it out of the tree unless it is being drawn on."""
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    assert "touch-action:none;pointer-events:none;display:none" in page
+    assert "body.editing.tool-active .edit-overlay{display:block}" in page
+
+
+def test_route_decorations_do_not_swallow_map_drags():
+    """km bubbles, direction arrows and the start pin are labels, not controls."""
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+    assert ".km-marker,.dir-marker,.start-marker{pointer-events:none}" in page
+
+
+def test_map_entry_points_sit_in_the_top_corners():
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    assert ">코스 편집</button>" in page
+    assert "코스 선 수정" not in page
+    assert "#editRoute{position:absolute;z-index:540;left:14px;top:14px" in page
+    assert ".view-toggle{position:absolute;z-index:530;right:14px;top:14px" in page
+    # the metric pills move below them rather than competing for the corners
+    assert ".map-hud{position:absolute;z-index:500;left:14px;right:14px;top:64px" in page
+
+
+def test_course_title_and_badges_share_a_row():
+    course = generate_course(CourseParams(lat=CITY_HALL["lat"], lon=CITY_HALL["lon"],
+                                          distance_km=5.0, location_name="강남대로 401-2"))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    assert "강남대로런" in page and "401-2런" not in page
+    assert 'class="course-head"' in page
+    assert 'class="course-badges"' in page
+    # badges are labelled, never emoji-only
+    assert 'role="img" aria-label="일반 러닝 코스"' in page
+
+
 def test_map_container_is_positioned_for_its_absolute_controls():
     """The HUD, toolbar and toast are absolutely positioned inside #map; do not
     rely on the Kakao SDK setting position:relative at runtime."""

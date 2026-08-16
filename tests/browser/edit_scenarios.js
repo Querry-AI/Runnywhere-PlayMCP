@@ -49,7 +49,13 @@ async function runEditScenarios() {
   let calls = [];
   const realFetch = window.fetch;
   const mock = (impl) => {
-    window.fetch = (url, opts) => { calls.push(JSON.parse(opts.body)); return impl(); };
+    window.fetch = (url, opts) => {
+      // Pass through anything that is not an edit POST, so a mock left behind
+      // by an interrupted run cannot break the next one.
+      if (!opts || !opts.body) return realFetch(url, opts);
+      calls.push(JSON.parse(opts.body));
+      return impl();
+    };
   };
   // A successful save calls location.assign(preview_url), which would end the
   // run. window.location.assign cannot be redefined, so the save scenario

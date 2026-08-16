@@ -285,7 +285,7 @@ def test_refine_and_status_roundtrip():
                                         location_name="시청", distance_km=5.0))
     refined = server.refine_course(course_id=cid, distance_km=3.0)
     import re
-    got_km = float(re.search(r"([\d.]+)km 러닝 코스", refined).group(1))
+    got_km = float(re.search(r"거리 \*\*([\d.]+)km\*\*", refined).group(1))
     assert abs(got_km - 3.0) / 3.0 <= 0.10  # demo 80m grid: ±10%; real graph targets ±5%
     status = server.get_course_status(course_id=cid)
     assert "러닝 친화도" in status

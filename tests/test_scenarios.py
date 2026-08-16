@@ -73,5 +73,7 @@ def test_failures_guide_next_action(kwargs, expect):
 # 거리 정확도 계약: 실거리 표기가 목표 ±10% 이내 (실그래프 ±5% 목표)
 def test_distance_accuracy_stated_honestly():
     out = server.generate_running_course(location="여의도한강공원", distance_km=5)
-    got = float(re.search(r"([\d.]+)km 러닝 코스", out).group(1))
+    # Read the explicit distance line, not the title: the course name is a
+    # product decision ("5.1km 한강공원런") and should be free to change.
+    got = float(re.search(r"거리 \*\*([\d.]+)km\*\*", out).group(1))
     assert abs(got - 5.0) / 5.0 <= 0.10
