@@ -408,7 +408,6 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .brand{{height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 22px;
       background:#fff;border-bottom:1px solid #e2e7df;box-sizing:border-box}}
  .brand strong{{font-size:18px;color:#142018;letter-spacing:-.03em}}
- .brand span{{font-size:13px;color:#66726a}}
  /* The Kakao SDK sets position:relative on its container at runtime; declaring
     it here stops every absolutely positioned map control (HUD, toolbar, toast)
     from depending on that side effect. */
@@ -570,7 +569,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  body.editing.tool-active .edit-overlay{{pointer-events:auto}}
  footer{{color:#55605a;font-size:13px;padding:8px 20px 28px;text-align:center;line-height:1.6}}
  footer a{{display:inline-block;padding:8px 4px;color:inherit}}
- @media (max-width:760px){{.brand{{height:48px;padding:0 16px}}.brand span{{font-size:13px}} .facts{{grid-template-columns:repeat(2,1fr)}}
+ @media (max-width:760px){{.brand{{height:48px;padding:0 16px}} .facts{{grid-template-columns:repeat(2,1fr)}}
       #map{{height:clamp(280px,42svh,380px);min-height:0}}.map-hud{{left:10px;right:10px;top:58px;gap:6px}}.pill{{font-size:13px;padding:8px 9px}}
       .view-toggle{{right:10px;top:10px}}#editRoute{{left:10px;top:10px}}.run-panel{{left:10px;right:10px;bottom:12px}}
       .course-head{{gap:8px}}.badge{{width:28px;height:28px;font-size:15px}}
@@ -581,12 +580,10 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
       footer{{padding-bottom:96px}}.course-metrics{{grid-template-columns:repeat(2,minmax(0,1fr))}}.edit-bar{{left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));}}
       .metric-value{{font-size:20px;line-height:1.2;font-variant-numeric:tabular-nums;white-space:nowrap}}.metric-label{{font-size:13px;line-height:1.35}}.supporting-copy{{font-size:13px;line-height:1.45;word-break:normal;line-break:strict}}
       footer{{padding-bottom:96px}}}}
- /* Below 480px the header must show the service name only — the tagline halves it. */
- @media (max-width:480px){{.brand span{{display:none}}}}
  @media (orientation:landscape) and (max-width:900px){{#map{{height:280px}}.wrap{{padding-bottom:72px}}}}
  @media(prefers-reduced-motion:reduce){{*{{scroll-behavior:auto!important;animation-duration:.001ms!important;transition-duration:.001ms!important}}}}
 </style></head><body>
-<header class="brand"><strong>Runnywhere · 러니웨어</strong><span>어디서든 러닝 코스 짜기!</span></header>
+<header class="brand"><strong>러니웨어</strong></header>
 <div id="map"><div class="map-hud">
  <span class="pill">{course.length_km:.2f}km</span>
  <span class="pill">오르막 {course.ascent_m:.0f}m</span>

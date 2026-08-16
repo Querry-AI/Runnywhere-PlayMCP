@@ -185,7 +185,7 @@ code{{overflow-wrap:anywhere;font-size:12px;color:var(--muted)}}
 .legal-copy{{max-width:760px}}.legal-copy h2{{margin-top:38px}}.legal-copy ul{{line-height:1.75;padding-left:20px}}.legal-copy a{{color:var(--green)}}
 @media(max-width:800px){{.wrap{{padding:0 20px 56px}}header{{height:64px;margin-bottom:40px}}nav{{gap:14px}}nav a:first-child{{display:none}}.product-hero{{grid-template-columns:1fr;gap:38px;margin-bottom:72px}}h1{{font-size:42px}}.feature-row{{grid-template-columns:38px 1fr;gap:10px 14px}}.feature-row p,.feature-row a{{grid-column:2}}}}
 @media(max-width:480px){{.wrap{{padding:0 18px 48px}}header{{margin-bottom:34px}}.brand{{font-size:16px}}nav a{{font-size:13px}}h1{{font-size:36px;line-height:1.17}}.lead{{font-size:16px}}.demo{{padding:20px;border-radius:9px}}.route-preview{{height:140px}}.metric b{{font-size:19px}}.section-head h2{{font-size:26px}}}}</style></head><body><div class=\"wrap\">
-<header><a class=\"brand\" href=\"/\" style=\"color:inherit;text-decoration:none\">Runnywhere · 러니웨어</a><nav><a href=\"/\">서비스 소개</a><a href=\"/animals\">동물 GPS 아트</a></nav></header>{body}
+<header><a class=\"brand\" href=\"/\" style=\"color:inherit;text-decoration:none\">러니웨어</a><nav><a href=\"/\">서비스 소개</a><a href=\"/animals\">동물 GPS 아트</a></nav></header>{body}
 <footer class=\"legal-footer\"><span>© 2026 Runnywhere</span><a href=\"/terms\">이용약관</a><a href=\"/privacy\">개인정보</a><a href=\"/data-licenses\">데이터·라이선스</a><a href=\"https://www.openstreetmap.org/copyright\">© OpenStreetMap contributors</a></footer>
 </div></body></html>"""
 
