@@ -23,6 +23,19 @@ def test_generate_running_course_defaults_to_5km_with_note():
     assert "/c/" in out and ".gpx" in out
 
 
+def test_unified_course_tool_dispatches_standard_and_animal_requests():
+    standard = server.create_seoul_running_course(
+        course_type="standard", location="시청")
+    animal = server.create_seoul_running_course(
+        course_type="dog", location="강남역")
+    standard_text = standard.content[0].text
+    animal_text = animal.content[0].text
+    assert "기본 5km" in standard_text and "/c/" in standard_text
+    assert "댕댕런" in animal_text and "/c/" in animal_text
+    assert standard.structuredContent["result_code"] == "course_ready"
+    assert animal.isError is False
+
+
 def test_duration_conversion_is_explained():
     out = server.generate_running_course(**CITY_HALL, duration_min=30)
     assert "6:30/km" in out and "4.6km" in out
@@ -56,7 +69,34 @@ def test_seoul_address_prefix_is_normalized():
 def test_sinseoldong_station_resolves_without_external_api():
     lat, lon, name = resolve_location("신설동역", None, None)
     assert name == "신설동역"
-    assert (lat, lon) == (37.5753, 127.0251)
+    assert (lat, lon) == (37.5761056, 127.0245335)
+
+
+def test_station_intent_wins_over_landmark_gazetteer():
+    lat, lon, name = resolve_location("강남역", None, None)
+    assert name == "강남역"
+    assert (lat, lon) == (37.4986144, 127.0280696)
+
+
+def test_unique_station_entrance_alias_resolves_offline(monkeypatch):
+    monkeypatch.delenv("KAKAO_REST_API_KEY", raising=False)
+    shortened = resolve_location("성신여대역", None, None)
+    official = resolve_location("성신여대입구역", None, None)
+    assert shortened == official
+    assert shortened == (37.5931105, 127.0167884, "성신여대입구역")
+
+
+def test_kakao_subway_hit_snaps_to_offline_station(monkeypatch):
+    geocode._SEARCH_CACHE.clear()
+    monkeypatch.setenv("KAKAO_REST_API_KEY", "test-key")
+    monkeypatch.setattr(geocode, "_kakao_get", lambda *args, **kwargs: [{
+        "y": "37.59297",
+        "x": "127.01713",
+        "place_name": "성신여대입구역 4호선",
+        "category_group_code": "SW8",
+    }])
+    assert geocode._keyword_search("성신여대역") == (
+        37.5931105, 127.0167884, "성신여대입구역")
 
 
 def test_all_289_seoul_metro_rows_are_bundled():
@@ -126,7 +166,9 @@ def test_offloaded_tool_has_outer_three_second_response_cap(monkeypatch):
     started = time.monotonic()
     out = asyncio.run(slow_tool())
     assert time.monotonic() - started < 0.07
-    assert out.startswith("⏱️") and "3초" in out
+    assert out.isError is True
+    assert out.structuredContent["result_code"] == "generation_timeout"
+    assert out.content[0].text.startswith("⏱️") and "3초" in out.content[0].text
 
 
 def test_animal_request_surveys_verified_minimum_distances_first():
@@ -207,7 +249,7 @@ def test_animal_timeout_returns_actionable_guidance(monkeypatch):
     elif out.startswith("✅"):
         assert "11km 이내 최상 코스" in out and "/c/" in out
     else:
-        assert "이동해도 될까요?" in out and "/c/" in out
+        assert "요청한 출발점과 다른" in out and "/c/" in out
 
 
 def test_bounded_animal_generation_falls_back_when_pool_is_unavailable(monkeypatch):
@@ -250,7 +292,7 @@ def test_address_start_tries_exact_point_before_station_preset(monkeypatch):
     assert "검증 코스" in out
     assert "/c/" in out
     repeated = server.generate_animal_course(shape="dog", lat=37.5041, lon=127.0293)
-    assert "검증 코스" in repeated and "이동" in repeated
+    assert "검증 코스" in repeated and "요청한 출발점과 다른" in repeated
     assert calls == 1
 
 
@@ -259,9 +301,9 @@ def test_no_animal_course_offers_relocation_not_general_course(monkeypatch):
     monkeypatch.setattr(server, "get_animal_preset", lambda p: None)
     monkeypatch.setattr(server, "find_nearest_animal_preset", lambda p: None)
     out = server.generate_animal_course(shape="whale", **CITY_HALL)
-    assert "일반 코스만 가능해요" in out
-    assert "이동해도 될까요?" in out and "/c/" in out
-    assert "일반 코스를 추천해요" not in out
+    assert "일반 코스만 가능" not in out
+    assert "고래에만 해당" in out
+    assert "요청한 출발점과 다른" in out and "/c/" in out
 
 
 def test_shape_token_recreates_shape():
@@ -313,7 +355,7 @@ def test_mcp_tools_match_playmcp_required_annotations():
     tools = asyncio.run(server.mcp.list_tools())
     names = [tool.name for tool in tools]
     assert set(names) == {
-        "generate_running_course", "generate_animal_course",
+        "create_seoul_running_course",
         "list_available_shapes", "find_facilities_near_course",
         "refine_course", "get_course_status",
         "record_animal_completion", "extend_shape_relay",
@@ -321,7 +363,7 @@ def test_mcp_tools_match_playmcp_required_annotations():
     assert len(names) == len(set(names))
     assert 3 <= len(names) <= 10
     open_world_tools = {
-        "generate_running_course", "generate_animal_course", "refine_course",
+        "create_seoul_running_course", "refine_course",
     }
     for tool in tools:
         assert 1 <= len(tool.name) <= 128
@@ -330,6 +372,20 @@ def test_mcp_tools_match_playmcp_required_annotations():
         assert tool.annotations.title
         assert tool.annotations.openWorldHint is (tool.name in open_world_tools)
         assert tool.annotations.idempotentHint is True
+
+
+def test_primary_course_tool_schema_and_description_drive_selection():
+    import asyncio
+    tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
+    tool = tools["create_seoul_running_course"]
+    course_type = tool.inputSchema["properties"]["course_type"]
+    assert "course_type" in tool.inputSchema["required"]
+    assert set(course_type["enum"]) == {
+        "standard", "best_animal", "dog", "cat", "rabbit", "whale",
+    }
+    assert "shape_token" not in tool.inputSchema["properties"]
+    for phrase in ("러닝 코스", "그려줘", "동물", "호출하기 전에"):
+        assert phrase in tool.description
 
 
 def test_http_middleware_adds_security_headers():
@@ -429,6 +485,18 @@ def test_mcp_request_body_limit_rejects_declared_and_chunked_oversize():
 
     asyncio.run(scenario())
     assert calls == 1  # declared oversize is rejected before reaching the app
+
+
+def test_healthz_exposes_release_identity_and_readiness():
+    import asyncio
+    import json
+
+    response = asyncio.run(server.healthz(None))
+    payload = json.loads(response.body)
+    assert payload["ok"] is True
+    assert isinstance(payload["ready"], bool)
+    assert payload["release_sha"]
+    assert payload["animal_presets"].startswith("ok")
 
 
 def test_mcp_concurrency_limit_fails_fast_and_recovers():

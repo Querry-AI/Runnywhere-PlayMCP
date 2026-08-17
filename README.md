@@ -23,7 +23,7 @@ RUNART_LOADTEST_REPORT=artifacts/playmcp-loadtest.json python scripts/loadtest.p
 주소 검색, 재시도, 코스 생성을 포함한 MCP Tool 전체 응답에는 2.85초 상한을
 적용하며, 내부 코스 생성과 외부 지오코딩도 더 짧은 같은 데드라인을 공유한다.
 
-환경변수: `HOST`(로컬 기본 127.0.0.1, 컨테이너 0.0.0.0) · `PORT`(기본 8000) · `RUNART_BASE_URL`(미리보기 링크 도메인) · `KAKAO_JAVASCRIPT_KEY`(카카오맵 Web API, 필수) · `KAKAO_REST_API_KEY`(지오코딩, 선택) · `RUNART_TOKEN_SECRET`(32자 이상 도감·릴레이 토큰 서명키, 운영 환경 필수) · `RUNART_LEGAL_CONTACT`(정책 문의 이메일, 공개 배포 시 필수) · `WEB_CONCURRENCY`(웹 워커 수, 기본 1) · `RUNART_POOL_WORKERS`(코스 탐색 프로세스 수, 기본 2) · `RATE_LIMIT_RPS`(IP당, 기본 20) · `RUNART_MAX_BODY_BYTES`(MCP 요청 본문, 기본 65,536) · `RUNART_MAX_CONCURRENT_MCP`(동시 MCP HTTP 요청, 기본 16) · `RUNART_ROUTE_EDIT`(코스 편집, 기본 1) · `RUNART_MAX_CONCURRENT_ROUTE_EDITS`(동시 편집 재계산, 기본 1) · `RUNART_ETL_LOCAL_ONLY=1`(기존 OSM 속성은 보존하고 로컬 경사도/신호등/가로등만 재반영)
+환경변수: `HOST`(로컬 기본 127.0.0.1, 컨테이너 0.0.0.0) · `PORT`(기본 8000) · `RUNART_BASE_URL`(미리보기 링크 도메인) · `RUNART_RELEASE_SHA`(배포 Git SHA, Docker 빌드 인자와 연동) · `KAKAO_JAVASCRIPT_KEY`(카카오맵 Web API, 필수) · `KAKAO_REST_API_KEY`(지오코딩, 선택) · `RUNART_TOKEN_SECRET`(32자 이상 도감·릴레이 토큰 서명키, 운영 환경 필수) · `RUNART_LEGAL_CONTACT`(정책 문의 이메일, 공개 배포 시 필수) · `WEB_CONCURRENCY`(웹 워커 수, 기본 1) · `RUNART_POOL_WORKERS`(코스 탐색 프로세스 수, 기본 2) · `RATE_LIMIT_RPS`(IP당, 기본 20) · `RUNART_MAX_BODY_BYTES`(MCP 요청 본문, 기본 65,536) · `RUNART_MAX_CONCURRENT_MCP`(동시 MCP HTTP 요청, 기본 4) · `RUNART_ROUTE_EDIT`(코스 편집, 기본 1) · `RUNART_MAX_CONCURRENT_ROUTE_EDITS`(동시 편집 재계산, 기본 1) · `RUNART_ETL_LOCAL_ONLY=1`(기존 OSM 속성은 보존하고 로컬 경사도/신호등/가로등만 재반영)
 
 실그래프(`data/seoul_graph.pkl`)가 없으면 **서울 시청 일대 데모 그리드**로 구동된다(전체 파이프라인 동작 확인용). 공모전 제출 전 반드시 ETL 실행:
 
@@ -57,16 +57,16 @@ pickle 형식의 그래프·시설·인프라 파일은 로드 전에 `src/runar
 
 경로·안전·시설 데이터는 컨테이너에 미리 적재되어 런타임에 외부로 조회하지 않는다. 단, 사용자가 입력한 임의의 서울 주소를 좌표로 바꾸는 지오코딩은 `KAKAO_REST_API_KEY`가 설정된 경우 Kakao Local API를 선택적으로 사용하며, 지하철역 289개와 주요 지명은 네트워크 없이 해석한다.
 
-## 툴 (8개, 모두 stateless·idempotent)
+## 툴 (7개, 모두 stateless·idempotent)
 
-`generate_running_course` · `generate_animal_course` · `list_available_shapes` · `find_facilities_near_course` · `refine_course` · `get_course_status` · `record_animal_completion` · `extend_shape_relay`
+`create_seoul_running_course` · `list_available_shapes` · `find_facilities_near_course` · `refine_course` · `get_course_status` · `record_animal_completion` · `extend_shape_relay`
 
 서울 동물지도(`/animals`)는 검증된 421개 GPS 아트를 한 화면에서 탐색하게 한다. 완주 기록은 서버 DB나 로그인 대신 자기완결형 `passport_token`으로 이어지며, 4종 도감·지역별 4종 배지·주간 최인접 미발견 동물을 제공한다. Shape Relay(`/relay/{token}`)도 최대 8개 동네의 같은 동물 course_id를 자기완결형 토큰에 담아 나란히 비교하고 공동 GPS 작품으로 겹쳐 보여준다. 따라서 PlayMCP 권장 stateless/no-session 구조를 유지한다.
 
 ## 배포 (PlayMCP in KC)
 
 ```bash
-docker build -t runnywhere .
+docker build --build-arg RUNART_RELEASE_SHA=$(git rev-parse HEAD) -t runnywhere .
 docker run -p 8000:8000 -e RUNART_BASE_URL=https://<kc-endpoint> runnywhere
 ```
 

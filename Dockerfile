@@ -1,6 +1,8 @@
 # Runnywhere MCP server — PlayMCP in KC container image (PRD §10)
 FROM python:3.12-slim
 
+ARG RUNART_RELEASE_SHA=unknown
+
 WORKDIR /app
 COPY pyproject.toml ./
 COPY LICENSE DATA_LICENSES.md THIRD_PARTY_NOTICES.md ./
@@ -15,6 +17,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip==26.1.2 \
 
 ENV PORT=8000
 ENV HOST=0.0.0.0
+ENV RUNART_RELEASE_SHA=${RUNART_RELEASE_SHA}
 # Deploy-time env (PlayMCP in KC): RUNART_BASE_URL=<public endpoint>,
 # KAKAO_JAVASCRIPT_KEY, RUNART_TOKEN_SECRET (32+ chars), RUNART_LEGAL_CONTACT,
 # WEB_CONCURRENCY=1,

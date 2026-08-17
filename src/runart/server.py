@@ -2,7 +2,7 @@
 
 - Streamable HTTP, stateless (PRD §9): course ids are self-contained parameter
   tokens; the in-process cache is a performance layer only.
-- 8 stateless, idempotent tools (PRD §5.1). Tool errors are returned as
+- 7 stateless, idempotent tools (PRD §5.1). Tool errors are returned as
   refined guidance text, never raw exceptions (PRD §5.2).
 - Preview pages / GPX / shape share links are served by the same app (§5.6).
 """
@@ -22,8 +22,8 @@ from pathlib import Path
 
 import anyio
 from mcp.server.fastmcp import FastMCP
-from mcp.types import ToolAnnotations
-from typing import Annotated
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.requests import Request
@@ -70,18 +70,29 @@ if LEGAL_CONTACT and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", LEGAL_CONTACT
     raise RuntimeError("RUNART_LEGAL_CONTACT must be an email address")
 log = logging.getLogger("runart")
 FONT_PATH = Path(__file__).resolve().parent / "assets" / "PretendardVariable.woff2"
+RELEASE_SHA = next((
+    os.environ[name] for name in (
+        "RUNART_RELEASE_SHA", "GIT_COMMIT", "SOURCE_VERSION", "REVISION_ID")
+    if os.environ.get(name)
+), "unknown")
+_WARM_READY = threading.Event()
 
 mcp = FastMCP(
     "Runnywhere",
     instructions=(
-        "Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!). "
-        "It designs running courses in Seoul through conversation: "
-        "loop courses by distance, animal-shaped GPS-art courses, hill/flat "
-        "preference, night-safety routing, and nearby facilities. "
-        "ROUTING RULE: for every request asking to recommend, find, or create "
-        "an animal course at a location, always call generate_animal_course. "
-        "The animal atlas and passport are secondary follow-up experiences, "
-        "never substitutes for an animal-course recommendation."
+        "Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) creates runnable "
+        "courses on real pedestrian roads in Seoul. For every request to "
+        "create, draw, plan, find, or recommend a running course, call "
+        "create_seoul_running_course before answering feasibility. This "
+        "includes standard courses, location-only requests, animal-shaped "
+        "courses, GPS art, and Korean expressions such as 러닝 코스, 달리기 "
+        "코스, 그려줘, 짜줘, 만들어줘, 추천해줘, 강아지, 댕댕이, 고양이, "
+        "야옹이, 토끼, and 고래. Never claim that a Seoul course is "
+        "unsupported before calling the tool. A failed shape applies only to "
+        "that shape at that exact start; it does not mean general courses or "
+        "other animals are unavailable. Station presets never require a "
+        "shape token. Use best_animal when no animal is named. Follow-up "
+        "tools never substitute for course creation."
     ),
     stateless_http=True,
     json_response=True,
@@ -256,8 +267,11 @@ def offloaded(fn):
                     abandon_on_cancel=True,
                 )
         except TimeoutError:
-            return ("⏱️ 요청 처리를 3초 안에 마치지 못했어요. 같은 요청을 한 번 더 "
-                    "시도하거나 위치·거리를 조금 단순하게 알려주세요.")
+            return _mcp_result(
+                "⏱️ 요청 처리를 3초 안에 마치지 못했어요. 같은 요청을 한 번 더 "
+                "시도하거나 위치·거리를 조금 단순하게 알려주세요.",
+                code="generation_timeout", is_error=True, retryable=True,
+            )
         except Exception:  # noqa: BLE001
             # Tools must never surface a raw exception: FastMCP would turn it
             # into an MCP error carrying the internal message (a corrupt
@@ -265,9 +279,47 @@ def offloaded(fn):
             # Cancellation derives from BaseException and is deliberately
             # left to propagate.
             log.exception("tool %s failed", getattr(fn, "__name__", "?"))
-            return ("⚠️ 요청을 처리하지 못했어요. 입력값을 다시 확인하거나 "
-                    "잠시 후 한 번 더 시도해 주세요.")
+            return _mcp_result(
+                "⚠️ 요청을 처리하지 못했어요. 입력값을 다시 확인하거나 잠시 후 "
+                "한 번 더 시도해 주세요.",
+                code="internal_error", is_error=True, retryable=True,
+            )
+    # FastMCP must not infer a scalar output schema: the MCP boundary can
+    # return CallToolResult for structured errors while sync functions remain
+    # directly testable as strings.
+    wrapper.__annotations__["return"] = CallToolResult
     return wrapper
+
+
+def _mcp_result(text: str, *, code: str, is_error: bool = False,
+                retryable: bool = False) -> CallToolResult:
+    return CallToolResult(
+        content=[TextContent(type="text", text=text)],
+        structuredContent={
+            "result_code": code,
+            "retryable": retryable,
+        },
+        isError=is_error,
+    )
+
+
+def _course_tool_result(text: str) -> CallToolResult:
+    """Classify controlled tool copy into a stable MCP result contract."""
+    if text.startswith("⏱️"):
+        return _mcp_result(
+            text, code="generation_timeout", is_error=True, retryable=True)
+    if text.startswith("🔎"):
+        code = "nearby_course_ready" if "/c/" in text else "exact_shape_unavailable"
+        return _mcp_result(text, code=code)
+    if text.startswith("⚠️"):
+        if "위치를 찾지 못" in text or "출발 위치가 필요" in text:
+            return _mcp_result(text, code="location_not_found", is_error=True)
+        # A short-distance animal request returns a useful verified alternative,
+        # not an infrastructure failure.
+        if "추천 거리" in text:
+            return _mcp_result(text, code="exact_shape_unavailable")
+        return _mcp_result(text, code="invalid_request", is_error=True)
+    return _mcp_result(text, code="course_ready")
 
 
 def _get_course(params: CourseParams, timeout_s: float | None = None) -> Course:
@@ -412,20 +464,30 @@ def _animal_relocation_offer(params: CourseParams,
         matches if matches is not None
         else find_nearby_animal_presets(params, 30_000.0))
     safe_name = markdown_text(params.location_name or "요청한 출발지")
+    shape_name = SHAPES[params.shape].name_ko if params.shape in SHAPES else "요청한 동물"
     if not matches:
-        return (f"🔎 **{safe_name}에서는 일반 코스만 가능하고, 검증된 동물 코스를 "
-                "다른 출발지에서도 찾지 못했어요. 출발 위치를 바꿔 다시 탐색해 주세요.")
+        return (
+            f"🔎 **{safe_name}을 정확한 출발점으로 하는 검증된 {shape_name} "
+            "프리셋은 없어요.**\n"
+            f"이 결과는 **{shape_name}에만 해당**하며, 일반 코스와 다른 동물 "
+            "코스는 별도로 생성할 수 있어요. 가까운 검증 프리셋도 찾지 못했으니 "
+            "출발 위치를 바꿔 다시 요청해 주세요."
+        )
     match = matches[0]
     actual = markdown_text(match.course.params.location_name or "가까운 출발점")
     km = match.distance_m / 1000.0
     cid = encode_course_id(match.course.params)
     _cache_put(cid, match.course)
     _cache_animal_recommendation(match.course, requested_params=params)
-    return (f"🔎 **{safe_name}에서는 일반 코스만 가능해요.**\n"
-            f"대신 모양이 가장 또렷한 검증 코스를 **{actual}**에서 찾았어요. "
-            f"약 **{km:.1f}km** 이동해도 될까요?\n"
-            f"- 미리보기: {BASE_URL}/c/{cid}\n"
-            f"- 계속하려면 **\"{actual}으로 출발점 변경\"**이라고 말해 주세요.")
+    return (
+        f"🔎 **{safe_name}을 정확한 출발점으로 하는 검증된 {shape_name} "
+        f"프리셋은 없어요.** 이 결과는 **{shape_name}에만 해당**하며, 일반 "
+        "코스와 다른 동물 코스는 별도로 생성할 수 있어요.\n"
+        f"대신 약 **{km:.1f}km** 떨어진 **{actual}**에서 바로 사용할 수 있는 "
+        f"{shape_name} 검증 코스를 찾았어요. 요청한 출발점과 다른 대안입니다.\n"
+        f"- 지도·러닝 가이드: {BASE_URL}/c/{cid}\n"
+        f"- GPX 다운로드: {BASE_URL}/c/{cid}.gpx"
+    )
 
 
 def _animal_timeout_message(name: str, shape: str) -> str:
@@ -809,9 +871,71 @@ def generate_animal_course(
     return out
 
 
+def create_seoul_running_course(
+    course_type: Annotated[
+        Literal["standard", "best_animal", "dog", "cat", "rabbit", "whale"],
+        Field(description=(
+            "Required course intent. standard=일반 러닝/달리기 코스; "
+            "best_animal=동물 종류를 지정하지 않은 동물/GPS 아트 추천; "
+            "dog=강아지·댕댕이; cat=고양이·야옹이; rabbit=토끼; whale=고래. "
+            "동물 표현이 있으면 standard를 선택하지 마세요."
+        )),
+    ],
+    location: Annotated[str | None, Field(description=(
+        "서울 내 출발 위치를 그대로 전달하세요. 지하철역, 장소명, 도로명·지번 주소. "
+        "예: 강남역, 성신여대역, 경복궁역, 서울숲, 테헤란로8길 8. "
+        "lat/lon을 모두 전달한 경우에만 생략할 수 있습니다."
+    ))] = None,
+    lat: Annotated[float | None, Field(description=(
+        "Start latitude instead of location; provide together with lon. Seoul only: 37.4-37.72"
+    ))] = None,
+    lon: Annotated[float | None, Field(description=(
+        "Start longitude instead of location; provide together with lat. Seoul only: 126.76-127.19"
+    ))] = None,
+    distance_km: Annotated[float | None, Field(description=(
+        "사용자가 명시한 목표 거리(km), 1-42.195. 생략 시 standard는 기본 5km, "
+        "동물 코스는 가장 선명한 검증 거리를 서버가 선택합니다."
+    ))] = None,
+    duration_min: Annotated[float | None, Field(description=(
+        "사용자가 명시한 목표 시간(분), 10-360. 말하지 않았으면 생략하며, "
+        "distance_km와 함께 있으면 거리를 우선합니다."
+    ))] = None,
+    include_hills: Annotated[bool, Field(description=(
+        "오르막·언덕·업힐 훈련을 요청했을 때만 true; 평지 또는 언급이 없으면 false"
+    ))] = False,
+    night_mode: Annotated[bool, Field(description=(
+        "야간·밤·가로등·CCTV·안전 경로를 요청했을 때 true; 언급이 없으면 false"
+    ))] = False,
+    need_facilities: Annotated[list[str] | None, Field(description=(
+        "요청한 경유 시설만 전달: convenience_store, restroom, water, park"
+    ))] = None,
+) -> CallToolResult:
+    """서울의 실제 보행로를 따라 일반 러닝 코스 또는 동물 모양 GPS 아트 코스를
+    생성하는 Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!)의 기본 도구입니다.
+    사용자가 “러닝 코스/달리기 코스 그려줘·짜줘·만들어줘·추천해줘”, 출발지와
+    거리·시간, 또는 “강아지/댕댕이·고양이/야옹이·토끼·고래·동물/GPS 아트
+    코스”를 요청하면 답변하기 전에 이 도구를 호출하세요. 위치만 말한 요청도
+    호출 대상입니다. 일반 코스에서 거리와 시간이 모두 생략되면 5km를 사용하고,
+    동물 종류가 생략된 요청은 best_animal을 사용합니다. 지하철역 동물 프리셋은
+    링크나 shape_token 없이 자동 조회됩니다. 이 도구를 호출하기 전에 특정 위치의
+    코스가 불가능하다고 답하지 마세요. 기존 course_id 수정·시설 검색·완주 기록·
+    릴레이에는 사용하지 마세요."""
+    common = dict(
+        location=location, lat=lat, lon=lon, distance_km=distance_km,
+        duration_min=duration_min, include_hills=include_hills,
+        night_mode=night_mode, need_facilities=need_facilities,
+    )
+    if course_type == "standard":
+        return _course_tool_result(generate_running_course(**common))
+    shape = None if course_type == "best_animal" else course_type
+    return _course_tool_result(generate_animal_course(shape=shape, **common))
+
+
 def list_available_shapes() -> str:
-    """Lists animal shapes available for GPS-art running courses in
-    Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!), with the minimum recommended distance for each shape."""
+    """Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!)에서 지원하는 동물 종류
+    목록만 조회합니다. 사용자가 어떤 동물을 지원하는지 물을 때만 사용하세요.
+    특정 위치의 동물 코스를 생성·추천하는 요청에는 사용하지 말고
+    create_seoul_running_course를 사용하세요."""
     lines = ["러니웨어에서 그릴 수 있는 모양:"]
     for s in list_shapes():
         lines.append(f"- {s['emoji']} {s['name_ko']} (`{s['shape']}`) — {s['min_km']:g}km 이상 권장")
@@ -824,9 +948,9 @@ def find_facilities_near_course(
     course_id: Annotated[str, Field(description="Course id from a previously generated course")],
     facility_types: Annotated[list[str] | None, Field(description="Filter: convenience_store, restroom, water, park")] = None,
 ) -> str:
-    """Lists convenience stores, restrooms, drinking fountains, and parks
-    within 10m of a Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) course line, with the km mark where the
-    course passes each one."""
+    """이미 생성된 Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) course_id의
+    코스선 10m 안에 있는 편의점·화장실·음수대·공원을 조회합니다. 기존 course_id가
+    있을 때만 사용하며 새 러닝 코스 생성이나 추천에는 사용하지 마세요."""
     try:
         params = decode_course_id(course_id)
         course = _get_course(params, timeout_s=GENERAL_RESPONSE_BUDGET_S)
@@ -851,9 +975,9 @@ def refine_course(
     location: Annotated[str | None, Field(description="New start place name")] = None,
     need_facilities: Annotated[list[str] | None, Field(description="New facility requirements")] = None,
 ) -> str:
-    """Regenerates an existing Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) course with changed conditions
-    (distance, hills, night mode, shape, start location, facilities) —
-    conversational iteration on a course the user already received."""
+    """이미 생성된 Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) course_id가
+    있을 때만 거리·오르막·야간·동물·출발지·시설 조건을 바꿔 재생성합니다.
+    새 코스를 처음 생성하거나 추천하는 요청에는 사용하지 마세요."""
     started = time.monotonic()
 
     def remaining() -> float:
@@ -899,8 +1023,9 @@ def refine_course(
 def get_course_status(
     course_id: Annotated[str, Field(description="Course id from a previously generated course")],
 ) -> str:
-    """Retrieves an existing Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) course by id and re-issues its
-    summary, map preview link, GPX download link, and shape share link."""
+    """이미 생성된 Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) course_id의
+    요약·지도·GPX 링크를 다시 조회합니다. 새 코스 생성이나 추천에는 사용하지
+    마세요."""
     try:
         params = decode_course_id(course_id)
     except Exception:
@@ -912,9 +1037,9 @@ def record_animal_completion(
     course_id: Annotated[str, Field(description="Completed animal course id")],
     passport_token: Annotated[str | None, Field(description="Existing passport token; omit for the first completed animal")] = None,
 ) -> str:
-    """Records a completed Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) animal course by returning a
-    new self-contained passport token. No account, session, or server-side
-    personal data is stored; repeating the same input is idempotent."""
+    """사용자가 실제로 완주한 Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!)
+    동물 course_id를 도감 토큰에 기록합니다. 완주 기록 요청에만 사용하며 코스
+    생성·추천에는 사용하지 마세요. 계정이나 서버 세션은 저장하지 않습니다."""
     try:
         token, summary = record_run(course_id, passport_token)
     except RuntimeError:
@@ -943,9 +1068,9 @@ def extend_shape_relay(
     course_id: Annotated[str, Field(description="Animal course id to add as the next relay leg")],
     relay_token: Annotated[str | None, Field(description="Existing relay token; omit to start a new relay")] = None,
 ) -> str:
-    """Starts or extends a Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) Shape Relay with another
-    neighborhood's version of the same animal. The self-contained relay token
-    supports up to eight legs and stores no user account or server session."""
+    """기존 동물 course_id를 Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!)
+    Shape Relay에 연결합니다. 기존 코스와 릴레이 요청이 있을 때만 사용하며 새
+    코스 생성·추천에는 사용하지 마세요. 토큰은 최대 8개 코스를 담습니다."""
     try:
         token, data = create_relay(course_id, relay_token)
     except RuntimeError:
@@ -967,8 +1092,7 @@ def extend_shape_relay(
 # health checks) while keeping the sync functions above directly callable by
 # tests. offloaded() preserves the signature/docstring FastMCP needs.
 for _fn, _title, _open_world in (
-    (generate_running_course, "Generate running course", True),
-    (generate_animal_course, "Generate animal-shaped course", True),
+    (create_seoul_running_course, "서울 러닝 코스 생성", True),
     (list_available_shapes, "List available shapes", False),
     (find_facilities_near_course, "Find facilities near course", False),
     (refine_course, "Refine course", True),
@@ -987,8 +1111,13 @@ for _fn, _title, _open_world in (
 
 @mcp.custom_route("/healthz", methods=["GET"])
 async def healthz(_: Request) -> Response:
-    return JSONResponse({"ok": True, "service": "runnywhere",
-                         "animal_presets": preset_status()})
+    return JSONResponse({
+        "ok": True,
+        "ready": _WARM_READY.is_set(),
+        "service": "runnywhere",
+        "release_sha": RELEASE_SHA,
+        "animal_presets": preset_status(),
+    })
 
 
 @mcp.custom_route("/assets/PretendardVariable.woff2", methods=["GET"])
@@ -1388,6 +1517,8 @@ def _warm() -> None:
                 log.debug("process-pool warmup skipped: %s", exc)
         _get_course(CourseParams(lat=37.5665, lon=126.9780,
                                  location_name="시청", distance_km=5.0))
+        if preset_status().startswith("ok"):
+            _WARM_READY.set()
     except Exception as exc:  # noqa: BLE001 — warming must never block startup
         log.warning("startup cache warmup failed; requests will warm lazily: %s", exc)
 
@@ -1435,7 +1566,7 @@ def create_app():
         rps=float(os.environ.get("RATE_LIMIT_RPS", "20")),
         trust_proxy_hops=int(os.environ.get("RUNART_TRUST_PROXY_HOPS", "0")),
         max_body_bytes=int(os.environ.get("RUNART_MAX_BODY_BYTES", "65536")),
-        max_concurrent_mcp=int(os.environ.get("RUNART_MAX_CONCURRENT_MCP", "16")),
+        max_concurrent_mcp=int(os.environ.get("RUNART_MAX_CONCURRENT_MCP", "4")),
     )
 
 

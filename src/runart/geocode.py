@@ -9,6 +9,7 @@ The API key never appears in logs, responses, or errors (PRD §8).
 
 import json
 import logging
+import math
 import os
 import re
 import ssl
@@ -132,6 +133,7 @@ def _station_aliases(line: str, official_name: str,
 
 def _build_station_lookup() -> dict[str, tuple[float, float, str]]:
     lookup: dict[str, tuple[float, float, str]] = {}
+    shortened: dict[str, dict[str, tuple[float, float, str]]] = {}
     for line, official_name, lat, lon, road_address, lot_address in SEOUL_METRO_STATIONS:
         hit = (lat, lon, _station_name(official_name))
         for alias in _station_aliases(
@@ -139,14 +141,49 @@ def _build_station_lookup() -> dict[str, tuple[float, float, str]]:
             # Keep the first line's point for an unqualified transfer-station
             # name; line-qualified aliases still resolve to their own record.
             lookup.setdefault(_normalize_station_query(alias), hit)
+        primary = re.sub(r"\([^)]*\)", "", official_name).strip()
+        base = primary.removesuffix("역")
+        if base.endswith("입구") and len(base) > len("입구"):
+            short = base.removesuffix("입구")
+            for alias in (short, f"{short}역"):
+                key = _normalize_station_query(alias)
+                shortened.setdefault(key, {}).setdefault(hit[2], hit)
+    # Users commonly omit 입구 (성신여대역, 홍대역). Only accept the short
+    # spelling when it identifies one canonical station across every line.
+    for key, stations in shortened.items():
+        if len(stations) == 1:
+            lookup.setdefault(key, next(iter(stations.values())))
     return lookup
 
 
 _STATION_LOOKUP = _build_station_lookup()
+_STATION_POINTS = tuple(dict.fromkeys(_STATION_LOOKUP.values()))
 
 
 def _offline_station_search(location: str) -> tuple[float, float, str] | None:
     return _STATION_LOOKUP.get(_normalize_station_query(location))
+
+
+def _looks_like_station_query(location: str) -> bool:
+    normalized = _normalize_station_query(location)
+    return normalized.endswith("역") or bool(re.search(r"\d+호선", normalized))
+
+
+def _nearest_offline_station(lat: float, lon: float,
+                             max_distance_m: float = 200.0
+                             ) -> tuple[float, float, str] | None:
+    """Snap Kakao subway results to the coordinates used by presets."""
+    best = None
+    best_m = max_distance_m
+    lat_rad = math.radians(lat)
+    for slat, slon, name in _STATION_POINTS:
+        north_m = math.radians(slat - lat) * 6_371_000.0
+        east_m = math.radians(slon - lon) * math.cos(lat_rad) * 6_371_000.0
+        distance_m = math.hypot(north_m, east_m)
+        if distance_m < best_m:
+            best_m = distance_m
+            best = (slat, slon, name)
+    return best
 
 
 def _in_seoul(lat: float, lon: float) -> bool:
@@ -239,7 +276,11 @@ def _keyword_search(query: str, deadline: float | None = None
     for doc in docs:
         lat, lon = float(doc["y"]), float(doc["x"])
         if _in_seoul(lat, lon):
-            found = (lat, lon, doc.get("place_name") or query)
+            found = None
+            if doc.get("category_group_code") == "SW8":
+                found = _nearest_offline_station(lat, lon)
+            if found is None:
+                found = (lat, lon, doc.get("place_name") or query)
             _cache_ok("kw", query, found)
             return found
     return None
@@ -356,6 +397,12 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
         return lat, lon, location or f"({lat:.4f}, {lon:.4f})"
     if location:
         key = location.replace(" ", "")
+        # Explicit station intent must use the same canonical coordinates as
+        # the bundled animal presets, even when a landmark alias also exists.
+        if _looks_like_station_query(location):
+            station = _offline_station_search(location)
+            if station:
+                return station
         # ① exact offline landmark aliases kept for backward compatibility.
         for name, (glat, glon) in GAZETTEER.items():
             if name == key:

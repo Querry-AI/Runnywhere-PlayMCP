@@ -46,6 +46,22 @@ def test_p3_gps_art_share():
     assert "모양 완성도" not in out
 
 
+def test_failed_shape_does_not_poison_another_animal_or_standard_course():
+    rabbit = server.create_seoul_running_course(
+        course_type="rabbit", location="경복궁역")
+    dog = server.create_seoul_running_course(
+        course_type="dog", location="경복궁역")
+    standard = server.create_seoul_running_course(
+        course_type="standard", location="성신여대역")
+    rabbit_text = rabbit.content[0].text
+    dog_text = dog.content[0].text
+    standard_text = standard.content[0].text
+    assert "토끼에만 해당" in rabbit_text and "일반 코스만 가능" not in rabbit_text
+    assert rabbit.structuredContent["result_code"] == "nearby_course_ready"
+    assert _is_course(dog_text) and "댕댕런" in dog_text
+    assert _is_course(standard_text) and "기본 5km" in standard_text
+
+
 # P4 야간 러너: 야간 안전 모드
 def test_p4_night_runner():
     out = server.generate_running_course(location="홍대", distance_km=5,

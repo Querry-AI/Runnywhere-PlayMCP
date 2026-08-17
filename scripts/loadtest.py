@@ -9,6 +9,7 @@ animal/location combinations.
 """
 
 import asyncio
+from collections import Counter
 import json
 import os
 import secrets
@@ -23,12 +24,16 @@ from mcp.client.streamable_http import streamablehttp_client
 
 URL = os.environ.get("RUNART_LOADTEST_URL", "http://localhost:8000/mcp")
 REPORT_PATH = os.environ.get("RUNART_LOADTEST_REPORT", "")
-SPOTS = ["시청", "강남역", "여의도한강공원", "석촌호수", "서울숲", "올림픽공원",
-         "뚝섬한강공원", "홍대", "잠실", "왕십리"]
+SPOTS = [
+    "시청", "강남역", "여의도한강공원", "석촌호수", "서울숲", "올림픽공원",
+    "뚝섬한강공원", "홍대", "잠실", "왕십리", "경복궁역", "성신여대역",
+    "구파발역", "신설동역", "광화문역", "혜화역", "건대입구역", "사당역",
+    "노원역", "수유역", "천호역", "마곡역", "합정역", "선릉역",
+]
 SHAPES = [None, None, None, "whale", "cat", "dog"]  # ~50% GPS art
 
 
-async def worker(n_calls: int, latencies: dict):
+async def worker(n_calls: int, latencies: dict, outcomes: Counter):
     async with streamablehttp_client(URL) as (r, w, _):
         async with ClientSession(r, w) as s:
             await s.initialize()
@@ -42,12 +47,18 @@ async def worker(n_calls: int, latencies: dict):
                     # distance under 11km; forcing random distances measures a
                     # different and intentionally slower validation workflow.
                     result = await s.call_tool(
-                        "generate_animal_course", {"shape": shape, "location": loc})
+                        "create_seoul_running_course",
+                        {"course_type": shape, "location": loc})
                 else:
                     result = await s.call_tool(
-                        "generate_running_course", {"location": loc, "distance_km": dist})
+                        "create_seoul_running_course",
+                        {"course_type": "standard", "location": loc,
+                         "distance_km": dist})
+                code = (result.structuredContent or {}).get(
+                    "result_code", "unclassified")
+                outcomes[code] += 1
                 if result.isError:
-                    raise RuntimeError(f"tool error during load test: {result.content}")
+                    outcomes["mcp_error"] += 1
                 latencies["art" if shape else "course"].append(
                     (time.perf_counter() - t0) * 1000)
 
@@ -71,10 +82,12 @@ async def main():
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 1000
     conc = int(sys.argv[2]) if len(sys.argv) > 2 else 10
     latencies: dict = {"course": [], "art": []}
+    outcomes: Counter = Counter()
     per = max(1, n // conc)
     t0 = time.perf_counter()
     await asyncio.wait_for(
-        asyncio.gather(*(worker(per, latencies) for _ in range(conc))), timeout=240)
+        asyncio.gather(*(worker(per, latencies, outcomes) for _ in range(conc))),
+        timeout=240)
     wall = time.perf_counter() - t0
     all_vals = sorted(latencies["course"] + latencies["art"])
     print(f"n={len(all_vals)} conc={conc} wall={wall:.1f}s rps={len(all_vals) / wall:.1f}")
@@ -85,6 +98,8 @@ async def main():
     print(f"전체: avg={avg:.0f}ms p99={p99:.0f}ms — "
           f"평균 100ms {'PASS' if avg <= 100 else 'FAIL'} / "
           f"p99 3000ms {'PASS' if p99 <= 3000 else 'FAIL'}")
+    print("결과 분포: " + ", ".join(
+        f"{key}={value}" for key, value in sorted(outcomes.items())))
     if REPORT_PATH:
         payload = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -93,7 +108,9 @@ async def main():
             "overall": {
                 "avg_ms": round(avg, 2), "p99_ms": round(p99, 2),
                 "avg_100ms_pass": avg <= 100, "p99_3000ms_pass": p99 <= 3000,
+                "mcp_errors": outcomes["mcp_error"],
             },
+            "outcomes": dict(sorted(outcomes.items())),
             "groups": [report for report in (course_report, art_report) if report],
         }
         path = Path(REPORT_PATH)

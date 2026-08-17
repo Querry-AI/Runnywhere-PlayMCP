@@ -79,7 +79,7 @@ def test_new_mcp_tool_answers_are_concise_and_actionable():
 def test_atlas_is_not_exposed_as_competing_mcp_tool():
     import asyncio
     names = {tool.name for tool in asyncio.run(server.mcp.list_tools())}
-    assert "generate_animal_course" in names
+    assert "create_seoul_running_course" in names
     assert "explore_animal_collection" not in names
 
 
