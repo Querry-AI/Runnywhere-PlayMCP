@@ -118,6 +118,8 @@ async def main():
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
                         encoding="utf-8")
         print(f"심사 증빙 저장: {path}")
+    if outcomes["mcp_error"]:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -153,10 +153,11 @@ def test_external_location_search_shares_one_wall_clock_deadline(monkeypatch):
     assert len(seen) <= 1
 
 
-def test_offloaded_tool_has_outer_three_second_response_cap(monkeypatch):
+def test_offloaded_tool_has_outer_three_second_response_cap(monkeypatch, caplog):
     import asyncio
 
     monkeypatch.setattr(server, "MCP_OUTER_RESPONSE_BUDGET_S", 0.02)
+    caplog.set_level("INFO", logger="runart")
 
     @server.offloaded
     def slow_tool():
@@ -169,6 +170,8 @@ def test_offloaded_tool_has_outer_three_second_response_cap(monkeypatch):
     assert out.isError is True
     assert out.structuredContent["result_code"] == "generation_timeout"
     assert out.content[0].text.startswith("⏱️") and "3초" in out.content[0].text
+    assert "tool=slow_tool" in caplog.text
+    assert "outcome=generation_timeout" in caplog.text
 
 
 def test_animal_request_surveys_verified_minimum_distances_first():

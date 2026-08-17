@@ -260,19 +260,29 @@ def offloaded(fn):
     FastMCP introspects for the input schema."""
     @functools.wraps(fn)
     async def wrapper(*args, **kwargs):
+        started = time.monotonic()
+        outcome = "cancelled"
         try:
             with anyio.fail_after(MCP_OUTER_RESPONSE_BUDGET_S):
-                return await anyio.to_thread.run_sync(
+                result = await anyio.to_thread.run_sync(
                     functools.partial(fn, *args, **kwargs),
                     abandon_on_cancel=True,
                 )
+                if isinstance(result, CallToolResult):
+                    outcome = str((result.structuredContent or {}).get(
+                        "result_code", "mcp_error" if result.isError else "success"))
+                else:
+                    outcome = "success"
+                return result
         except TimeoutError:
+            outcome = "generation_timeout"
             return _mcp_result(
                 "⏱️ 요청 처리를 3초 안에 마치지 못했어요. 같은 요청을 한 번 더 "
                 "시도하거나 위치·거리를 조금 단순하게 알려주세요.",
                 code="generation_timeout", is_error=True, retryable=True,
             )
         except Exception:  # noqa: BLE001
+            outcome = "internal_error"
             # Tools must never surface a raw exception: FastMCP would turn it
             # into an MCP error carrying the internal message (a corrupt
             # course_id used to leak "Error -3 while decompressing data").
@@ -283,6 +293,12 @@ def offloaded(fn):
                 "⚠️ 요청을 처리하지 못했어요. 입력값을 다시 확인하거나 잠시 후 "
                 "한 번 더 시도해 주세요.",
                 code="internal_error", is_error=True, retryable=True,
+            )
+        finally:
+            log.info(
+                "mcp_tool tool=%s outcome=%s duration_ms=%d",
+                getattr(fn, "__name__", "?"), outcome,
+                round((time.monotonic() - started) * 1000),
             )
     # FastMCP must not infer a scalar output schema: the MCP boundary can
     # return CallToolResult for structured errors while sync functions remain
