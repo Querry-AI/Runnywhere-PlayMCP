@@ -477,6 +477,18 @@ def test_route_decorations_do_not_swallow_map_drags():
     assert ".km-marker,.dir-marker,.start-marker{pointer-events:none}" in page
 
 
+def test_live_tracking_centers_the_runner_and_keeps_white_arrows_on_colored_route():
+    """GPS tracking should follow the runner without flattening route colours."""
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    assert "map.setCenter(posLatLng)" in page
+    assert "strokeColor:color(s)" in page
+    assert '<svg viewBox="0 0 12 12"' in page
+    assert "stroke:#fff" in page
+    assert "➤" not in page
+
+
 def test_map_entry_points_sit_in_the_top_corners():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example")
