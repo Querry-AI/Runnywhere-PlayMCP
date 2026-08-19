@@ -415,7 +415,7 @@ def test_detail_panels_follow_an_edit():
 
     # every element the summary rewrites has to be addressable
     for element_id in ("courseTitle", "courseBadges", "mLength", "mDuration", "mAscent",
-                       "mRfs", "mRfsGrade", "courseHighlights", "factSignals",
+                       "mSteps", "mKcal", "mElev", "factSignals",
                        "factStores", "factRestrooms", "facilityTally", "facilityList"):
         assert f'id="{element_id}"' in page, element_id
     assert "applySummary(payload.summary)" in page
@@ -441,9 +441,11 @@ def test_edit_summary_matches_what_a_full_page_load_shows():
     assert summary["title"] == course_title(course)
     assert summary["length_km"] == round(course.length_km, 2)
     assert summary["ascent_m"] == round(course.ascent_m)
-    assert summary["rfs"] == course.rfs["score"]
     assert summary["facility_tally"] in page
-    assert f'{course.rfs["score"]}/100' in page
+    # Running-friendliness was removed from the page; it must not come back
+    # through the live-update payload either.
+    assert "rfs" not in summary
+    assert "러닝 친화도" not in page
 
 
 def test_editing_offers_an_explicit_map_pan_tool():
@@ -477,13 +479,19 @@ def test_route_decorations_do_not_swallow_map_drags():
     assert ".km-marker,.dir-marker,.start-marker{pointer-events:none}" in page
 
 
-def test_live_tracking_centers_the_runner_and_keeps_white_arrows_on_colored_route():
-    """GPS tracking should follow the runner without flattening route colours."""
+def test_live_tracking_centers_the_runner_and_keeps_white_arrows_readable():
+    """GPS tracking follows the runner, and the direction arrows stay legible.
+
+    The route used to be a three-colour running-friendliness heatmap. That
+    score was removed from the product, and an unlabelled tricolour line is
+    worse than none, so the route is now a single brand colour.
+    """
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example")
 
     assert "map.setCenter(posLatLng)" in page
-    assert "strokeColor:color(s)" in page
+    assert "const ROUTE_COLOR = '#0a7d43'" in page
+    assert "strokeColor:color(s)" not in page
     assert '<svg viewBox="0 0 12 12"' in page
     assert "stroke:#fff" in page
     assert "➤" not in page

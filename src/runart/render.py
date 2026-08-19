@@ -16,7 +16,7 @@ from .infrastructure import pedestrian_signals_crossed
 from .models import encode_course_id
 from .naming import course_badges, course_title
 from .pace import DEFAULT_PACE_S, PACE_MODEL, PACE_TIERS, effort
-from .rfs import COMPONENT_LABELS_KO, edge_rfs
+from .rfs import edge_rfs
 from .shapes import SHAPES
 
 PREVIEW_FACILITY_TYPES = {"convenience_store", "restroom"}
@@ -244,30 +244,6 @@ def _shape_only_route(course: Course) -> list[list[float]]:
     return [[round(lat, 6), round(lon, 6)] for lat, lon in route_points(course)]
 
 
-def _score_breakdown_html(course: Course) -> str:
-    comps = course.rfs.get("components", {})
-    weights = course.rfs.get("weights", {})
-    if not comps or not weights:
-        return ""
-    rows = []
-    order = ("slope", "crossing", "lighting", "sidewalk", "cctv", "park")
-    for key in order:
-        value = float(comps.get(key, 0.5))
-        weight = float(weights.get(key, 0.0))
-        label = "훈련 언덕" if key == "slope" and course.params.include_hills else COMPONENT_LABELS_KO[key]
-        rows.append(
-            f'<div class="metric">'
-            f'<div class="metric-top"><span>{label}</span>'
-            f'<span>{round(value * 100)}점 · {round(weight * 100)}%</span></div>'
-            f'<div class="bar"><i style="width:{max(3, round(value * 100))}%"></i></div>'
-            f'</div>'
-        )
-    return (
-        '<details class="panel"><summary>러닝 친화도 근거</summary>'
-        + "".join(rows) + "</details>"
-    )
-
-
 def _course_fact_html(course: Course, facilities: list[dict],
                       detailed_points: list[tuple[float, float]]) -> str:
     g = graphmod.get_graph()
@@ -286,26 +262,11 @@ def _course_fact_html(course: Course, facilities: list[dict],
         for (label, value), el_id in zip(items, ids)
     )
     return (
-        '<details class="panel"><summary>러너 체크포인트</summary>'
+        '<section class="panel"><h2>러너 체크포인트</h2>'
         f'<div class="facts">{cells}</div>'
         '<p class="hint">신호 횡단 수와 코스 10m 안의 편의시설입니다.</p>'
-        '</details>'
+        '</section>'
     )
-
-
-_RFS_GRADES_KO = (
-    (75, "아주 좋아요"),
-    (60, "좋아요"),
-    (45, "무난해요"),
-)
-
-
-def _rfs_grade_ko(score: int) -> str:
-    """Plain-Korean reading of the RFS number — 58/100 means nothing on its own."""
-    for floor, label in _RFS_GRADES_KO:
-        if score >= floor:
-            return label
-    return "주의해서 달리세요"
 
 
 def course_edit_summary(course: Course) -> dict:
@@ -327,12 +288,9 @@ def course_edit_summary(course: Course) -> dict:
         "length_km": round(course.length_km, 2),
         "ascent_m": round(course.ascent_m),
         "elev_range": list(elev_range) if elev_range else None,
-        "rfs": course.rfs["score"],
-        "rfs_grade": _rfs_grade_ko(course.rfs["score"]),
         "grade_label": course.grade_label,
         "duration_min": [lo, hi],
         "signals": pedestrian_signals_crossed(g, course.path),
-        "highlights": course.rfs.get("highlights", [])[:2],
         "facility_counts": counts,
         "facility_tally": " · ".join(f"{LABELS_KO[t]} {counts[t]}곳" for t in counts),
         "facility_chips": [f"{LABELS_KO[f['type']]} · {f['at_km']:g}km"
@@ -356,7 +314,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
         for b in badges
     )
     og_desc = html.escape(
-        f"러닝 친화도 {course.rfs['score']}/100 · 누적 오르막 {course.ascent_m:.0f}m"
+        f"거리 {course.length_km:.1f}km · 누적 오르막 {course.ascent_m:.0f}m"
         f" · {p.location_name or '서울'} — 러니웨어"
     )
     detailed = route_points(course)
@@ -366,7 +324,6 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
     dir_markers = json.dumps(_direction_markers(detailed))
     profile = _elevation_profile(course)
     profile_svg = _profile_svg(profile)
-    score_breakdown = _score_breakdown_html(course)
     course_facts = _course_fact_html(course, facilities, detailed)
     markers = json.dumps([
         {"lat": f["lat"], "lon": f["lon"], "type": f["type"],
@@ -374,9 +331,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
          "label": html.escape(f"{LABELS_KO[f['type']]} · {f['at_km']:g}km 지점")}
         for f in facilities
     ])
-    highlights = html.escape(" · ".join(course.rfs.get("highlights", [])))
     shape_view_label = "동물 실루엣" if shape else "코스 라인"
-    rfs_grade = html.escape(_rfs_grade_ko(course.rfs["score"]))
     where = html.escape(p.location_name)
     where_html = f'<p class="course-where">{where} 출발</p>' if where else ""
     # Name the empty categories too: "편의점·화장실" with only restrooms listed
@@ -513,8 +468,11 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
       color:#44514a;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;padding:0}}
  .pace-chip[aria-pressed="true"]{{background:#142018;border-color:#142018;color:#fff}}
  .pace-feel{{margin:9px 0 0;font-size:12px;color:#55605a;line-height:1.4;word-break:keep-all}}
- .metric-wide{{grid-column:1/-1}}
  .metric-value i{{font-style:normal;font-size:14px;font-weight:700;color:#55605a;margin-left:2px}}
+ /* Secondary actions must not compete with the two primary CTAs above them. */
+ .btn.ghost{{background:#f2f6f0;color:#2b3630;border:1px solid #dce3d8;font-weight:700}}
+ .actions.secondary-actions{{grid-template-columns:repeat(3,1fr);margin-top:8px}}
+ .actions.secondary-actions .btn{{min-height:44px;padding:0 6px;font-size:13px}}
  .metric-note-inline{{margin:8px 0 0;font-size:12px;color:#55605a}}
  .course-metrics{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:14px 0}}
  .course-metrics>div{{min-width:0;padding:12px;border:1px solid #e1e7dd;background:#f7faf5;border-radius:12px}}
@@ -524,7 +482,6 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .metric-label{{display:block;font-size:13px;color:#55605a;margin-top:3px;word-break:keep-all}}
  .metric-note{{display:block;font-size:12px;font-weight:700;color:#17613e;margin-top:2px}}
  .course-where{{margin:-6px 0 12px;font-size:15px;font-weight:700;color:#44514a;word-break:keep-all}}
- .highlight-tags{{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 10px}}
  .tag{{padding:6px 9px;border-radius:999px;background:#edf5f0;color:#17613e;font-size:13px;font-weight:700;word-break:keep-all}}
  .supporting-copy{{font-size:13px;line-height:1.45;color:#55605a;margin:0}}
  .score{{font-size:1.35em;font-weight:800;color:#0a7d43}}
@@ -683,39 +640,34 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
   <div><dt class="metric-label">칼로리</dt><dd class="metric-value" id="mKcal">{initial_effort["kcal"]}<i>kcal</i></dd></div>
   <div><dt class="metric-label">고도 범위</dt><dd class="metric-value" id="mElev">{elev_text}</dd></div>
   <div><dt class="metric-label">총 오르막</dt><dd class="metric-value" id="mAscent">{course.ascent_m:.0f}<i>m</i></dd></div>
-  <div class="metric-wide"><dt class="metric-label">러닝 친화도</dt><dd class="metric-value" id="mRfs">{course.rfs["score"]}/100<span class="metric-note" id="mRfsGrade">{rfs_grade}</span></dd></div>
  </dl>
  <p class="metric-note-inline">걸음·칼로리는 성인 {PACE_MODEL["weight_kg"]:.0f}kg 기준 추정치예요.</p>
- <div class="highlight-tags" id="courseHighlights">{''.join(f'<span class="tag">{h}</span>' for h in course.rfs.get("highlights", [])[:2])}</div>
  <p class="supporting-copy">실제 통행·공사 상황을 확인하고 안전하게 달려 주세요.</p>
  {profile_svg}
  <div class="actions primary-actions">
   <button class="btn" id="inlineRunStart" type="button">내 위치 추적 시작</button>
   <a class="btn" href="{base_url}/c/{cid}.gpx">GPX 파일 받기</a>
  </div>
- <details class="more-actions"><summary>더보기</summary>
-  <div class="actions">
-   <a class="btn" href="{base_url}/c/{cid}/card.svg">코스 카드</a>
-   <button class="btn" id="shareCourse" type="button">친구에게 공유하기</button>
-   <a class="btn" href="{base_url}/animals">서울 동물 지도</a>
-  </div>
- </details>
+ <div class="actions secondary-actions">
+  <a class="btn ghost" href="{base_url}/c/{cid}/card.svg">코스 카드</a>
+  <button class="btn ghost" id="shareCourse" type="button">공유하기</button>
+  <a class="btn ghost" href="{base_url}/animals">동물 지도</a>
+ </div>
 </div>
-<details class="panel"><summary>카카오맵 GPX 불러오기 방법</summary>
- <ol class="steps">
-  <li>GPX 다운로드를 눌러 코스 파일을 저장합니다.</li>
-  <li>카카오맵 앱 실행 후 우측 상단 길찾기 버튼을 누르세요.</li>
-  <li>이동수단을 자전거로 선택한 뒤, 도착지 입력 화면 우측 하단의 GPX를 선택하세요.</li>
-  <li>저장해 둔 GPX 파일을 찾아 선택하고 완료 후, 화면 우측 하단의 주행 시작을 눌러 안내를 받으세요.</li>
- </ol>
-</details>
 {course_facts}
-{score_breakdown}
 <section class="panel"><h2>코스 주변 편의시설</h2>
  <p class="supporting-copy">코스 10m 안 · <span id="facilityTally">{facility_tally}</span></p>
  <div class="facility-list" id="facilityList">
   {''.join(f'<span class="chip">{LABELS_KO[f["type"]]} · {f["at_km"]:g}km</span>' for f in facilities[:FACILITY_CHIP_LIMIT]) or '<span class="chip">코스 10m 반경 편의점·화장실 없음</span>'}
  </div>
+</section>
+<section class="panel"><h2>카카오맵으로 따라 달리기</h2>
+ <ol class="steps">
+  <li>GPX 파일 받기를 눌러 코스를 저장합니다.</li>
+  <li>카카오맵 앱에서 우측 상단 길찾기를 누르세요.</li>
+  <li>이동수단을 자전거로 고른 뒤, 도착지 입력 화면 우측 하단의 GPX를 선택하세요.</li>
+  <li>저장한 파일을 고르고 완료한 뒤, 우측 하단 주행 시작을 누르면 안내가 시작됩니다.</li>
+ </ol>
 </section>
 </div>
 <div class="mobile-dock"><button id="mobileRunStart" type="button">내 위치 추적 시작</button></div>
@@ -865,7 +817,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    zoomControlShown = value;
  }};
  showZoomControl(true);
- const color = s => s >= .62 ? '#18a558' : (s >= .48 ? '#f0a202' : '#dc3d2a');
+ const ROUTE_COLOR = '#0a7d43';
  const routeLayers = [];
  const shapeLayers = [];
  const guideLayers = [];
@@ -888,9 +840,9 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  if (segs.length) route.push([segs[segs.length - 1][2], segs[segs.length - 1][3]]);
  const routePath = route.map(([lat, lon]) => new kakao.maps.LatLng(lat, lon));
  addPolyline(routePath, {{strokeColor:'#ffffff',strokeWeight:11,strokeOpacity:.95}}, routeLayers);
- for (const [a, b, c, d, s] of segs)
+ for (const [a, b, c, d] of segs)
    addPolyline([new kakao.maps.LatLng(a,b),new kakao.maps.LatLng(c,d)],
-     {{strokeColor:color(s),strokeWeight:7,strokeOpacity:.92}},routeLayers);
+     {{strokeColor:ROUTE_COLOR,strokeWeight:7,strokeOpacity:.92}},routeLayers);
  const shapePath = shapeRoute.map(([lat, lon]) => new kakao.maps.LatLng(lat, lon));
  const shapeHalo = addPolyline(shapePath, {{strokeColor:'#ffffff',strokeWeight:13,strokeOpacity:.72}}, shapeLayers, false);
  const shapeLine = addPolyline(shapePath, {{strokeColor:'#18a558',strokeWeight:8,strokeOpacity:.92}}, shapeLayers, false);
@@ -1024,14 +976,10 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    // Distance changed, so time / steps / kcal must follow at the current pace.
    effortKm = summary.length_km;
    renderEffort();
-   setText('mRfsGrade', summary.rfs_grade);
-   const rfs = document.getElementById('mRfs');
-   if (rfs && rfs.firstChild) rfs.firstChild.nodeValue = summary.rfs + '/100';
    setText('factSignals', summary.signals + '개');
    setText('factStores', (summary.facility_counts.convenience_store || 0) + '개');
    setText('factRestrooms', (summary.facility_counts.restroom || 0) + '개');
    setText('facilityTally', summary.facility_tally);
-   setChips('courseHighlights', summary.highlights, null, 'tag');
    setChips('facilityList', summary.facility_chips, '코스 10m 반경 편의점·화장실 없음', 'chip');
    const badges = document.getElementById('courseBadges');
    if (badges && summary.badges) {{
@@ -1479,7 +1427,7 @@ def card_svg(course: Course) -> str:
  <text x="40" y="130" font-size="26" fill="#9be49b"
    font-family="-apple-system,sans-serif">{course.length_km:.1f}km · {where}</text>
  <text x="40" y="180" font-size="20" fill="#aaa"
-   font-family="-apple-system,sans-serif">러닝 친화도 {course.rfs['score']}/100 · 오르막 {course.ascent_m:.0f}m</text>
+   font-family="-apple-system,sans-serif">누적 오르막 {course.ascent_m:.0f}m</text>
  <text x="40" y="{h - 44}" font-size="18" fill="#666"
    font-family="-apple-system,sans-serif">Runnywhere(러니웨어) — 어디서든 러닝 코스 짜기!</text>
  <text x="40" y="{h - 18}" font-size="12" fill="#666"
