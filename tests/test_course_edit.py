@@ -126,6 +126,28 @@ def test_edit_endpoint_saves_exact_path_as_new_stateless_url():
     assert decode_course_id(payload["course_id"]).manual_path == source.path
 
 
+def test_edit_endpoint_caches_new_version_without_overwriting_original():
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    original_id = encode_course_id(source.params)
+    server._cache_put(original_id, source)
+
+    response = asyncio.run(server.edit_course_route(_json_request(original_id, {
+        "action": "save", "path": source.path,
+    })))
+    payload = json.loads(response.body)
+    edited_id = payload["course_id"]
+
+    with server._CACHE_LOCK:
+        cached_original = server._course_cache.get(original_id)
+        cached_edited = server._course_cache.get(edited_id)
+    assert response.status_code == 200
+    assert cached_original is source
+    assert cached_edited is not None
+    assert cached_edited.params.manual_path == source.path
+    assert cached_edited.params.shape is None
+    assert edited_id != original_id
+
+
 def test_edit_endpoint_snaps_a_drawn_segment_to_walkable_edges():
     source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
     cid = encode_course_id(source.params)
