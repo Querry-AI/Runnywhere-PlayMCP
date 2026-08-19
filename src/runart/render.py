@@ -407,7 +407,8 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  body{{margin:0;font-family:'Pretendard Variable',Pretendard,-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo',sans-serif;color:#17201b;background:#f4f7f4;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}}
  .brand{{height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 22px;
       background:#fff;border-bottom:1px solid #e2e7df;box-sizing:border-box}}
- .brand strong{{font-size:18px;color:#142018;letter-spacing:-.03em}}
+ .brand strong{{font-size:clamp(14px,4.2vw,18px);color:#142018;letter-spacing:-.03em;word-break:keep-all}}
+ .brand-tagline{{color:#66726a;font-weight:600}}
  /* The Kakao SDK sets position:relative on its container at runtime; declaring
     it here stops every absolutely positioned map control (HUD, toolbar, toast)
     from depending on that side effect. */
@@ -583,7 +584,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  @media (orientation:landscape) and (max-width:900px){{#map{{height:280px}}.wrap{{padding-bottom:72px}}}}
  @media(prefers-reduced-motion:reduce){{*{{scroll-behavior:auto!important;animation-duration:.001ms!important;transition-duration:.001ms!important}}}}
 </style></head><body>
-<header class="brand"><strong>러니웨어</strong></header>
+<header class="brand"><strong>러니웨어<span class="brand-tagline">: 어디서든 러닝 코스 짜기!</span></strong></header>
 <div id="map"><div class="map-hud">
  <span class="pill">{course.length_km:.2f}km</span>
  <span class="pill">오르막 {course.ascent_m:.0f}m</span>
