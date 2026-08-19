@@ -126,6 +126,52 @@ def test_mcp_success_uses_cached_course_without_regeneration(monkeypatch):
     assert "기본 5km" in result.content[0].text
 
 
+@pytest.mark.parametrize("shape", ["dog", "cat", "rabbit", "whale"])
+def test_each_confirmed_animal_course_type_is_widget_eligible(shape):
+    course = _course(shape=shape)
+    course_id = encode_course_id(course.params)
+    server._cache_put(course_id, course)
+    markdown = f"## 동물 코스\n- 지도: {server.BASE_URL}/c/{course_id}"
+
+    result = server._course_tool_result(markdown, course_type=shape)
+    payload = json.loads(result.content[0].text)
+
+    assert payload["widget"]["type"] == "Card"
+    assert result.structuredContent["result_code"] == "course_ready"
+
+
+def test_new_course_is_cached_and_widgeted_in_its_first_tool_response(monkeypatch):
+    """Cache-only handoff must not mean old-course-only widget support."""
+    course = _course(shape=None)
+    # The generator preserves the resolved request params on the Course.
+    course.params = course.params.model_copy(update={
+        "lat": 37.4986144, "lon": 127.0280696,
+    })
+    course_id = encode_course_id(course.params)
+    with server._CACHE_LOCK:
+        server._course_cache.pop(course_id, None)
+
+    calls = []
+
+    def generate_once(fn, params, timeout_s=None):
+        calls.append((fn, params, timeout_s))
+        return course
+
+    monkeypatch.setattr(server, "_offload", generate_once)
+    result = server.create_seoul_running_course(
+        course_type="standard", location="강남역", distance_km=9.0
+    )
+    payload = json.loads(result.content[0].text)
+
+    assert len(calls) == 1
+    assert payload["widget"]["type"] == "Card"
+    assert payload["widget"]["children"][-2]["onClickAction"]["payload"]["target"][
+        "url"
+    ].endswith(f"/c/{course_id}")
+    with server._CACHE_LOCK:
+        assert server._course_cache.get(course_id) is course
+
+
 def test_mcp_widget_falls_back_to_original_markdown(monkeypatch):
     course = _course(shape=None)
     course_id = encode_course_id(course.params)
@@ -144,6 +190,17 @@ def test_mcp_widget_falls_back_to_original_markdown(monkeypatch):
     monkeypatch.setattr(server, "KAKAO_WIDGETS_ENABLED", True)
     best_animal = server._course_tool_result(markdown, course_type="best_animal")
     assert best_animal.content[0].text == markdown
+
+    second = _course(location_name="잠실역", shape=None)
+    second_id = encode_course_id(second.params)
+    server._cache_put(second_id, second)
+    ambiguous = (
+        f"{markdown}\n- 다른 지도: {server.BASE_URL}/c/{second_id}"
+    )
+    multiple_ids = server._course_tool_result(
+        ambiguous, course_type="standard"
+    )
+    assert multiple_ids.content[0].text == ambiguous
 
     error_text = "⚠️ 출발 위치가 필요해요."
     error = server._course_tool_result(error_text, course_type="standard")

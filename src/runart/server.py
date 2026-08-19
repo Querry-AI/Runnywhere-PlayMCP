@@ -50,6 +50,7 @@ from .render import (card_svg, course_edit_summary, course_markdown, markdown_te
 from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
                      generate_shape_course, list_shapes)
 from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
+from .widget import WidgetTooLargeError, build_course_widget
 
 BASE_URL = os.environ.get(
     "RUNART_BASE_URL",
@@ -63,6 +64,7 @@ if (_BASE_PARTS.scheme not in {"http", "https"} or not _BASE_PARTS.hostname
     raise RuntimeError("RUNART_BASE_URL must be an HTTP(S) origin without credentials or a path")
 KAKAO_JAVASCRIPT_KEY = os.environ.get("KAKAO_JAVASCRIPT_KEY", "")
 ROUTE_EDIT_ENABLED = os.environ.get("RUNART_ROUTE_EDIT", "1") == "1"
+KAKAO_WIDGETS_ENABLED = os.environ.get("RUNART_KAKAO_WIDGETS", "1") == "1"
 if KAKAO_JAVASCRIPT_KEY and not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", KAKAO_JAVASCRIPT_KEY):
     raise RuntimeError("KAKAO_JAVASCRIPT_KEY has an invalid format")
 LEGAL_CONTACT = os.environ.get("RUNART_LEGAL_CONTACT", "")
@@ -109,6 +111,10 @@ _course_cache: dict[str, "Course | CourseError"] = {}
 _CACHE_MAX = 512
 _animal_recommendation_cache: dict[tuple, Course] = {}
 _CACHE_LOCK = threading.RLock()
+_COURSE_LINK_RE = re.compile(
+    rf"{re.escape(BASE_URL)}/c/([A-Za-z0-9_-]{{1,4096}})(?:\.gpx)?"
+    r"(?=$|[\s)\]?#])"
+)
 
 
 # ---------- CPU offload (PlayMCP p99 <= 3s) ----------
@@ -319,7 +325,77 @@ def _mcp_result(text: str, *, code: str, is_error: bool = False,
     )
 
 
-def _course_tool_result(text: str) -> CallToolResult:
+def _extract_single_course_id(text: str) -> str | None:
+    """Return one unique id from links emitted by this server."""
+    course_ids = set(_COURSE_LINK_RE.findall(text))
+    return next(iter(course_ids)) if len(course_ids) == 1 else None
+
+
+def _cached_course(course_id: str) -> Course | None:
+    """Read the performance cache without restoring or regenerating a route."""
+    with _CACHE_LOCK:
+        cached = _course_cache.get(course_id)
+    return cached if isinstance(cached, Course) else None
+
+
+def _widget_lead_text(text: str) -> str:
+    """Keep controlled context that appears before the course Markdown."""
+    marker = "\n## "
+    return text.split(marker, 1)[0] if marker in text else ""
+
+
+def _try_course_widget(text: str, course_type: str) -> str | None:
+    """Build from a cached course only; every mismatch keeps Markdown."""
+    if not KAKAO_WIDGETS_ENABLED:
+        log.info(
+            "mcp_widget tool=create_seoul_running_course "
+            "state=ineligible reason=disabled"
+        )
+        return None
+    if course_type not in {"standard", "dog", "cat", "rabbit", "whale"}:
+        log.info(
+            "mcp_widget tool=create_seoul_running_course "
+            "state=ineligible reason=course_type"
+        )
+        return None
+    course_id = _extract_single_course_id(text)
+    if course_id is None:
+        log.info(
+            "mcp_widget tool=create_seoul_running_course "
+            "state=ineligible reason=no_single_id"
+        )
+        return None
+    course = _cached_course(course_id)
+    if course is None:
+        log.info(
+            "mcp_widget tool=create_seoul_running_course "
+            "state=fallback reason=cache_miss"
+        )
+        return None
+    try:
+        widget = build_course_widget(
+            course, course_id, BASE_URL, lead_text=_widget_lead_text(text)
+        )
+    except WidgetTooLargeError:
+        log.warning(
+            "mcp_widget tool=create_seoul_running_course "
+            "state=fallback reason=too_large"
+        )
+        return None
+    except Exception:  # noqa: BLE001 — widget failures must preserve Markdown
+        log.warning(
+            "mcp_widget tool=create_seoul_running_course "
+            "state=fallback reason=build_error"
+        )
+        return None
+    log.info(
+        "mcp_widget tool=create_seoul_running_course "
+        "state=emitted reason=course_ready"
+    )
+    return widget
+
+
+def _course_tool_result(text: str, *, course_type: str) -> CallToolResult:
     """Classify controlled tool copy into a stable MCP result contract."""
     if text.startswith("⏱️"):
         return _mcp_result(
@@ -335,7 +411,8 @@ def _course_tool_result(text: str) -> CallToolResult:
         if "추천 거리" in text:
             return _mcp_result(text, code="exact_shape_unavailable")
         return _mcp_result(text, code="invalid_request", is_error=True)
-    return _mcp_result(text, code="course_ready")
+    widget = _try_course_widget(text, course_type)
+    return _mcp_result(widget or text, code="course_ready")
 
 
 def _get_course(params: CourseParams, timeout_s: float | None = None) -> Course:
@@ -942,9 +1019,11 @@ def create_seoul_running_course(
         night_mode=night_mode, need_facilities=need_facilities,
     )
     if course_type == "standard":
-        return _course_tool_result(generate_running_course(**common))
+        return _course_tool_result(
+            generate_running_course(**common), course_type=course_type)
     shape = None if course_type == "best_animal" else course_type
-    return _course_tool_result(generate_animal_course(shape=shape, **common))
+    return _course_tool_result(
+        generate_animal_course(shape=shape, **common), course_type=course_type)
 
 
 def list_available_shapes() -> str:
@@ -1265,6 +1344,7 @@ async def edit_course_route(request: Request) -> Response:
             {"error": "수정한 코스 선이 너무 복잡해 링크로 저장할 수 없어요. 더 짧은 구간으로 단순하게 그려 주세요."},
             status_code=422,
         )
+    _cache_put(new_id, course)
     return JSONResponse(
         {
             "course_id": new_id,
