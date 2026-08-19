@@ -15,6 +15,7 @@ from .geo import haversine_m, to_xy
 from .infrastructure import pedestrian_signals_crossed
 from .models import encode_course_id
 from .naming import course_badges, course_title
+from .pace import DEFAULT_PACE_S, PACE_MODEL, PACE_TIERS, effort
 from .rfs import COMPONENT_LABELS_KO, edge_rfs
 from .shapes import SHAPES
 
@@ -123,6 +124,16 @@ def _elevation_profile(course: Course) -> list:
         return []
     sm = smooth_series([e for _, e in out])
     return [(k, round(e, 1)) for (k, _), e in zip(out, sm)]
+
+
+def _elevation_range(profile: list) -> tuple[int, int] | None:
+    """(low, high) metres over the course, or None when the graph has no
+    elevation for it. Distinct from cumulative ascent: a flat riverside loop
+    can climb 30m in total while never leaving a 4m band."""
+    if not profile:
+        return None
+    elevations = [e for _, e in profile]
+    return round(min(elevations)), round(max(elevations))
 
 
 def _profile_svg(profile: list) -> str:
@@ -308,12 +319,14 @@ def course_edit_summary(course: Course) -> dict:
     points = route_points(course)
     facilities = [f for f in facilities_along(points, sorted(PREVIEW_FACILITY_TYPES), limit=80)
                   if f["type"] in PREVIEW_FACILITY_TYPES]
+    elev_range = _elevation_range(_elevation_profile(course))
     lo, hi = course.duration_range_min
     counts = {t: sum(1 for f in facilities if f["type"] == t)
               for t in sorted(PREVIEW_FACILITY_TYPES)}
     return {
         "length_km": round(course.length_km, 2),
         "ascent_m": round(course.ascent_m),
+        "elev_range": list(elev_range) if elev_range else None,
         "rfs": course.rfs["score"],
         "rfs_grade": _rfs_grade_ko(course.rfs["score"]),
         "grade_label": course.grade_label,
@@ -351,7 +364,8 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
     shape_route = json.dumps(_shape_only_route(course))
     km_markers = json.dumps(_km_markers(detailed))
     dir_markers = json.dumps(_direction_markers(detailed))
-    profile_svg = _profile_svg(_elevation_profile(course))
+    profile = _elevation_profile(course)
+    profile_svg = _profile_svg(profile)
     score_breakdown = _score_breakdown_html(course)
     course_facts = _course_fact_html(course, facilities, detailed)
     markers = json.dumps([
@@ -386,6 +400,16 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
         [node, round(g.nodes[node]["lat"], 6), round(g.nodes[node]["lon"], 6)]
         for node in course.path
     ])
+    elev_range = _elevation_range(profile)
+    elev_text = (f"{elev_range[0]}~{elev_range[1]}<i>m</i>" if elev_range else "정보 없음")
+    initial_effort = effort(course.length_km, DEFAULT_PACE_S)
+    # Quick jumps to each named band, at the slowest pace that still belongs
+    # to it, so tapping a chip lands on a round, recognisable number.
+    pace_chips = "".join(
+        f'<button type="button" class="pace-chip" data-pace="{floor_s or 240}">{name}</button>'
+        for floor_s, name, _ in PACE_TIERS
+    )
+    pace_model = script_json(PACE_MODEL)
     initial_summary = script_json(course_edit_summary(course))
     kakao_key = html.escape(kakao_javascript_key, quote=True)
     map_sdk = (
@@ -458,6 +482,40 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  h1{{margin:0;font-size:26px;line-height:1.28;letter-spacing:-.035em;word-break:keep-all}}
  h2,h3{{margin:0 0 12px;font-size:17px;letter-spacing:-.02em}}
  .stat{{color:#3d473f;line-height:1.65;font-size:15px}}
+ /* Distance is a fact about the course; time is a consequence of the pace
+    the runner picks. They sit on one line so the causal pair reads together. */
+ .effort-line{{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:2px 0 14px}}
+ .effort-distance{{font-size:34px;font-weight:800;color:#0a7d43;letter-spacing:-.04em;line-height:1}}
+ .effort-duration{{font-size:34px;font-weight:800;color:#142018;letter-spacing:-.04em;line-height:1}}
+ .effort-line i{{font-style:normal;font-size:17px;font-weight:700;margin-left:2px;color:#55605a}}
+ .pace-picker{{border:1px solid #e1e7dd;background:#f7faf5;border-radius:14px;padding:13px 14px 11px;margin-bottom:14px}}
+ .pace-head{{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}}
+ .pace-caption{{font-size:13px;font-weight:700;color:#55605a}}
+ .pace-read{{margin-left:auto;font-size:20px;font-weight:800;color:#142018;letter-spacing:-.02em}}
+ .pace-read i{{font-style:normal;font-size:13px;font-weight:700;color:#55605a;margin-left:1px}}
+ .pace-tier{{padding:4px 9px;border-radius:999px;background:#0a7d43;color:#fff;font-size:12px;font-weight:800}}
+ /* Thumb is 28px but the input owns 44px of vertical space, so the tap
+    target clears the minimum without a fat visible track. */
+ .pace-range{{-webkit-appearance:none;appearance:none;width:100%;height:44px;margin:2px 0 0;background:transparent;display:block}}
+ .pace-range:focus-visible{{outline:3px solid #8ee0bb;outline-offset:3px;border-radius:8px}}
+ .pace-range::-webkit-slider-runnable-track{{height:6px;border-radius:999px;
+      background:linear-gradient(90deg,#0a7d43,#8ee0bb)}}
+ .pace-range::-moz-range-track{{height:6px;border-radius:999px;
+      background:linear-gradient(90deg,#0a7d43,#8ee0bb)}}
+ .pace-range::-webkit-slider-thumb{{-webkit-appearance:none;appearance:none;width:28px;height:28px;
+      margin-top:-11px;border-radius:50%;background:#fff;border:3px solid #0a7d43;
+      box-shadow:0 2px 8px rgba(10,28,19,.24);cursor:grab}}
+ .pace-range::-moz-range-thumb{{width:28px;height:28px;border-radius:50%;background:#fff;
+      border:3px solid #0a7d43;box-shadow:0 2px 8px rgba(10,28,19,.24);cursor:grab}}
+ .pace-range:active::-webkit-slider-thumb{{cursor:grabbing;transform:scale(.94)}}
+ .pace-chips{{display:flex;gap:6px;margin-top:2px}}
+ .pace-chip{{flex:1;min-height:34px;border:1px solid #dce3d8;border-radius:9px;background:#fff;
+      color:#44514a;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;padding:0}}
+ .pace-chip[aria-pressed="true"]{{background:#142018;border-color:#142018;color:#fff}}
+ .pace-feel{{margin:9px 0 0;font-size:12px;color:#55605a;line-height:1.4;word-break:keep-all}}
+ .metric-wide{{grid-column:1/-1}}
+ .metric-value i{{font-style:normal;font-size:14px;font-weight:700;color:#55605a;margin-left:2px}}
+ .metric-note-inline{{margin:8px 0 0;font-size:12px;color:#55605a}}
  .course-metrics{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:14px 0}}
  .course-metrics>div{{min-width:0;padding:12px;border:1px solid #e1e7dd;background:#f7faf5;border-radius:12px}}
  /* dt/dd carry a 40px UA margin-inline-start that squeezes the value out of the cell. */
@@ -497,7 +555,9 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .km-marker,.dir-marker,.start-marker{{pointer-events:none}}
  .km-marker{{background:#fff;border:2px solid #111;border-radius:999px;width:24px;height:24px;line-height:20px;
       text-align:center;font-size:11px;font-weight:800;box-shadow:0 2px 8px rgba(0,0,0,.2)}}
- .dir-marker span{{display:block;color:#142018;font-size:20px;text-shadow:0 0 3px #fff,0 1px 4px rgba(0,0,0,.2)}}
+ .dir-marker svg{{display:block;width:11px;height:11px;fill:none;stroke:#fff;stroke-width:2.4;
+      stroke-linecap:round;stroke-linejoin:round;transform-origin:50% 50%;
+      filter:drop-shadow(0 1px 1px rgba(0,0,0,.42))}}
  .start-marker{{background:#142018;color:#fff;border:2px solid #fff;border-radius:999px;padding:6px 9px;
       font-size:12px;font-weight:800;box-shadow:0 3px 12px rgba(0,0,0,.28);white-space:nowrap}}
  .user-dot{{width:18px;height:18px;background:#e5322e;border:3px solid #fff;border-radius:999px;
@@ -601,12 +661,31 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
 <div class="card course-summary">
  <div class="course-head"><h1 id="courseTitle">{title}</h1><div class="course-badges" id="courseBadges">{badge_html}</div></div>
  {where_html}
+ <div class="effort-line">
+  <span class="effort-distance" id="mLength">{course.length_km:.1f}<i>km</i></span>
+  <span class="effort-duration"><b id="mDuration">{initial_effort["duration_min"]}</b><i>분</i></span>
+ </div>
+ <div class="pace-picker">
+  <div class="pace-head">
+   <span class="pace-caption">내 페이스</span>
+   <span class="pace-read"><b id="paceValue">{initial_effort["pace_label"]}</b><i>/km</i></span>
+   <span class="pace-tier" id="paceTier">{initial_effort["tier"]}</span>
+  </div>
+  <input id="paceRange" class="pace-range" type="range" min="{PACE_MODEL["fastest_s"]}"
+   max="{PACE_MODEL["slowest_s"]}" step="{PACE_MODEL["step_s"]}" value="{DEFAULT_PACE_S}"
+   aria-label="1km당 목표 페이스" aria-describedby="paceFeel"
+   aria-valuetext="{initial_effort["pace_label"]} 퍼 킬로미터, {initial_effort["tier"]}">
+  <div class="pace-chips" role="group" aria-label="페이스 빠르게 고르기">{pace_chips}</div>
+  <p class="pace-feel" id="paceFeel">{initial_effort["tier_feel"]} · 아래 숫자가 이 페이스에 맞춰 바뀌어요</p>
+ </div>
  <dl class="course-metrics">
-  <div><dt class="metric-label">실거리</dt><dd class="metric-value" id="mLength">{course.length_km:.1f}km</dd></div>
-  <div><dt class="metric-label">예상 시간</dt><dd class="metric-value" id="mDuration">{course.duration_range_min[0]}~{course.duration_range_min[1]}분</dd></div>
-  <div><dt class="metric-label">오르막</dt><dd class="metric-value" id="mAscent">{course.ascent_m:.0f}m</dd></div>
-  <div><dt class="metric-label">러닝 친화도</dt><dd class="metric-value" id="mRfs">{course.rfs["score"]}/100<span class="metric-note" id="mRfsGrade">{rfs_grade}</span></dd></div>
+  <div><dt class="metric-label">걸음 수</dt><dd class="metric-value" id="mSteps">{initial_effort["steps"]:,}<i>걸음</i></dd></div>
+  <div><dt class="metric-label">칼로리</dt><dd class="metric-value" id="mKcal">{initial_effort["kcal"]}<i>kcal</i></dd></div>
+  <div><dt class="metric-label">고도 범위</dt><dd class="metric-value" id="mElev">{elev_text}</dd></div>
+  <div><dt class="metric-label">총 오르막</dt><dd class="metric-value" id="mAscent">{course.ascent_m:.0f}<i>m</i></dd></div>
+  <div class="metric-wide"><dt class="metric-label">러닝 친화도</dt><dd class="metric-value" id="mRfs">{course.rfs["score"]}/100<span class="metric-note" id="mRfsGrade">{rfs_grade}</span></dd></div>
  </dl>
+ <p class="metric-note-inline">걸음·칼로리는 성인 {PACE_MODEL["weight_kg"]:.0f}kg 기준 추정치예요.</p>
  <div class="highlight-tags" id="courseHighlights">{''.join(f'<span class="tag">{h}</span>' for h in course.rfs.get("highlights", [])[:2])}</div>
  <p class="supporting-copy">실제 통행·공사 상황을 확인하고 안전하게 달려 주세요.</p>
  {profile_svg}
@@ -808,10 +887,10 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const route = segs.map(s => [s[0], s[1]]);
  if (segs.length) route.push([segs[segs.length - 1][2], segs[segs.length - 1][3]]);
  const routePath = route.map(([lat, lon]) => new kakao.maps.LatLng(lat, lon));
- addPolyline(routePath, {{strokeColor:'#ffffff',strokeWeight:9,strokeOpacity:.95}}, routeLayers);
+ addPolyline(routePath, {{strokeColor:'#ffffff',strokeWeight:11,strokeOpacity:.95}}, routeLayers);
  for (const [a, b, c, d, s] of segs)
    addPolyline([new kakao.maps.LatLng(a,b),new kakao.maps.LatLng(c,d)],
-     {{strokeColor:color(s),strokeWeight:5,strokeOpacity:.92}},routeLayers);
+     {{strokeColor:color(s),strokeWeight:7,strokeOpacity:.92}},routeLayers);
  const shapePath = shapeRoute.map(([lat, lon]) => new kakao.maps.LatLng(lat, lon));
  const shapeHalo = addPolyline(shapePath, {{strokeColor:'#ffffff',strokeWeight:13,strokeOpacity:.72}}, shapeLayers, false);
  const shapeLine = addPolyline(shapePath, {{strokeColor:'#18a558',strokeWeight:8,strokeOpacity:.92}}, shapeLayers, false);
@@ -835,7 +914,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  if (segs.length) addOverlay(startPos,
    '<div class="start-marker" title="출발·도착 지점">출발·도착</div>', guideLayers);
  for (const m of dirs) addOverlay(new kakao.maps.LatLng(m.lat,m.lon),
-   '<div class="dir-marker" title="진행 방향"><span style="transform:rotate('+m.angle+'deg)">➤</span></div>',guideLayers);
+   '<div class="dir-marker" title="진행 방향"><svg viewBox="0 0 12 12" style="transform:rotate('+m.angle+'deg)" aria-hidden="true"><path d="M2 2.5 9 6 2 9.5"/></svg></div>',guideLayers);
  for (const k of kms) addOverlay(new kakao.maps.LatLng(k.lat,k.lon),
    '<div class="km-marker" title="'+k.km+'km 지점">'+k.km+'</div>',guideLayers);
  let editing = false;
@@ -856,6 +935,17 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  // The panels under the map describe the course; once the course changes they
  // must follow, or the page shows one route and describes another.
  const initialSummary = {initial_summary};
+ // Sets the number while leaving the trailing unit <i> in place.
+ const setValue = (id, value, unit) => {{
+   const node = document.getElementById(id);
+   if (!node) return;
+   node.textContent = value;
+   if (unit) {{
+     const u = document.createElement('i');
+     u.textContent = unit;
+     node.appendChild(u);
+   }}
+ }};
  const setText = (id, value) => {{
    const node = document.getElementById(id);
    if (node && value !== undefined && value !== null) node.textContent = value;
@@ -872,14 +962,68 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      host.appendChild(chip);
    }}
  }};
+ // Pace model constants come from src/runart/pace.py so the browser and the
+ // server cannot drift into two different answers for the same course.
+ const PACE = {pace_model};
+ let paceSeconds = {DEFAULT_PACE_S};
+ let effortKm = {course.length_km:.4f};
+ const paceRange = document.getElementById('paceRange');
+ const paceValueEl = document.getElementById('paceValue');
+ const paceTierEl = document.getElementById('paceTier');
+ const paceFeelEl = document.getElementById('paceFeel');
+ const paceChips = [...document.querySelectorAll('.pace-chip')];
+ const fmtPace = s => Math.floor(s / 60) + "'" + String(s % 60).padStart(2, '0') + '"';
+ const paceTierOf = s => PACE.tiers.find(t => s >= t.min_s) || PACE.tiers[PACE.tiers.length - 1];
+ const speedKmh = s => 3600 / s;
+ const cadenceSpm = s => Math.min(PACE.cadence.max, Math.max(PACE.cadence.min,
+   PACE.cadence.base + PACE.cadence.per_kmh * (speedKmh(s) - PACE.cadence.ref_kmh)));
+ const metOf = s => PACE.met.per_kmh * speedKmh(s) + PACE.met.intercept;
+ const effortFor = (km, s) => {{
+   const minutes = km * s / 60;
+   return {{
+     minutes: Math.round(minutes),
+     steps: Math.round(cadenceSpm(s) * minutes),
+     kcal: Math.round(metOf(s) * 3.5 * PACE.weight_kg / 200 * minutes),
+   }};
+ }};
+ const renderEffort = () => {{
+   const e = effortFor(effortKm, paceSeconds);
+   const tier = paceTierOf(paceSeconds);
+   setText('mDuration', e.minutes);
+   setText('mSteps', e.steps.toLocaleString('ko-KR'));
+   setText('mKcal', e.kcal);
+   if (paceValueEl) paceValueEl.textContent = fmtPace(paceSeconds);
+   if (paceTierEl) paceTierEl.textContent = tier.name;
+   if (paceFeelEl) paceFeelEl.textContent = tier.feel + ' · 아래 숫자가 이 페이스에 맞춰 바뀌어요';
+   if (paceRange) paceRange.setAttribute('aria-valuetext',
+     fmtPace(paceSeconds) + ' 퍼 킬로미터, ' + tier.name);
+   for (const chip of paceChips)
+     chip.setAttribute('aria-pressed', String(paceTierOf(Number(chip.dataset.pace)).name === tier.name));
+ }};
+ const setPace = seconds => {{
+   paceSeconds = Math.min(PACE.slowest_s, Math.max(PACE.fastest_s,
+     Math.round(seconds / PACE.step_s) * PACE.step_s));
+   if (paceRange) paceRange.value = String(paceSeconds);
+   renderEffort();
+ }};
+ if (paceRange) paceRange.addEventListener('input', ev => setPace(Number(ev.target.value)));
+ for (const chip of paceChips)
+   chip.addEventListener('click', () => setPace(Number(chip.dataset.pace)));
+ renderEffort();
  let currentSummary = initialSummary;
  const applySummary = summary => {{
    if (!summary) return;
    currentSummary = summary;
    setText('courseTitle', summary.title);
-   setText('mLength', summary.length_km.toFixed(1) + 'km');
-   setText('mDuration', summary.duration_min[0] + '~' + summary.duration_min[1] + '분');
-   setText('mAscent', Math.round(summary.ascent_m) + 'm');
+   // Value and unit are separate nodes; textContent would eat the <i>.
+   setValue('mLength', summary.length_km.toFixed(1), 'km');
+   setValue('mAscent', String(Math.round(summary.ascent_m)), 'm');
+   setValue('mElev', summary.elev_range
+     ? summary.elev_range[0] + '~' + summary.elev_range[1] : '정보 없음',
+     summary.elev_range ? 'm' : '');
+   // Distance changed, so time / steps / kcal must follow at the current pace.
+   effortKm = summary.length_km;
+   renderEffort();
    setText('mRfsGrade', summary.rfs_grade);
    const rfs = document.getElementById('mRfs');
    if (rfs && rfs.firstChild) rfs.firstChild.nodeValue = summary.rfs + '/100';
@@ -1253,9 +1397,10 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      guideLayers.push(accuracyCircle);
    }} else {{
      userMarker.setPosition(posLatLng);
-     accuracyCircle.setPosition(posLatLng);
-     accuracyCircle.setRadius(acc);
-   }}
+   accuracyCircle.setPosition(posLatLng);
+   accuracyCircle.setRadius(acc);
+  }}
+   map.setCenter(posLatLng);
    const guide = off > 80 ? `코스에서 약 ${{off}}m 벗어남` : `코스 위를 달리는 중 · 오차 ${{acc}}m`;
    setStatus(guide);
  }};
@@ -1288,6 +1433,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      return;
    }}
    setStatus('GPS 위치 확인 중');
+   setMapMode('guide');
    startBtn.classList.add('on');
    startBtn.textContent = '추적 중지';
    syncStartButtons();

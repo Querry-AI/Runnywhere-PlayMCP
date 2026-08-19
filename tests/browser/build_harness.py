@@ -54,6 +54,7 @@ KAKAO_DOUBLE = """<script>
   Map.prototype.addControl=function(c){ this.controls.push(c); };
   Map.prototype.removeControl=function(c){ this.controls = this.controls.filter(x => x !== c); };
   Map.prototype.setBounds=function(){};
+  Map.prototype.setCenter=function(pos){ this.center=pos; this.centerCount=(this.centerCount||0)+1; };
   Map.prototype.setDraggable=function(v){ this.draggable=v; };
   Map.prototype.setZoomable=function(v){ this.zoomable=v; };
   Map.prototype.panBy=function(x,y){ this.lastPan=[x,y]; this.panCount=(this.panCount||0)+1; };
