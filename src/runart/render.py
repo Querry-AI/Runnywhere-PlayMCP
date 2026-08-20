@@ -817,7 +817,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    zoomControlShown = value;
  }};
  showZoomControl(true);
- const ROUTE_COLOR = '#0a7d43';
+ const color = s => s >= .62 ? '#18a558' : (s >= .48 ? '#f0a202' : '#dc3d2a');
  const routeLayers = [];
  const shapeLayers = [];
  const guideLayers = [];
@@ -840,9 +840,9 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  if (segs.length) route.push([segs[segs.length - 1][2], segs[segs.length - 1][3]]);
  const routePath = route.map(([lat, lon]) => new kakao.maps.LatLng(lat, lon));
  addPolyline(routePath, {{strokeColor:'#ffffff',strokeWeight:11,strokeOpacity:.95}}, routeLayers);
- for (const [a, b, c, d] of segs)
+ for (const [a, b, c, d, s] of segs)
    addPolyline([new kakao.maps.LatLng(a,b),new kakao.maps.LatLng(c,d)],
-     {{strokeColor:ROUTE_COLOR,strokeWeight:7,strokeOpacity:.92}},routeLayers);
+     {{strokeColor:color(s),strokeWeight:7,strokeOpacity:.92}},routeLayers);
  const shapePath = shapeRoute.map(([lat, lon]) => new kakao.maps.LatLng(lat, lon));
  const shapeHalo = addPolyline(shapePath, {{strokeColor:'#ffffff',strokeWeight:13,strokeOpacity:.72}}, shapeLayers, false);
  const shapeLine = addPolyline(shapePath, {{strokeColor:'#18a558',strokeWeight:8,strokeOpacity:.92}}, shapeLayers, false);

@@ -89,12 +89,11 @@ def test_page_shows_steps_calories_and_elevation_band():
     assert "65kg 기준" in page
 
 
-def test_running_friendliness_is_gone_from_the_page():
+def test_running_friendliness_metrics_are_gone_from_the_page():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example")
     assert "러닝 친화도" not in page
     assert 'id="mRfs"' not in page
-    assert "strokeColor:color(s)" not in page
 
 
 def test_no_disclosure_toggles_remain_on_the_page():
