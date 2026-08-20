@@ -184,6 +184,44 @@ def test_new_course_is_cached_and_widgeted_in_its_first_tool_response(monkeypatc
         assert server._course_cache.get(course_id) is course
 
 
+@pytest.mark.parametrize(
+    ("legacy_name", "generator_name", "kwargs", "shape"),
+    [
+        (
+            "_legacy_generate_running_course",
+            "generate_running_course",
+            {"location": "강남역", "distance_km": 5.0},
+            None,
+        ),
+        (
+            "_legacy_generate_animal_course",
+            "generate_animal_course",
+            {"shape": "dog", "location": "강남역"},
+            "dog",
+        ),
+    ],
+)
+def test_legacy_preview_calls_return_latest_widget_contract(
+    monkeypatch, legacy_name, generator_name, kwargs, shape
+):
+    """Cached old tool names must still emit the new-domain Kakao Card."""
+    course = _course(shape=shape)
+    course_id = encode_course_id(course.params)
+    server._cache_put(course_id, course)
+    markdown = f"## 호환 코스\n- 지도: {server.BASE_URL}/c/{course_id}"
+    monkeypatch.setattr(server, generator_name, lambda **_kwargs: markdown)
+
+    result = getattr(server, legacy_name)(**kwargs)
+    payload = json.loads(result.content[0].text)
+
+    assert result.structuredContent["result_code"] == "course_ready"
+    assert payload["widget"]["type"] == "Card"
+    target = payload["widget"]["children"][-2]["onClickAction"]["payload"][
+        "target"
+    ]["url"]
+    assert target == f"{server.BASE_URL}/c/{course_id}"
+
+
 def test_mcp_widget_falls_back_to_original_markdown(monkeypatch):
     course = _course(shape=None)
     course_id = encode_course_id(course.params)

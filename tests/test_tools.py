@@ -360,6 +360,7 @@ def test_mcp_tools_match_playmcp_required_annotations():
     names = [tool.name for tool in tools]
     assert set(names) == {
         "create_seoul_running_course",
+        "generate_running_course", "generate_animal_course",
         "list_available_shapes", "find_facilities_near_course",
         "refine_course", "get_course_status",
         "record_animal_completion", "extend_shape_relay",
@@ -367,7 +368,8 @@ def test_mcp_tools_match_playmcp_required_annotations():
     assert len(names) == len(set(names))
     assert 3 <= len(names) <= 10
     open_world_tools = {
-        "create_seoul_running_course", "refine_course",
+        "create_seoul_running_course", "generate_running_course",
+        "generate_animal_course", "refine_course",
     }
     for tool in tools:
         assert 1 <= len(tool.name) <= 128
@@ -376,6 +378,18 @@ def test_mcp_tools_match_playmcp_required_annotations():
         assert tool.annotations.title
         assert tool.annotations.openWorldHint is (tool.name in open_world_tools)
         assert tool.annotations.idempotentHint is True
+
+
+def test_legacy_preview_tool_schemas_remain_callable_during_contract_refresh():
+    """A Preview session cached on the former 8-tool contract must not fail."""
+    import asyncio
+    tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
+
+    standard = tools["generate_running_course"]
+    animal = tools["generate_animal_course"]
+    assert "location" in standard.inputSchema["properties"]
+    assert "shape" in animal.inputSchema["properties"]
+    assert "shape_token" in animal.inputSchema["properties"]
 
 
 def test_primary_course_tool_schema_and_description_drive_selection():
