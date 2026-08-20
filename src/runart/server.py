@@ -1028,6 +1028,26 @@ def create_seoul_running_course(
         generate_animal_course(shape=shape, **common), course_type=course_type)
 
 
+@functools.wraps(generate_running_course)
+def _legacy_generate_running_course(*args, **kwargs) -> CallToolResult:
+    """Bridge a cached pre-unification Preview call to the latest response."""
+    return _course_tool_result(
+        generate_running_course(*args, **kwargs), course_type="standard"
+    )
+
+
+@functools.wraps(generate_animal_course)
+def _legacy_generate_animal_course(*args, **kwargs) -> CallToolResult:
+    """Bridge a cached pre-unification animal call to the latest response."""
+    shape = kwargs.get("shape")
+    if shape is None and args:
+        shape = args[0]
+    course_type = shape if shape in SHAPES else "best_animal"
+    return _course_tool_result(
+        generate_animal_course(*args, **kwargs), course_type=course_type
+    )
+
+
 def list_available_shapes() -> str:
     """Lists the animal shapes supported by Runnywhere(러니웨어: 어디서든
     러닝 코스 짜기!). Use only when the user asks which shapes are available.
@@ -1191,17 +1211,25 @@ def extend_shape_relay(
 # Register each tool as an async offloaded wrapper (frees the event loop for
 # health checks) while keeping the sync functions above directly callable by
 # tests. offloaded() preserves the signature/docstring FastMCP needs.
-for _fn, _title, _open_world in (
-    (create_seoul_running_course, "서울 러닝 코스 생성", True),
-    (list_available_shapes, "List available shapes", False),
-    (find_facilities_near_course, "Find facilities near course", False),
-    (refine_course, "Refine course", True),
-    (get_course_status, "Get course status", False),
-    (record_animal_completion, "Record animal-course completion", False),
-    (extend_shape_relay, "Extend shape relay", False),
+for _fn, _name, _title, _open_world in (
+    (create_seoul_running_course, "create_seoul_running_course",
+     "서울 러닝 코스 생성", True),
+    (_legacy_generate_running_course, "generate_running_course",
+     "Generate running course (compatibility)", True),
+    (_legacy_generate_animal_course, "generate_animal_course",
+     "Generate animal course (compatibility)", True),
+    (list_available_shapes, "list_available_shapes",
+     "List available shapes", False),
+    (find_facilities_near_course, "find_facilities_near_course",
+     "Find facilities near course", False),
+    (refine_course, "refine_course", "Refine course", True),
+    (get_course_status, "get_course_status", "Get course status", False),
+    (record_animal_completion, "record_animal_completion",
+     "Record animal-course completion", False),
+    (extend_shape_relay, "extend_shape_relay", "Extend shape relay", False),
 ):
     mcp.add_tool(
-        offloaded(_fn), name=_fn.__name__,
+        offloaded(_fn), name=_name,
         annotations=ToolAnnotations(
             title=_title, openWorldHint=_open_world, **_RO),
     )
