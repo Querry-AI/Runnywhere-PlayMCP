@@ -145,10 +145,8 @@ def build_course_widget(
     badge_text = "".join(_plain_text(badge.get("emoji", ""), 4) for badge in badges)
     title = _plain_text(f"{badge_text} {course_title(course)}", 80)
     location = _plain_text(course.params.location_name or "지정한 출발점", 120)
-    score = int(course.rfs["score"])
     metrics = _plain_text(
-        f"{course.length_km:.1f}km · 누적 오르막 {course.ascent_m:.0f}m · "
-        f"러닝 친화도 {score}/100",
+        f"{course.length_km:.1f}km · 누적 오르막 {course.ascent_m:.0f}m",
         120,
     )
 
@@ -160,7 +158,7 @@ def build_course_widget(
         {"type": "Text", "value": title},
         {"type": "Text", "value": metrics},
         {"type": "Text", "value": f"출발·도착: {location}"},
-        _button("코스 지도 보기", preview_url),
+        _button("코스 지도 열기", preview_url),
         _button("GPX 다운로드", gpx_url),
     ])
 

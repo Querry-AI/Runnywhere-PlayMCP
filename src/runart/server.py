@@ -52,10 +52,10 @@ from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
 from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
 from .widget import WidgetTooLargeError, build_course_widget
 
-BASE_URL = os.environ.get(
-    "RUNART_BASE_URL",
-    "https://runnywhere.playmcp-endpoint.kakaocloud.io",
-).rstrip("/")
+DEFAULT_BASE_URL = (
+    "https://runnywhere-kakaotools.playmcp-endpoint.kakaocloud.io"
+)
+BASE_URL = os.environ.get("RUNART_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
 _BASE_PARTS = urllib.parse.urlparse(BASE_URL)
 if (_BASE_PARTS.scheme not in {"http", "https"} or not _BASE_PARTS.hostname
         or _BASE_PARTS.username or _BASE_PARTS.password
@@ -1003,16 +1003,18 @@ def create_seoul_running_course(
         "요청한 경유 시설만 전달: convenience_store, restroom, water, park"
     ))] = None,
 ) -> CallToolResult:
-    """서울의 실제 보행로를 따라 일반 러닝 코스 또는 동물 모양 GPS 아트 코스를
-    생성하는 Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!)의 기본 도구입니다.
-    사용자가 “러닝 코스/달리기 코스 그려줘·짜줘·만들어줘·추천해줘”, 출발지와
-    거리·시간, 또는 “강아지/댕댕이·고양이/야옹이·토끼·고래·동물/GPS 아트
-    코스”를 요청하면 답변하기 전에 이 도구를 호출하세요. 위치만 말한 요청도
-    호출 대상입니다. 일반 코스에서 거리와 시간이 모두 생략되면 5km를 사용하고,
-    동물 종류가 생략된 요청은 best_animal을 사용합니다. 지하철역 동물 프리셋은
-    링크나 shape_token 없이 자동 조회됩니다. 이 도구를 호출하기 전에 특정 위치의
-    코스가 불가능하다고 답하지 마세요. 기존 course_id 수정·시설 검색·완주 기록·
-    릴레이에는 사용하지 마세요."""
+    """Creates a standard running course or animal-shaped GPS-art course on
+    real pedestrian roads in Seoul with Runnywhere(러니웨어: 어디서든 러닝
+    코스 짜기!). Call this tool before answering any request to create, draw,
+    plan, find, or recommend a course, including location-only requests and
+    Korean triggers such as 러닝 코스, 달리기 코스, 그려줘, 짜줘, 만들어줘,
+    추천해줘, 강아지/댕댕이, 고양이/야옹이, 토끼, 고래, 동물, and GPS 아트.
+    Use standard for ordinary runs, best_animal when no animal is named, or
+    the matching animal value. Standard defaults to 5km when distance and time
+    are omitted. Subway presets need no link or shape token. Never claim a
+    Seoul course is unsupported before calling this tool. Do not use it to
+    modify an existing course_id, search its facilities, record completion,
+    or extend a relay."""
     common = dict(
         location=location, lat=lat, lon=lon, distance_km=distance_km,
         duration_min=duration_min, include_hills=include_hills,
@@ -1027,10 +1029,9 @@ def create_seoul_running_course(
 
 
 def list_available_shapes() -> str:
-    """Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!)에서 지원하는 동물 종류
-    목록만 조회합니다. 사용자가 어떤 동물을 지원하는지 물을 때만 사용하세요.
-    특정 위치의 동물 코스를 생성·추천하는 요청에는 사용하지 말고
-    create_seoul_running_course를 사용하세요."""
+    """Lists the animal shapes supported by Runnywhere(러니웨어: 어디서든
+    러닝 코스 짜기!). Use only when the user asks which shapes are available.
+    For a course at any location, use create_seoul_running_course instead."""
     lines = ["러니웨어에서 그릴 수 있는 모양:"]
     for s in list_shapes():
         lines.append(f"- {s['emoji']} {s['name_ko']} (`{s['shape']}`) — {s['min_km']:g}km 이상 권장")
@@ -1043,9 +1044,10 @@ def find_facilities_near_course(
     course_id: Annotated[str, Field(description="Course id from a previously generated course")],
     facility_types: Annotated[list[str] | None, Field(description="Filter: convenience_store, restroom, water, park")] = None,
 ) -> str:
-    """이미 생성된 Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) course_id의
-    코스선 10m 안에 있는 편의점·화장실·음수대·공원을 조회합니다. 기존 course_id가
-    있을 때만 사용하며 새 러닝 코스 생성이나 추천에는 사용하지 마세요."""
+    """Finds convenience stores, restrooms, drinking water, or parks within
+    10m of an existing Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!)
+    course. Requires a prior course_id; never use it to create or recommend a
+    new running course."""
     try:
         params = decode_course_id(course_id)
         course = _get_course(params, timeout_s=GENERAL_RESPONSE_BUDGET_S)
@@ -1070,9 +1072,10 @@ def refine_course(
     location: Annotated[str | None, Field(description="New start place name")] = None,
     need_facilities: Annotated[list[str] | None, Field(description="New facility requirements")] = None,
 ) -> str:
-    """이미 생성된 Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) course_id가
-    있을 때만 거리·오르막·야간·동물·출발지·시설 조건을 바꿔 재생성합니다.
-    새 코스를 처음 생성하거나 추천하는 요청에는 사용하지 마세요."""
+    """Refines an existing Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!)
+    course by changing distance, hills, night mode, animal shape, start, or
+    facilities. Requires a prior course_id; never use it for the first course
+    creation or recommendation."""
     started = time.monotonic()
 
     def remaining() -> float:
@@ -1118,9 +1121,9 @@ def refine_course(
 def get_course_status(
     course_id: Annotated[str, Field(description="Course id from a previously generated course")],
 ) -> str:
-    """이미 생성된 Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) course_id의
-    요약·지도·GPX 링크를 다시 조회합니다. 새 코스 생성이나 추천에는 사용하지
-    마세요."""
+    """Retrieves the summary, map, and GPX links for an existing
+    Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) course_id. Never use it
+    to create or recommend a new course."""
     try:
         params = decode_course_id(course_id)
     except Exception:
@@ -1132,9 +1135,10 @@ def record_animal_completion(
     course_id: Annotated[str, Field(description="Completed animal course id")],
     passport_token: Annotated[str | None, Field(description="Existing passport token; omit for the first completed animal")] = None,
 ) -> str:
-    """사용자가 실제로 완주한 Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!)
-    동물 course_id를 도감 토큰에 기록합니다. 완주 기록 요청에만 사용하며 코스
-    생성·추천에는 사용하지 마세요. 계정이나 서버 세션은 저장하지 않습니다."""
+    """Records a completed animal course in a stateless passport for
+    Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!). Use only when the user
+    explicitly reports completing an existing animal course_id; never use it
+    for course creation or recommendation."""
     try:
         token, summary = record_run(course_id, passport_token)
     except RuntimeError:
@@ -1163,9 +1167,10 @@ def extend_shape_relay(
     course_id: Annotated[str, Field(description="Animal course id to add as the next relay leg")],
     relay_token: Annotated[str | None, Field(description="Existing relay token; omit to start a new relay")] = None,
 ) -> str:
-    """기존 동물 course_id를 Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!)
-    Shape Relay에 연결합니다. 기존 코스와 릴레이 요청이 있을 때만 사용하며 새
-    코스 생성·추천에는 사용하지 마세요. 토큰은 최대 8개 코스를 담습니다."""
+    """Starts or extends a Shape Relay with an existing animal course_id in
+    Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!). Use only for an explicit
+    relay request after a course exists; never use it to create or recommend a
+    new course. A relay holds up to eight courses."""
     try:
         token, data = create_relay(course_id, relay_token)
     except RuntimeError:

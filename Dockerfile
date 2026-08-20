@@ -2,6 +2,7 @@
 FROM python:3.12-slim
 
 ARG RUNART_RELEASE_SHA=unknown
+ARG RUNART_BASE_URL=https://runnywhere-kakaotools.playmcp-endpoint.kakaocloud.io
 
 WORKDIR /app
 COPY pyproject.toml ./
@@ -18,6 +19,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip==26.1.2 \
 ENV PORT=8000
 ENV HOST=0.0.0.0
 ENV RUNART_RELEASE_SHA=${RUNART_RELEASE_SHA}
+ENV RUNART_BASE_URL=${RUNART_BASE_URL}
 # Deploy-time env (PlayMCP in KC): RUNART_BASE_URL=<public endpoint>,
 # KAKAO_JAVASCRIPT_KEY, RUNART_TOKEN_SECRET (32+ chars), RUNART_LEGAL_CONTACT,
 # WEB_CONCURRENCY=1,

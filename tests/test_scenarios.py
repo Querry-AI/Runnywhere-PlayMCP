@@ -10,7 +10,9 @@ import pytest
 
 from runart import server
 
-RESULT_MARKERS = ("러닝 친화도", "/c/", ".gpx")
+# A runnable course always exposes both the detail page and GPX. Presentation
+# metrics may differ between the compact Kakao widget and Markdown fallback.
+RESULT_MARKERS = ("/c/", ".gpx")
 
 
 def _is_course(out: str) -> bool:
