@@ -350,7 +350,8 @@ def test_no_kakao_in_tool_names():
         assert t.annotations.readOnlyHint is True
         assert t.annotations.destructiveHint is False
         assert len(t.description) <= 1024
-        assert "Runnywhere" in t.description
+        assert t.description.lstrip()[0].isascii() and t.description.lstrip()[0].isalpha()
+        assert "Runnywhere(러니웨어" in t.description
 
 
 def test_mcp_tools_match_playmcp_required_annotations():
@@ -387,7 +388,7 @@ def test_primary_course_tool_schema_and_description_drive_selection():
         "standard", "best_animal", "dog", "cat", "rabbit", "whale",
     }
     assert "shape_token" not in tool.inputSchema["properties"]
-    for phrase in ("러닝 코스", "그려줘", "동물", "호출하기 전에"):
+    for phrase in ("running course", "animal-shaped", "러닝 코스", "그려줘", "before"):
         assert phrase in tool.description
 
 

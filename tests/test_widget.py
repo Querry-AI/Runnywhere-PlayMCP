@@ -67,7 +67,7 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
         for child in children
     )
     buttons = [child for child in children if child["type"] == "Button"]
-    assert [button["label"] for button in buttons] == ["코스 지도 보기", "GPX 다운로드"]
+    assert [button["label"] for button in buttons] == ["코스 지도 열기", "GPX 다운로드"]
     targets = [button["onClickAction"]["payload"]["target"] for button in buttons]
     assert targets[0] == {
         "url": f"https://runnywhere.example/c/{course_id}",
@@ -79,10 +79,22 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     }
 
     copy_text = payload["copy_text"]
+    assert "러닝 친화도" not in first
+    assert "누적 오르막 31m" in first
     assert "# " not in copy_text
     assert "|" not in copy_text
     assert "[" not in copy_text and "](" not in copy_text
     assert "```" not in copy_text
+
+
+def test_kakao_tools_origin_is_the_deploy_default_without_console_env():
+    from pathlib import Path
+
+    expected = "https://runnywhere-kakaotools.playmcp-endpoint.kakaocloud.io"
+    assert server.DEFAULT_BASE_URL == expected
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    assert f"ARG RUNART_BASE_URL={expected}" in dockerfile
+    assert "ENV RUNART_BASE_URL=${RUNART_BASE_URL}" in dockerfile
 
 
 def test_course_widget_bounds_untrusted_place_copy_and_rejects_bad_urls():
