@@ -213,12 +213,14 @@ def test_legacy_preview_calls_return_latest_widget_contract(
 
     result = getattr(server, legacy_name)(**kwargs)
     payload = json.loads(result.content[0].text)
+    buttons = {child["label"]: child for child in payload["widget"]["children"]
+               if child["type"] == "Button"}
 
     assert result.structuredContent["result_code"] == "course_ready"
     assert payload["widget"]["type"] == "Card"
-    target = payload["widget"]["children"][-2]["onClickAction"]["payload"][
-        "target"
-    ]["url"]
+    # An animal call may now carry alternative choices, so the primary course
+    # is identified by its own button rather than by position.
+    target = buttons["코스 지도 열기"]["onClickAction"]["payload"]["target"]["url"]
     assert target == f"{server.BASE_URL}/c/{course_id}"
 
 
@@ -272,3 +274,61 @@ def test_mcp_widget_build_error_preserves_markdown_and_result_code(monkeypatch):
     assert result.content[0].text == markdown
     assert result.structuredContent["result_code"] == "course_ready"
     assert result.isError is False
+
+
+def test_course_widget_offers_the_alternative_choices_as_extra_buttons():
+    """Case 2/3 answers are only useful if the other two choices are clickable."""
+    from runart.courseplan import CourseChoice
+
+    primary = _course(location_name="낙성대(강감찬)역")
+    primary_id = encode_course_id(primary.params)
+    other = _course(location_name="봉천역", shape="cat")
+    other.params = other.params.model_copy(update={"distance_km": 6.0})
+    other.length_m = 6_000.0
+    other_id = encode_course_id(other.params)
+    plain = _course(location_name="서울대입구역", shape=None)
+    plain.params = plain.params.model_copy(update={"distance_km": 5.0})
+    plain.length_m = 5_000.0
+    plain_id = encode_course_id(plain.params)
+
+    serialized = build_course_widget(
+        primary, primary_id, "https://runnywhere.example",
+        lead_text="서울대입구역에는 검증된 강아지 코스가 없어요.",
+        alternatives=(
+            CourseChoice(other, other_id, "other_animal", 900.0),
+            CourseChoice(plain, plain_id, "standard", 0.0),
+        ),
+    )
+    payload = json.loads(serialized)
+    children = payload["widget"]["children"]
+    buttons = [child for child in children if child["type"] == "Button"]
+    labels = [button["label"] for button in buttons]
+
+    assert payload["widget"]["type"] == "Card"
+    assert not _contains_key(payload, "status")
+    assert labels[:2] == ["코스 지도 열기", "GPX 다운로드"]
+    assert len(labels) == 4
+    assert "야옹런" in labels[2] and "6.0km" in labels[2] and "봉천역" in labels[2]
+    assert "0.9km" in labels[2]
+    assert "5.0km" in labels[3]
+    # A choice that starts where the runner asked needs no detour distance.
+    assert "km 떨어진" not in labels[3]
+    targets = [button["onClickAction"]["payload"]["target"]["url"]
+               for button in buttons]
+    assert targets[2] == f"https://runnywhere.example/c/{other_id}"
+    assert targets[3] == f"https://runnywhere.example/c/{plain_id}"
+    assert len(serialized.encode("utf-8")) < WIDGET_MAX_BYTES
+    # KakaoTalk share copy must carry the same choices, without link markup.
+    copy_text = payload["copy_text"]
+    assert "야옹런" in copy_text
+    assert "[" not in copy_text and "](" not in copy_text
+
+
+def test_course_widget_without_alternatives_keeps_the_two_button_card():
+    course = _course()
+    course_id = encode_course_id(course.params)
+    payload = json.loads(
+        build_course_widget(course, course_id, "https://runnywhere.example"))
+    buttons = [child for child in payload["widget"]["children"]
+               if child["type"] == "Button"]
+    assert [button["label"] for button in buttons] == ["코스 지도 열기", "GPX 다운로드"]

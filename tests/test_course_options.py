@@ -1,0 +1,133 @@
+"""The three-case answer matrix for a named animal request, at the MCP boundary.
+
+A chatbot answer is only as good as what the runner can act on, so every one
+of the three cases must come back as a widget with the same three choices:
+the animal they asked for, another animal, and a plain course — reordered by
+which one is actually available where they asked.
+"""
+
+import json
+
+import pytest
+
+from runart import server
+
+
+@pytest.fixture(scope="module", autouse=True)
+def warm_like_production():
+    """The budget these cases spend is the deployed one, not a cold start."""
+    server._warm()
+
+
+def _card(result) -> dict:
+    payload = json.loads(result.content[0].text)
+    assert payload["widget"]["type"] == "Card", result.content[0].text[:400]
+    return payload
+
+
+def _buttons(payload) -> list[dict]:
+    return [child for child in payload["widget"]["children"]
+            if child["type"] == "Button"]
+
+
+def _labels(payload) -> list[str]:
+    return [button["label"] for button in _buttons(payload)]
+
+
+def _urls(payload) -> list[str]:
+    return [button["onClickAction"]["payload"]["target"]["url"]
+            for button in _buttons(payload)]
+
+
+def _lead(payload) -> str:
+    first = payload["widget"]["children"][0]
+    assert first["type"] == "Text"
+    return first["value"]
+
+
+ANIMAL_RUNS = ("댕댕런", "야옹런", "깡총런", "고래런")
+
+
+def test_case1_exact_course_here_also_offers_another_animal_and_a_plain_course():
+    result = server.create_seoul_running_course(course_type="dog", location="강남역")
+    payload = _card(result)
+    labels = _labels(payload)
+
+    assert result.structuredContent["result_code"] == "course_ready"
+    assert result.isError is False
+    assert labels[:2] == ["코스 지도 열기", "GPX 다운로드"]
+    assert len(labels) == 4
+    assert "댕댕런" in json.dumps(payload, ensure_ascii=False)
+    # (b) a different animal, (c) a plain course — both at the requested start.
+    assert any(run in labels[2] for run in ANIMAL_RUNS if run != "댕댕런")
+    assert not any(run in labels[3] for run in ANIMAL_RUNS)
+    assert len(set(_urls(payload)[2:])) == 2
+
+
+def test_case2_nearby_course_names_the_real_start_and_still_offers_three():
+    result = server.create_seoul_running_course(
+        course_type="whale", location="서울대입구역")
+    payload = _card(result)
+    lead = _lead(payload)
+
+    assert result.structuredContent["result_code"] == "nearby_course_ready"
+    assert result.isError is False
+    assert len(_labels(payload)) == 4
+    # The model must not be able to claim the requested start as the departure.
+    assert "서울대입구역" in lead
+    assert "낙성대" in lead
+    assert "고래" in lead
+    assert "낙성대" in json.dumps(payload, ensure_ascii=False)
+
+
+def test_case3_no_animal_within_two_km_leads_with_the_plain_course_here():
+    result = server.create_seoul_running_course(
+        course_type="dog", location="도봉산역")
+    payload = _card(result)
+    lead = _lead(payload)
+    labels = _labels(payload)
+
+    assert "도봉산역" in lead
+    assert "1~2km" in lead
+    assert "강아지" in lead
+    # (a) the plain course at the requested start leads the card.
+    assert "도봉산" in payload["widget"]["children"][1]["value"]
+    assert not any(run in payload["widget"]["children"][1]["value"]
+                   for run in ANIMAL_RUNS)
+    # (b)/(c) the animal courses stay one click away.
+    assert len(labels) >= 3
+    assert any(run in label for run in ANIMAL_RUNS for label in labels[2:])
+
+
+def test_every_choice_url_resolves_to_a_real_course_page():
+    result = server.create_seoul_running_course(
+        course_type="whale", location="서울대입구역")
+    payload = _card(result)
+
+    for url in _urls(payload):
+        course_id = url.rsplit("/c/", 1)[1].removesuffix(".gpx")
+        assert server._cached_course(course_id) is not None, url
+
+
+def test_plain_course_option_is_dropped_rather_than_blowing_the_budget(monkeypatch):
+    """A slow plain course must cost the runner the option, not the answer."""
+    def too_slow(*args, **kwargs):
+        raise server._GenerationTimeout
+
+    monkeypatch.setattr(server, "_get_course", too_slow)
+    result = server.create_seoul_running_course(
+        course_type="whale", location="서울대입구역")
+    payload = _card(result)
+
+    assert result.structuredContent["result_code"] == "nearby_course_ready"
+    assert 3 <= len(_labels(payload)) <= 4
+    assert "고래런" in json.dumps(payload, ensure_ascii=False)
+
+
+def test_widget_failure_still_returns_the_markdown_answer(monkeypatch):
+    monkeypatch.setattr(server, "KAKAO_WIDGETS_ENABLED", False)
+    result = server.create_seoul_running_course(
+        course_type="whale", location="서울대입구역")
+
+    assert result.structuredContent["result_code"] == "nearby_course_ready"
+    assert result.content[0].text.startswith("🔎")

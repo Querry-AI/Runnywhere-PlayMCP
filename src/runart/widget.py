@@ -10,10 +10,14 @@ import unicodedata
 import urllib.parse
 
 from .course import Course
+from .courseplan import CourseChoice
 from .naming import course_badges, course_title
 
 WIDGET_NAME = "runnywhere_course"
 WIDGET_MAX_BYTES = 12_000
+ALTERNATIVES_HEADING = "다른 선택지"
+# A Kakao button label is one line on a phone; past this it truncates anyway.
+LABEL_MAX_CHARS = 60
 _COURSE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,4096}$")
 _COPY_MARKUP_RE = re.compile(r"[\\`*_{}\[\]<>#|]")
 
@@ -127,16 +131,35 @@ def _serialize(payload: dict) -> str:
     return serialized
 
 
+def _choice_label(choice: CourseChoice) -> str:
+    """Name an alternative well enough to pick it without opening it."""
+    head = f"{choice.emoji} {choice.title}"
+    if not choice.is_detour:
+        return _plain_text(head, LABEL_MAX_CHARS)
+    detour = f"{choice.distance_m / 1000.0:.1f}km 떨어진 {choice.start_name}"
+    return _plain_text(f"{head} · {detour}", LABEL_MAX_CHARS)
+
+
 def build_course_widget(
     course: Course,
     course_id: str,
     base_url: str,
     *,
     lead_text: str = "",
+    alternatives: tuple[CourseChoice, ...] = (),
 ) -> str:
-    """Return a compact Kakao Card envelope for one confirmed course."""
+    """Return a compact Kakao Card envelope for one confirmed course.
+
+    ``alternatives`` are the other courses the runner may pick instead; each
+    becomes one extra button below the primary course.  Kakao renders the
+    widget verbatim, so a choice that is not a button here is a choice the
+    runner cannot reach.
+    """
     if not _COURSE_ID_RE.fullmatch(course_id):
         raise WidgetBuildError("invalid course id")
+    for choice in alternatives:
+        if not _COURSE_ID_RE.fullmatch(choice.course_id):
+            raise WidgetBuildError("invalid course id")
     origin = _origin(base_url)
     preview_url = f"{origin}/c/{course_id}"
     gpx_url = f"{preview_url}.gpx"
@@ -161,15 +184,28 @@ def build_course_widget(
         _button("코스 지도 열기", preview_url),
         _button("GPX 다운로드", gpx_url),
     ])
+    if alternatives:
+        children.append({"type": "Text", "value": ALTERNATIVES_HEADING})
+        children.extend(
+            _button(_choice_label(choice), f"{origin}/c/{choice.course_id}")
+            for choice in alternatives
+        )
 
     copy_title = _copy_value(title, 80)
     copy_location = _copy_value(location, 120)
-    copy_text = "\n".join([
+    copy_lines = [
         f"**{copy_title}**",
         f"- 거리: {course.length_km:.1f}km",
         f"- 출발·도착: {copy_location}",
         f"- 지도: {preview_url}",
-    ])
+    ]
+    if alternatives:
+        copy_lines.append(f"**{ALTERNATIVES_HEADING}**")
+        copy_lines.extend(
+            f"- {_copy_value(_choice_label(choice), LABEL_MAX_CHARS)}"
+            for choice in alternatives
+        )
+    copy_text = "\n".join(copy_lines)
     return _serialize({
         "widget": {"type": "Card", "children": children},
         "copy_text": copy_text,

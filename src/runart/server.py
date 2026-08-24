@@ -36,6 +36,8 @@ from .animal_presets import (MISSING as PRESET_MISSING, PresetMatch,
                              preset_status)
 from .course import (Course, CourseError, course_from_path, generate_course,
                      snap_drawn_segment)
+from .courseplan import (CASE_EXACT, CASE_FAR, CASE_NEARBY, NEARBY_RADIUS_M,
+                         SAME_START_M, CoursePlan, build_course_plan)
 from .facilities import LABELS_KO, facilities_along
 from .geocode import resolve_location
 from .geo import haversine_m
@@ -139,6 +141,22 @@ ROUTE_EDIT_MAX_CONCURRENT = max(1, int(os.environ.get("RUNART_MAX_CONCURRENT_ROU
 # station's verified preset and cache that decision under the requested point.
 # The outer 2.85s cap also includes queueing and response serialization.
 ADDRESS_TRY_BUDGET_S = 0.8
+# The plain-course choice still has to be generated. Below this much remaining
+# budget it is dropped: an option is never worth risking the whole answer.
+PLAIN_OPTION_MIN_BUDGET_S = 0.6
+
+
+def _budget_left(started: float) -> float:
+    """Outer-budget remainder for work added after the course itself."""
+    return max(0.0, MCP_OUTER_RESPONSE_BUDGET_S - (time.monotonic() - started))
+# Seoul is ~30km across, so this bounds the "nearest verified preset anywhere"
+# scan without excluding any real start point.
+PRESET_SEARCH_RADIUS_M = 30_000.0
+PLAN_RESULT_CODES = {
+    CASE_EXACT: "course_ready",
+    CASE_NEARBY: "nearby_course_ready",
+    CASE_FAR: "exact_shape_unavailable",
+}
 
 
 class _GenerationTimeout(RuntimeError):
@@ -395,8 +413,139 @@ def _try_course_widget(text: str, course_type: str) -> str | None:
     return widget
 
 
-def _course_tool_result(text: str, *, course_type: str) -> CallToolResult:
+def _any_animal_matches(probe: CourseParams,
+                        max_distance_m: float) -> list[PresetMatch]:
+    """Verified presets of any animal around a start point, nearest first."""
+    matches: list[PresetMatch] = []
+    for shape in SURVEY_SHAPES:
+        matches.extend(find_nearby_animal_presets(
+            probe.model_copy(update={"shape": shape}), max_distance_m))
+    matches.sort(key=lambda match: match.distance_m)
+    return matches
+
+
+def _plain_course_here(probe: CourseParams, distance_km: float | None,
+                       timeout_s: float) -> Course | None:
+    """The plain-course choice. Every failure drops the choice, not the answer."""
+    if timeout_s < PLAIN_OPTION_MIN_BUDGET_S:
+        return None
+    try:
+        params = probe.model_copy(update={
+            "shape": None, "distance_km": distance_km or 5.0})
+    except ValidationError:
+        return None
+    try:
+        return _get_course(params, timeout_s=timeout_s)
+    except (CourseError, _GenerationTimeout):
+        return None
+
+
+def _exact_animal_course(text: str, shape: str,
+                         lat: float, lon: float) -> Course | None:
+    """The requested animal at the requested start, if the generator drew it.
+
+    Read from the text the generator already produced: the plan must never
+    pay for a second generation of a course we are holding.
+    """
+    if text.startswith(("🔎", "⚠️", "⏱️")):
+        return None
+    course_id = _extract_single_course_id(text)
+    if course_id is None:
+        return None
+    course = _cached_course(course_id)
+    if course is None or course.params.shape != shape:
+        return None
+    moved = haversine_m(lat, lon, course.params.lat, course.params.lon)
+    return course if moved < SAME_START_M else None
+
+
+def _animal_course_plan(request: dict, shape: str, text: str,
+                        timeout_s: float) -> CoursePlan | None:
+    """Order the three choices for one animal request, inside the budget."""
+    try:
+        lat, lon, name = resolve_location(
+            request.get("location"), request.get("lat"), request.get("lon"),
+            timeout_s=min(timeout_s, ADDRESS_TRY_BUDGET_S))
+        probe = CourseParams(
+            lat=lat, lon=lon, location_name=name,
+            distance_km=SHAPES[shape].min_km, shape=shape,
+            include_hills=bool(request.get("include_hills")),
+            night_mode=bool(request.get("night_mode")),
+            need_facilities=request.get("need_facilities") or [],
+        )
+    except (CourseError, ValidationError):
+        return None
+    # Nearest first throughout: a runner standing at the requested start
+    # judges an alternative by how far they have to walk to it, and the
+    # Markdown fallback names the same course for the same reason.
+    near = find_nearby_animal_presets(probe, NEARBY_RADIUS_M)
+    radius = NEARBY_RADIUS_M if near else PRESET_SEARCH_RADIUS_M
+    plan = build_course_plan(
+        requested_name=name,
+        shape=shape,
+        exact=_exact_animal_course(text, shape, lat, lon),
+        shape_matches=near or find_nearby_animal_presets(
+            probe, PRESET_SEARCH_RADIUS_M),
+        animal_matches=_any_animal_matches(probe, radius),
+        standard=_plain_course_here(probe, request.get("distance_km"), timeout_s),
+    )
+    if plan is not None:
+        for choice in (plan.primary, *plan.alternatives):
+            _cache_put(choice.course_id, choice.course)
+    return plan
+
+
+def _plan_widget(plan: CoursePlan, lead_text: str) -> str | None:
+    """Serialize a plan, or keep the Markdown answer by returning None."""
+    try:
+        widget = build_course_widget(
+            plan.primary.course, plan.primary.course_id, BASE_URL,
+            lead_text=lead_text, alternatives=plan.alternatives)
+    except WidgetTooLargeError:
+        log.warning("mcp_widget tool=create_seoul_running_course "
+                    f"state=fallback reason=too_large case={plan.case}")
+        return None
+    except Exception:  # noqa: BLE001 - widget failures must preserve Markdown
+        log.warning("mcp_widget tool=create_seoul_running_course "
+                    f"state=fallback reason=build_error case={plan.case}")
+        return None
+    log.info("mcp_widget tool=create_seoul_running_course "
+             f"state=emitted reason=plan case={plan.case} "
+             f"choices={1 + len(plan.alternatives)}")
+    return widget
+
+
+def _planned_course_result(text: str, *, course_type: str, request: dict,
+                           timeout_s: float) -> CallToolResult | None:
+    """Answer an animal request with the full choice matrix, or None."""
+    if not KAKAO_WIDGETS_ENABLED or course_type not in SHAPES:
+        return None
+    # A rejection with no course behind it stays conversational copy.
+    if text.startswith(("⏱️", "⚠️")):
+        return None
+    plan = _animal_course_plan(request, course_type, text, timeout_s)
+    if plan is None:
+        return None
+    # The exact case already had case-specific copy from the generator; the
+    # other two cases only exist here, so the plan writes their lead.
+    lead = plan.lead
+    if plan.case == CASE_EXACT:
+        lead = _widget_lead_text(text) or plan.lead
+    widget = _plan_widget(plan, lead)
+    if widget is None:
+        return None
+    return _mcp_result(widget, code=PLAN_RESULT_CODES[plan.case])
+
+
+def _course_tool_result(text: str, *, course_type: str,
+                        request: dict | None = None,
+                        timeout_s: float = 0.0) -> CallToolResult:
     """Classify controlled tool copy into a stable MCP result contract."""
+    if request is not None:
+        planned = _planned_course_result(
+            text, course_type=course_type, request=request, timeout_s=timeout_s)
+        if planned is not None:
+            return planned
     if text.startswith("⏱️"):
         return _mcp_result(
             text, code="generation_timeout", is_error=True, retryable=True)
@@ -1020,12 +1169,14 @@ def create_seoul_running_course(
         duration_min=duration_min, include_hills=include_hills,
         night_mode=night_mode, need_facilities=need_facilities,
     )
+    started = time.monotonic()
     if course_type == "standard":
         return _course_tool_result(
             generate_running_course(**common), course_type=course_type)
     shape = None if course_type == "best_animal" else course_type
-    return _course_tool_result(
-        generate_animal_course(shape=shape, **common), course_type=course_type)
+    text = generate_animal_course(shape=shape, **common)
+    return _course_tool_result(text, course_type=course_type, request=common,
+                               timeout_s=_budget_left(started))
 
 
 @functools.wraps(generate_running_course)
@@ -1043,8 +1194,17 @@ def _legacy_generate_animal_course(*args, **kwargs) -> CallToolResult:
     if shape is None and args:
         shape = args[0]
     course_type = shape if shape in SHAPES else "best_animal"
+    started = time.monotonic()
+    text = generate_animal_course(*args, **kwargs)
+    # Positional calls only ever carry the shape, so the start is in kwargs.
+    request = {key: kwargs.get(key) for key in (
+        "location", "lat", "lon", "distance_km", "include_hills",
+        "night_mode", "need_facilities")}
+    if request["location"] is None and request["lat"] is None:
+        return _course_tool_result(text, course_type=course_type)
     return _course_tool_result(
-        generate_animal_course(*args, **kwargs), course_type=course_type
+        text, course_type=course_type, request=request,
+        timeout_s=_budget_left(started),
     )
 
 
