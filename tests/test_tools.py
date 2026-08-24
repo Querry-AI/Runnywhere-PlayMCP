@@ -16,6 +16,28 @@ from runart.shapes import SHAPES, SHAPE_STYLES, find_min_clean_course
 CITY_HALL = dict(location="시청")
 
 
+def test_cold_detail_link_restores_the_verified_preset(monkeypatch):
+    params = CourseParams(
+        lat=37.4986144, lon=127.0280696, location_name="강남역",
+        distance_km=9, shape="dog",
+    )
+    preset = Course(
+        params=params, path=[1, 2, 1],
+        points=[(params.lat, params.lon), (37.499, 127.029),
+                (params.lat, params.lon)],
+        length_m=9000, ascent_m=20, rfs={"score": 80},
+    )
+    monkeypatch.setattr(server, "_course_cache", {})
+    monkeypatch.setattr(server, "get_animal_preset", lambda _: preset)
+
+    def must_not_regenerate(*args, **kwargs):
+        raise AssertionError("a cold detail link must restore its preset")
+
+    monkeypatch.setattr(server, "_offload", must_not_regenerate)
+    assert server._get_course(params) is preset
+    assert server._course_cache[encode_course_id(params)] is preset
+
+
 def test_generate_running_course_defaults_to_5km_with_note():
     out = server.generate_running_course(**CITY_HALL)
     assert "기본 5km" in out
@@ -30,7 +52,8 @@ def test_unified_course_tool_dispatches_standard_and_animal_requests():
         course_type="dog", location="강남역")
     standard_text = standard.content[0].text
     animal_text = animal.content[0].text
-    assert "기본 5km" in standard_text and "/c/" in standard_text
+    assert "기본 5km" in standard.structuredContent["assistant_text"]
+    assert "/c/" in standard_text
     assert "댕댕런" in animal_text and "/c/" in animal_text
     assert standard.structuredContent["result_code"] == "course_ready"
     assert animal.isError is False
@@ -402,8 +425,25 @@ def test_primary_course_tool_schema_and_description_drive_selection():
         "standard", "best_animal", "dog", "cat", "rabbit", "whale",
     }
     assert "shape_token" not in tool.inputSchema["properties"]
-    for phrase in ("running course", "animal-shaped", "러닝 코스", "그려줘", "before"):
+    for phrase in ("running course", "animal-shaped", "러닝 코스", "그려줘", "Never invent"):
         assert phrase in tool.description
+    location_description = tool.inputSchema["properties"]["location"]["description"]
+    assert "출발지가 없으면" in location_description
+    assert "호출하지 마세요" in location_description
+
+
+def test_followup_tool_descriptions_make_facility_routing_unambiguous():
+    import asyncio
+    tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
+
+    create_description = tools["create_seoul_running_course"].description
+    facility_description = tools["find_facilities_near_course"].description
+    status_description = tools["get_course_status"].description
+
+    assert "이 코스 근처 화장실" in create_description
+    assert "이 코스 근처 화장실 찾아줘" in facility_description
+    assert "most recent prior course_id" in facility_description
+    assert "find_facilities_near_course" in status_description
 
 
 def test_http_middleware_adds_security_headers():

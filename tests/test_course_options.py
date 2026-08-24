@@ -26,8 +26,37 @@ def _card(result) -> dict:
 
 
 def _buttons(payload) -> list[dict]:
-    return [child for child in payload["widget"]["children"]
-            if child["type"] == "Button"]
+    found = []
+
+    def visit(value):
+        if isinstance(value, dict):
+            if value.get("type") == "Button":
+                found.append(value)
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(payload["widget"])
+    return found
+
+
+def _values(payload, kind: str) -> list[str]:
+    found = []
+
+    def visit(value):
+        if isinstance(value, dict):
+            if value.get("type") == kind and value.get("value"):
+                found.append(value["value"])
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(payload["widget"])
+    return found
 
 
 def _labels(payload) -> list[str]:
@@ -39,10 +68,10 @@ def _urls(payload) -> list[str]:
             for button in _buttons(payload)]
 
 
-def _lead(payload) -> str:
-    first = payload["widget"]["children"][0]
-    assert first["type"] == "Text"
-    return first["value"]
+def _lead(result) -> str:
+    lead = result.structuredContent["assistant_text"]
+    assert result.content[1].text == lead
+    return lead
 
 
 ANIMAL_RUNS = ("댕댕런", "야옹런", "깡총런", "고래런")
@@ -55,48 +84,54 @@ def test_case1_exact_course_here_also_offers_another_animal_and_a_plain_course()
 
     assert result.structuredContent["result_code"] == "course_ready"
     assert result.isError is False
-    assert labels[:2] == ["코스 지도 열기", "GPX 다운로드"]
-    assert len(labels) == 4
+    assert labels[0] == "코스 보기"
+    assert len(labels) == 3
     assert "댕댕런" in json.dumps(payload, ensure_ascii=False)
     # (b) a different animal, (c) a plain course — both at the requested start.
-    assert any(run in labels[2] for run in ANIMAL_RUNS if run != "댕댕런")
-    assert not any(run in labels[3] for run in ANIMAL_RUNS)
-    assert len(set(_urls(payload)[2:])) == 2
+    assert any(run in labels[1] for run in ANIMAL_RUNS if run != "댕댕런")
+    assert not any(run in labels[2] for run in ANIMAL_RUNS)
+    assert len(set(_urls(payload)[1:])) == 2
 
 
 def test_case2_nearby_course_names_the_real_start_and_still_offers_three():
     result = server.create_seoul_running_course(
         course_type="whale", location="서울대입구역")
     payload = _card(result)
-    lead = _lead(payload)
+    lead = _lead(result)
 
     assert result.structuredContent["result_code"] == "nearby_course_ready"
     assert result.isError is False
-    assert len(_labels(payload)) == 4
+    assert len(_labels(payload)) == 3
     # The model must not be able to claim the requested start as the departure.
     assert "서울대입구역" in lead
-    assert "낙성대" in lead
+    start_text = next(
+        value for value in _values(payload, "Caption")
+        if value.endswith(" 출발·도착")
+    )
+    actual_start = start_text.removesuffix(" 출발·도착")
+    assert actual_start != "서울대입구역"
+    assert actual_start in lead
     assert "고래" in lead
-    assert "낙성대" in json.dumps(payload, ensure_ascii=False)
+    assert actual_start in json.dumps(payload, ensure_ascii=False)
 
 
 def test_case3_no_animal_within_two_km_leads_with_the_plain_course_here():
     result = server.create_seoul_running_course(
         course_type="dog", location="도봉산역")
     payload = _card(result)
-    lead = _lead(payload)
+    lead = _lead(result)
     labels = _labels(payload)
 
     assert "도봉산역" in lead
     assert "1~2km" in lead
     assert "강아지" in lead
     # (a) the plain course at the requested start leads the card.
-    assert "도봉산" in payload["widget"]["children"][1]["value"]
-    assert not any(run in payload["widget"]["children"][1]["value"]
-                   for run in ANIMAL_RUNS)
+    title = _values(payload, "Title")[0]
+    assert "도봉산" in title
+    assert not any(run in title for run in ANIMAL_RUNS)
     # (b)/(c) the animal courses stay one click away.
     assert len(labels) >= 3
-    assert any(run in label for run in ANIMAL_RUNS for label in labels[2:])
+    assert any(run in label for run in ANIMAL_RUNS for label in labels[1:])
 
 
 def test_every_choice_url_resolves_to_a_real_course_page():
@@ -120,7 +155,7 @@ def test_plain_course_option_is_dropped_rather_than_blowing_the_budget(monkeypat
     payload = _card(result)
 
     assert result.structuredContent["result_code"] == "nearby_course_ready"
-    assert 3 <= len(_labels(payload)) <= 4
+    assert 2 <= len(_labels(payload)) <= 3
     assert "고래런" in json.dumps(payload, ensure_ascii=False)
 
 

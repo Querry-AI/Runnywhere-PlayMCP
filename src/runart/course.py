@@ -10,7 +10,7 @@ PRD §7.1).
 
 import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import networkx as nx
 
@@ -26,6 +26,17 @@ BEARINGS = (0, 45, 90, 135, 180, 225, 270, 315)
 MAX_RESCALES = 5
 PACE_MIN_PER_KM = 6.5
 FOLLOW_EDGE_PENALTY_M = 12.0
+MAX_COURSE_START_OFFSET_M = 150.0
+MAX_DEFAULT_ASCENT_PER_KM = 30.0
+# The bundled OSM graph came from a walk-network query, but its ETL retained
+# only the final highway class, not foot/access/sidewalk tags. These classes
+# therefore cannot be proven runnable and must never appear in a preset or a
+# generated course. In particular, *_link edges are often vehicle ramps.
+NON_RUNNABLE_HIGHWAYS = frozenset({
+    "motorway", "motorway_link", "trunk", "trunk_link",
+    "primary_link", "secondary_link", "tertiary_link",
+    "busway", "track", "bridleway", "steps", "corridor", "road",
+})
 HIGHWAY_COST_FACTOR = {
     "primary": 0.84,
     "primary_link": 0.90,
@@ -82,6 +93,85 @@ class Course:
         if per_km < 15.0:
             return "완만한 경사"
         return "오르막 포함"
+
+
+def rebase_closed_course_start(course: Course) -> Course:
+    """Rotate a closed loop so its first/last point is nearest the requested start.
+
+    GPS-art generation places a silhouette around the requested location. The
+    route is cyclic, so its serialized first node is otherwise just whichever
+    template anchor happened to be authored first and can be hundreds of
+    metres away. Rotating a closed cycle changes neither its streets nor its
+    metrics, but makes the map pin and GPX start honest and useful.
+    """
+    if (
+        len(course.path) < 3
+        or course.path[0] != course.path[-1]
+        or len(course.points) != len(course.path)
+        or course.points[0] != course.points[-1]
+    ):
+        return course
+    core_points = course.points[:-1]
+    start_index = min(
+        range(len(core_points)),
+        key=lambda index: haversine_m(
+            course.params.lat, course.params.lon, *core_points[index]
+        ),
+    )
+    if start_index == 0:
+        return course
+    core_path = course.path[:-1]
+    path = core_path[start_index:] + core_path[:start_index]
+    points = core_points[start_index:] + core_points[:start_index]
+    return replace(
+        course,
+        path=path + [path[0]],
+        points=points + [points[0]],
+    )
+
+
+def highway_class(attrs: dict) -> str:
+    value = attrs.get("highway")
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else ""
+    return str(value or "")
+
+
+def edge_is_runnable(attrs: dict) -> bool:
+    """Conservative runtime gate for edges whose pedestrian status is clear."""
+    highway = highway_class(attrs)
+    if highway in NON_RUNNABLE_HIGHWAYS:
+        return False
+    # A steep generic OSM path is the mountain-trail failure mode seen in the
+    # station presets. Paved urban roads remain available for explicit hill
+    # training, but an unqualified path above 10% is not a default run route.
+    if highway == "path" and abs(float(attrs.get("slope_pct", 0.0) or 0.0)) > 10.0:
+        return False
+    return True
+
+
+def course_route_issues(course: Course, graph) -> list[str]:
+    """Return deterministic reasons a course is not safe as a station preset."""
+    issues: list[str] = []
+    if not course.path or course.path[0] != course.path[-1]:
+        issues.append("open_route")
+    if course.points:
+        nearest = min(
+            haversine_m(course.params.lat, course.params.lon, *point)
+            for point in course.points
+        )
+        if nearest > MAX_COURSE_START_OFFSET_M:
+            issues.append("start_too_far")
+    blocked = {
+        highway_class(graph.edges[u, v])
+        for u, v in zip(course.path, course.path[1:])
+        if not edge_is_runnable(graph.edges[u, v])
+    }
+    issues.extend(f"blocked_highway:{value or 'unknown'}" for value in sorted(blocked))
+    if course.length_km and not course.params.include_hills:
+        if course.ascent_m / course.length_km > MAX_DEFAULT_ASCENT_PER_KM:
+            issues.append("excessive_ascent")
+    return issues
 
 
 def smooth_series(vals: list[float], window: int = 5) -> list[float]:
@@ -202,11 +292,11 @@ def course_from_path(params: CourseParams, path: list[int]) -> Course:
     """Build metrics for an exact, already road-snapped path."""
     g = graphmod.get_graph()
     if len(path) < 3 or len(path) > 1200 or path[0] != path[-1]:
-        raise CourseError("코스 선이 출발점으로 이어지지 않았어요. 지운 구간을 펜으로 연결해 주세요.")
+        raise CourseError("코스 선이 출발점으로 이어지지 않았어요. 끊어진 구간을 다시 연결해 주세요.")
     if any(node not in g for node in path):
         raise CourseError("현재 보행 지도에서 찾을 수 없는 코스 구간이 있어요.")
     if any(not g.has_edge(a, b) for a, b in zip(path, path[1:])):
-        raise CourseError("보행로로 연결되지 않은 구간이 있어요. 해당 구간을 다시 그려 주세요.")
+        raise CourseError("보행로로 연결되지 않은 구간이 있어요. 해당 구간을 다시 선택해 주세요.")
     length, ascent = _path_metrics(g, path)
     if not 1000.0 <= length <= 42195.0:
         raise CourseError("수정한 코스는 1km 이상 42.195km 이하로 만들어 주세요.")
@@ -225,6 +315,51 @@ def course_from_path(params: CourseParams, path: list[int]) -> Course:
         ascent_m=ascent,
         rfs=summary,
     )
+
+
+def reroute_segment(params: CourseParams, path: list[int], from_index: int,
+                    to_index: int) -> Course:
+    """Detach one route span and reconnect its endpoints on another walkable path.
+
+    The selected edges are hidden from Dijkstra, so this operation behaves like
+    lifting one piece of the route off the map and snapping a different street
+    segment between the same two endpoints.  It is intentionally endpoint-only:
+    the browser never has to turn an imprecise finger stroke into coordinates.
+    """
+    course_from_path(params, path)
+    if not (0 <= from_index < to_index < len(path) - 1):
+        raise CourseError("바꿀 구간을 코스 선 위에서 다시 선택해 주세요.")
+    if to_index - from_index > max(80, (len(path) - 1) // 2):
+        raise CourseError("한 번에 바꿀 구간이 너무 길어요. 더 짧은 구간을 선택해 주세요.")
+
+    g = graphmod.get_graph()
+    blocked_edges = {
+        frozenset((a, b))
+        for a, b in zip(path[from_index:to_index], path[from_index + 1:to_index + 1])
+    }
+    base_weight = easy_route_weight(
+        routing_weight(params.night_mode, params.include_hills)
+    )
+
+    def alternative_weight(u, v, attrs):
+        if frozenset((u, v)) in blocked_edges:
+            return None
+        return base_weight(u, v, attrs)
+
+    try:
+        replacement = _route(
+            g, alternative_weight, path[from_index], path[to_index]
+        )
+    except (nx.NetworkXNoPath, nx.NodeNotFound) as exc:
+        raise CourseError(
+            "이 구간을 대신할 보행로가 없어요. 더 짧거나 다른 구간을 선택해 주세요."
+        ) from exc
+    if replacement == path[from_index:to_index + 1]:
+        raise CourseError(
+            "이 구간을 대신할 다른 보행로가 없어요. 다른 구간을 선택해 주세요."
+        )
+    edited_path = path[:from_index] + replacement + path[to_index + 1:]
+    return course_from_path(params, edited_path)
 
 
 def snap_drawn_segment(params: CourseParams, path: list[int], from_index: int,
@@ -277,10 +412,10 @@ def easy_route_weight(base_weight: str):
     fragments while keeping the existing RFS/length weighting dominant.
     """
     def _weight(_u, _v, attrs):
-        highway = attrs.get("highway")
-        if isinstance(highway, (list, tuple)):
-            highway = highway[0] if highway else None
-        factor = HIGHWAY_COST_FACTOR.get(str(highway), 1.06)
+        if not edge_is_runnable(attrs):
+            return None
+        highway = highway_class(attrs)
+        factor = HIGHWAY_COST_FACTOR.get(highway, 1.06)
         sidewalk = float(attrs.get("sidewalk_score", 0.5))
         if sidewalk >= 0.85:
             factor *= 0.90

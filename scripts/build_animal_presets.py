@@ -18,18 +18,35 @@ from pathlib import Path
 from runart.animal_presets import (FORMAT_VERSION, PRESET_PATH,
                                    graph_fingerprint, preset_key,
                                    serialize_course)
+from runart.course import (Course, course_route_issues,
+                           rebase_closed_course_start)
+from runart.graph import get_graph
 from runart.models import CourseParams
 from runart.shapes import SHAPES, find_best_reference_course
 from runart.stations import SEOUL_METRO_STATIONS
 
 
+def _station_name(name: str) -> str:
+    return name if name.endswith("역") else f"{name}역"
+
+
 def _generate(job):
     line, name, lat, lon, shape, per_distance_seconds = job
     try:
-        params = CourseParams(lat=lat, lon=lon, location_name=f"{name}역",
+        params = CourseParams(lat=lat, lon=lon, location_name=_station_name(name),
                               distance_km=SHAPES[shape].min_km, shape=shape)
         course = find_best_reference_course(
             params, per_distance_budget_s=per_distance_seconds)
+        if course is not None:
+            course = rebase_closed_course_start(course)
+            issues = course_route_issues(course, get_graph())
+            if issues:
+                print(
+                    f"rejected unsafe: {line} {name} {shape} "
+                    f"({', '.join(issues)})",
+                    flush=True,
+                )
+                course = None
     except Exception as exc:  # one bad station must not abort the full build
         print(f"unavailable after {type(exc).__name__}: {line} {name} {shape}", flush=True)
         course = None
@@ -58,6 +75,18 @@ def _write(path: Path, fingerprint: str, entries: dict) -> None:
     os.replace(tmp, path)
 
 
+def _restore(raw: dict) -> Course:
+    return rebase_closed_course_start(Course(
+        params=CourseParams(**raw["params"]),
+        path=raw["path"],
+        points=[tuple(point) for point in raw["points"]],
+        length_m=raw["length_m"],
+        ascent_m=raw["ascent_m"],
+        rfs=raw["rfs"],
+        shape_similarity=raw.get("shape_similarity"),
+    ))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--workers", type=int, default=2,
@@ -68,16 +97,51 @@ def main() -> None:
                         help="ignore and replace all existing checkpoints")
     parser.add_argument("--retry-unavailable", action="store_true",
                         help="re-run only entries previously stored as unavailable")
+    parser.add_argument("--revalidate", action="store_true",
+                        help="rebuild unsafe entries and normalize every closed-loop start")
     args = parser.parse_args()
     fingerprint = graph_fingerprint()
     entries = {} if args.fresh else _read_existing(args.output, fingerprint)
     # Transfer rows that resolve to exactly the same coordinate share presets.
     unique_rows = list({(row[2], row[3]): row for row in SEOUL_METRO_STATIONS}.values())
+    station_names = {
+        f"{lat:.5f},{lon:.5f}": _station_name(name)
+        for _, name, lat, lon, *_ in unique_rows
+    }
+    invalid: set[str] = set()
+    normalized = 0
+    metadata_normalized = 0
+    if args.revalidate and entries:
+        graph = get_graph()
+        for key, raw in list(entries.items()):
+            if raw is None:
+                continue
+            course = _restore(raw)
+            expected_name = station_names.get(key.rsplit(",", 1)[0])
+            if expected_name and course.params.location_name != expected_name:
+                course.params = course.params.model_copy(
+                    update={"location_name": expected_name}
+                )
+                metadata_normalized += 1
+            issues = course_route_issues(course, graph)
+            if issues:
+                invalid.add(key)
+                continue
+            normalized_raw = serialize_course(course)
+            if normalized_raw != raw:
+                entries[key] = normalized_raw
+                normalized += 1
+        print(
+            f"revalidation: {len(invalid)} unsafe, {normalized} routes normalized, "
+            f"{metadata_normalized} station names normalized",
+            flush=True,
+        )
     jobs = []
     for row in unique_rows:
         for shape in SHAPES:
             key = preset_key(row[2], row[3], shape)
             should_run = (key not in entries
+                          or key in invalid
                           or (args.retry_unavailable and entries.get(key) is None))
             if should_run:
                 jobs.append(row[:4] + (shape, args.per_distance_seconds))
@@ -101,6 +165,8 @@ def main() -> None:
                 processed = total - len(jobs) + completed
                 print(f"{processed}/{total} processed; {ok} available, "
                       f"{len(entries) - ok} unavailable", flush=True)
+        if not jobs and (normalized or metadata_normalized):
+            _write(args.output, fingerprint, entries)
     finally:
         if pool is not None:
             pool.shutdown()

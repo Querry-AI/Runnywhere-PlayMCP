@@ -17,7 +17,7 @@ EXPECTED_SHA256 = {
     "seoul_graph.pkl": "5958a323fe270e64e7e123225b1f0247353bb4d0897b41acb7d5769a6cea5f85",
     "facilities.pkl": "a577f9e39012d2d70827e8ade0f969bf7d12794a83555d7db62eef328f4b2e7f",
     "infra_points.pkl": "cedaed2e22a3860f6d1d29239eb428cb7382ec782861041d29a56921e638f453",
-    "animal_station_presets.json.gz": "71a22c5a443d4e9089d5deb63a21d83ae3fefc089d627602a4ae7a9b172c8bab",
+    "animal_station_presets.json.gz": "8560997ba7c5db0268f5fbe0aeb0da55963993e41a50d66553206a7181fd0eec",
 }
 
 

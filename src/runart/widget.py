@@ -11,11 +11,11 @@ import urllib.parse
 
 from .course import Course
 from .courseplan import CourseChoice
-from .naming import course_badges, course_title
+from .naming import RUN_NAMES_KO, TRACK_EMOJI, short_place
+from .shapes import SHAPES
 
 WIDGET_NAME = "runnywhere_course"
 WIDGET_MAX_BYTES = 12_000
-ALTERNATIVES_HEADING = "다른 선택지"
 # A Kakao button label is one line on a phone; past this it truncates anyway.
 LABEL_MAX_CHARS = 60
 _COURSE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,4096}$")
@@ -96,29 +96,64 @@ def _validate_envelope(payload: dict) -> None:
     card = payload["widget"]
     if not isinstance(card, dict) or card.get("type") != "Card":
         raise WidgetBuildError("widget must be a Card")
+    if set(card) != {"type", "children", "size", "padding"}:
+        raise WidgetBuildError("unsupported Card properties")
     children = card.get("children")
     if not isinstance(children, list) or not children:
         raise WidgetBuildError("widget Card must have children")
     for child in children:
-        if not isinstance(child, dict):
-            raise WidgetBuildError("widget child must be an object")
-        if child.get("type") == "Text":
-            if set(child) != {"type", "value"} or not child["value"]:
-                raise WidgetBuildError("Text requires value")
-        elif child.get("type") == "Button":
-            if not child.get("label"):
-                raise WidgetBuildError("Button requires label")
-            try:
-                target = child["onClickAction"]["payload"]["target"]
-                _target_url(target["url"])
-                if "pcUrl" in target:
-                    _target_url(target["pcUrl"])
-            except (KeyError, TypeError) as exc:
-                raise WidgetBuildError("Button target is incomplete") from exc
-        else:
-            raise WidgetBuildError("unsupported widget child")
+        _validate_component(child)
     if not isinstance(payload["copy_text"], str) or not payload["copy_text"]:
         raise WidgetBuildError("copy_text is required")
+
+
+def _validate_component(component: object) -> None:
+    """Validate the small ChatKit subset rendered by Kakao Preview."""
+    if not isinstance(component, dict):
+        raise WidgetBuildError("widget child must be an object")
+    kind = component.get("type")
+    if kind in {"Row", "Col"}:
+        allowed = {"type", "children", "gap", "align", "flex", "wrap"}
+        if not set(component) <= allowed:
+            raise WidgetBuildError(f"unsupported {kind} properties")
+        children = component.get("children")
+        if not isinstance(children, list) or not children:
+            raise WidgetBuildError(f"{kind} requires children")
+        for child in children:
+            _validate_component(child)
+        return
+    if kind in {"Title", "Caption", "Text"}:
+        allowed = {"type", "value", "size", "weight", "maxLines", "color"}
+        if not set(component) <= allowed or not component.get("value"):
+            raise WidgetBuildError(f"{kind} requires bounded text")
+        return
+    if kind == "Image":
+        allowed = {
+            "type", "src", "alt", "width", "height", "fit", "radius", "frame",
+        }
+        if not set(component) <= allowed or not component.get("alt"):
+            raise WidgetBuildError("Image requires src and alt")
+        _target_url(component.get("src", ""))
+        return
+    if kind == "Divider":
+        if not set(component) <= {"type", "spacing"}:
+            raise WidgetBuildError("unsupported Divider properties")
+        return
+    if kind == "Button":
+        allowed = {
+            "type", "label", "onClickAction", "style", "variant", "size", "block",
+        }
+        if not set(component) <= allowed or not component.get("label"):
+            raise WidgetBuildError("Button requires label")
+        try:
+            target = component["onClickAction"]["payload"]["target"]
+            _target_url(target["url"])
+            if "pcUrl" in target:
+                _target_url(target["pcUrl"])
+        except (KeyError, TypeError) as exc:
+            raise WidgetBuildError("Button target is incomplete") from exc
+        return
+    raise WidgetBuildError("unsupported widget child")
 
 
 def _serialize(payload: dict) -> str:
@@ -132,12 +167,22 @@ def _serialize(payload: dict) -> str:
 
 
 def _choice_label(choice: CourseChoice) -> str:
-    """Name an alternative well enough to pick it without opening it."""
-    head = f"{choice.emoji} {choice.title}"
-    if not choice.is_detour:
-        return _plain_text(head, LABEL_MAX_CHARS)
-    detour = f"{choice.distance_m / 1000.0:.1f}km 떨어진 {choice.start_name}"
-    return _plain_text(f"{head} · {detour}", LABEL_MAX_CHARS)
+    """Compact alternative label: type, route length, and actual start."""
+    shape = choice.course.params.shape or ""
+    run_name = RUN_NAMES_KO.get(shape, "일반런")
+    label = (
+        f"{choice.emoji} {run_name} · {choice.course.length_km:.1f}km · "
+        f"{choice.start_name}"
+    )
+    return _plain_text(label, LABEL_MAX_CHARS)
+
+
+def _widget_title(course: Course) -> str:
+    shape = SHAPES.get(course.params.shape or "")
+    if shape:
+        return _plain_text(f"{shape.emoji} {RUN_NAMES_KO[shape.key]}", 40)
+    place = short_place(course.params.location_name or "")
+    return _plain_text(f"{TRACK_EMOJI} {place + '런' if place else '러닝 코스'}", 40)
 
 
 def build_course_widget(
@@ -145,7 +190,6 @@ def build_course_widget(
     course_id: str,
     base_url: str,
     *,
-    lead_text: str = "",
     alternatives: tuple[CourseChoice, ...] = (),
 ) -> str:
     """Return a compact Kakao Card envelope for one confirmed course.
@@ -162,52 +206,88 @@ def build_course_widget(
             raise WidgetBuildError("invalid course id")
     origin = _origin(base_url)
     preview_url = f"{origin}/c/{course_id}"
-    gpx_url = f"{preview_url}.gpx"
+    thumbnail_url = f"{preview_url}/thumb.svg"
 
-    badges = course_badges(course)
-    badge_text = "".join(_plain_text(badge.get("emoji", ""), 4) for badge in badges)
-    title = _plain_text(f"{badge_text} {course_title(course)}", 80)
+    title = _widget_title(course)
     location = _plain_text(course.params.location_name or "지정한 출발점", 120)
     metrics = _plain_text(
-        f"{course.length_km:.1f}km · 누적 오르막 {course.ascent_m:.0f}m",
+        f"{course.length_km:.1f}km · 오르막 {course.ascent_m:.0f}m",
         120,
     )
 
-    children: list[dict] = []
-    lead = _copy_value(lead_text, 180)
-    if lead:
-        children.append({"type": "Text", "value": lead})
-    children.extend([
-        {"type": "Text", "value": title},
-        {"type": "Text", "value": metrics},
-        {"type": "Text", "value": f"출발·도착: {location}"},
-        _button("코스 지도 열기", preview_url),
-        _button("GPX 다운로드", gpx_url),
-    ])
+    primary_button = _button("코스 보기", preview_url)
+    primary_button.update({
+        "style": "primary", "variant": "solid", "size": "sm", "block": True,
+    })
+    children: list[dict] = [{
+        "type": "Row",
+        "gap": "md",
+        "align": "center",
+        "children": [
+            {
+                "type": "Image",
+                "src": thumbnail_url,
+                "alt": _plain_text(f"{location} {title} 코스", 120),
+                "width": 132,
+                "height": 132,
+                "fit": "contain",
+                "radius": "lg",
+                "frame": True,
+            },
+            {
+                "type": "Col",
+                "gap": "xs",
+                "flex": 1,
+                "children": [
+                    {"type": "Title", "value": title, "size": "md", "maxLines": 1},
+                    {
+                        "type": "Caption", "value": f"{location} 출발·도착",
+                        "size": "sm", "maxLines": 1,
+                    },
+                    {
+                        "type": "Text", "value": metrics, "size": "sm",
+                        "weight": "semibold", "maxLines": 1,
+                    },
+                    primary_button,
+                ],
+            },
+        ],
+    }]
     if alternatives:
-        children.append({"type": "Text", "value": ALTERNATIVES_HEADING})
-        children.extend(
-            _button(_choice_label(choice), f"{origin}/c/{choice.course_id}")
-            for choice in alternatives
-        )
+        children.append({"type": "Divider", "spacing": "xs"})
+        alternative_buttons = []
+        for choice in alternatives:
+            button = _button(
+                _choice_label(choice), f"{origin}/c/{choice.course_id}"
+            )
+            button.update({
+                "style": "secondary", "variant": "soft", "size": "sm",
+                "block": True,
+            })
+            alternative_buttons.append(button)
+        children.append({
+            "type": "Col", "gap": "xs", "children": alternative_buttons,
+        })
 
     copy_title = _copy_value(title, 80)
     copy_location = _copy_value(location, 120)
     copy_lines = [
         f"**{copy_title}**",
-        f"- 거리: {course.length_km:.1f}km",
-        f"- 출발·도착: {copy_location}",
+        f"- {copy_location} 출발·도착",
+        f"- {course.length_km:.1f}km · 오르막 {course.ascent_m:.0f}m",
         f"- 지도: {preview_url}",
     ]
     if alternatives:
-        copy_lines.append(f"**{ALTERNATIVES_HEADING}**")
         copy_lines.extend(
             f"- {_copy_value(_choice_label(choice), LABEL_MAX_CHARS)}"
             for choice in alternatives
         )
     copy_text = "\n".join(copy_lines)
     return _serialize({
-        "widget": {"type": "Card", "children": children},
+        "widget": {
+            "type": "Card", "size": "md", "padding": "sm",
+            "children": children,
+        },
         "copy_text": copy_text,
         "name": WIDGET_NAME,
     })

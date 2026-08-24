@@ -2,8 +2,13 @@ import gzip
 import json
 
 from runart import animal_presets
-from runart.course import Course
+from runart.course import (MAX_COURSE_START_OFFSET_M, Course,
+                           course_route_issues)
+from runart.geo import haversine_m
+from runart.graph import get_graph
 from runart.models import CourseParams
+from runart.shapes import SHAPES
+from runart.stations import SEOUL_METRO_STATIONS
 
 
 def _params(shape="dog"):
@@ -33,7 +38,8 @@ def test_preset_roundtrip_and_known_unavailable(tmp_path, monkeypatch):
 
     loaded = animal_presets.get_animal_preset(params)
     assert isinstance(loaded, Course)
-    assert loaded.path == course.path
+    assert loaded.path == [2, 1, 2]
+    assert loaded.points[0] == loaded.points[-1] == (37.51, 127.01)
     assert loaded.shape_similarity == 0.8
     assert animal_presets.get_animal_preset(_params("cat")) is None
     assert animal_presets.get_animal_preset(_params("whale")) is animal_presets.MISSING
@@ -71,3 +77,38 @@ def test_nearest_preset_respects_radius(monkeypatch):
     far_request = _params().model_copy(update={"lat": 37.60})
     assert animal_presets.find_nearest_animal_preset(
         far_request, max_distance_m=500) is None
+
+
+def test_bundled_presets_cover_every_station_shape_slot_and_match_metadata():
+    entries = animal_presets._load()
+    assert entries is not None
+    stations = {
+        f"{lat:.5f},{lon:.5f}": name if name.endswith("역") else f"{name}역"
+        for _, name, lat, lon, *_ in SEOUL_METRO_STATIONS
+    }
+    expected_keys = {
+        animal_presets.preset_key(lat, lon, shape)
+        for _, _, lat, lon, *_ in SEOUL_METRO_STATIONS
+        for shape in SHAPES
+    }
+    assert set(entries) == expected_keys
+    for key, raw in entries.items():
+        if raw is None:
+            continue
+        station_key, _ = key.rsplit(",", 1)
+        assert raw["params"]["location_name"] == stations[station_key]
+        assert not raw["params"]["location_name"].endswith("역역")
+
+
+def test_every_bundled_course_starts_near_station_and_is_runnable():
+    graph = get_graph()
+    courses = animal_presets.all_verified_animal_presets()
+    assert courses
+    for course in courses:
+        first_lat, first_lon = course.points[0]
+        offset_m = haversine_m(
+            course.params.lat, course.params.lon, first_lat, first_lon
+        )
+        assert offset_m <= MAX_COURSE_START_OFFSET_M
+        assert course.points[0] == course.points[-1]
+        assert course_route_issues(course, graph) == []

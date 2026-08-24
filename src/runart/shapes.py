@@ -16,7 +16,9 @@ from dataclasses import dataclass
 import networkx as nx
 
 from . import graph as graphmod
-from .course import Course, CourseError, _path_metrics, followability_penalty
+from .course import (Course, CourseError, _path_metrics, course_route_issues,
+                     edge_is_runnable, followability_penalty,
+                     rebase_closed_course_start)
 from .facilities import facility_requirement_score
 from .geo import to_latlon, to_xy
 from .models import CourseParams
@@ -553,10 +555,15 @@ def count_self_intersections(ring_xy: list[tuple[float, float]]) -> int:
     Bounding-box sweep along x: routed rings have thousands of short
     segments, so only the handful whose x-ranges overlap are ever compared —
     same count as the all-pairs check at a fraction of the cost."""
-    n = len(ring_xy)
+    # Course paths already repeat their first point at the end. Treat that as
+    # closure metadata, not as an extra zero-length segment; otherwise the two
+    # real segments beside the repeated point are no longer considered
+    # adjacent and the result changes when the same cycle is rotated.
+    ring = ring_xy[:-1] if len(ring_xy) > 1 and ring_xy[0] == ring_xy[-1] else ring_xy
+    n = len(ring)
     if n < 4:
         return 0
-    segs = [(ring_xy[i], ring_xy[(i + 1) % n]) for i in range(n)]
+    segs = [(ring[i], ring[(i + 1) % n]) for i in range(n)]
     order = sorted(range(n), key=lambda i: min(segs[i][0][0], segs[i][1][0]))
     # active: (index, max_x, min_y, max_y) of segments whose x-range may
     # still overlap upcoming segments.
@@ -620,13 +627,8 @@ MAIN_ROAD_EDGE_PENALTY_M = 14.0
 # so the silhouette strokes run straight along whole main streets.
 HIGHWAY_COST_FACTOR = {
     "primary": 0.70,
-    "primary_link": 0.78,
     "secondary": 0.74,
-    "secondary_link": 0.82,
     "tertiary": 0.86,
-    "tertiary_link": 0.92,
-    "trunk": 0.74,
-    "trunk_link": 0.82,
     "unclassified": 1.05,
     "residential": 1.30,
     "living_street": 1.40,
@@ -654,9 +656,11 @@ def main_road_cost(attrs: dict) -> float:
     return factor
 
 
-def _road_weight(u, v, attrs) -> float:
+def _road_weight(u, v, attrs) -> float | None:
     """Dijkstra weight that prefers broad main streets over alleys, so the
     silhouette strokes run straight along big walkable roads."""
+    if not edge_is_runnable(attrs):
+        return None
     return attrs["length"] * main_road_cost(attrs)
 
 
@@ -877,6 +881,8 @@ def _corridor_route(g, node_xy, a, b, seg_a, seg_b, corridor_m: float) -> list:
     ribbon = max(corridor_m, lateral(node_xy[a]) + 30.0, lateral(node_xy[b]) + 30.0)
 
     def weight(u, v, attrs):
+        if not edge_is_runnable(attrs):
+            return None
         d = (lateral(node_xy[u]) + lateral(node_xy[v])) * 0.5
         if d > ribbon:
             return None  # hidden edge — stay inside the ribbon
@@ -1072,7 +1078,7 @@ def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
     # prune placements on roadless blocks (palace grounds, rivers, parks).
     # All three are location-cached and shared across the distance sweep.
     g, node_xy, occupied = _search_area(
-        lat0, lon0, diameter_units * base_scale * max(scales) * 0.7 + 1000)
+        lat0, lon0, diameter_units * base_scale * max(scales) * 1.05 + 1000)
     cell = _OCCUPANCY_CELL_M
 
     def _placement_coverage(anchors) -> float:
@@ -1083,12 +1089,6 @@ def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
                    for dx_ in (-1, 0, 1) for dy_ in (-1, 0, 1)):
                 ok += 1
         return ok / max(len(anchors), 1)
-
-    # The reference routes are drawn where the shape fits, not exactly on the
-    # runner's doorstep. Search a few nearby placements. Speed-first: a small
-    # cardinal set instead of the full 13-offset grid.
-    OFFSETS = ((0.0, 0.0), (250.0, 0.0), (-250.0, 0.0),
-               (0.0, 250.0), (0.0, -250.0))
 
     best: Course | None = None
     best_sim = -1.0
@@ -1112,11 +1112,20 @@ def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
                 for x, y in template
             ]
             rotation_error = diagonal_rotation_error(rot)
+            # A station preset must actually start at its named station. A
+            # closed silhouette can be translated without changing its shape,
+            # so place each candidate anchor at the requested origin and keep
+            # the road-covered placements. Reindexing the final cycle then
+            # makes that snapped anchor the GPX/map start.
             placements = sorted(
-                ([(x + ox, y + oy) for x, y in base_anchors]
-                 for ox, oy in OFFSETS),
-                key=_placement_coverage, reverse=True)
-            for anchors_xy in placements[:2]:
+                (
+                    [(x - anchor_x, y - anchor_y) for x, y in base_anchors]
+                    for anchor_x, anchor_y in base_anchors
+                ),
+                key=_placement_coverage,
+                reverse=True,
+            )
+            for anchors_xy in placements[:3]:
                 if time.perf_counter() > screen_deadline:
                     break
                 if _placement_coverage(anchors_xy) < 0.9:
@@ -1225,6 +1234,8 @@ def _course_is_usable(params: CourseParams, course: Course | None) -> bool:
     if abs(course.length_m - target_m) / target_m > MAX_SHAPE_DISTANCE_ERROR:
         return False
     g = graphmod.get_graph()
+    if course_route_issues(course, g):
+        return False
     if backtrack_fraction(g, course.path) > BACKTRACK_MAX_FRAC:
         return False
     xy = [to_xy(lat, lon, params.lat, params.lon) for lat, lon in course.points]
@@ -1282,7 +1293,7 @@ def generate_shape_course(params: CourseParams) -> Course:
 
     if (best is not None and best_sim >= required_gate
             and _course_is_usable(params, best)):
-        return best
+        return rebase_closed_course_start(best)
 
     if best is None or best_sim < required_gate:
         # Honest alternatives: quick-probe the other shapes and suggest only
@@ -1423,6 +1434,7 @@ def find_min_clean_course(params: CourseParams,
             if best_sim >= GOOD_ENOUGH:
                 break
     if best is not None:
+        best = rebase_closed_course_start(best)
         _MIN_CLEAN_SUCCESS_CACHE[success_key] = best
         _MIN_CLEAN_CACHE[cache_key] = best
     elif completed:
@@ -1465,7 +1477,7 @@ def find_best_reference_course(params: CourseParams,
                 or (abs(sim - best_sim) <= 0.015
                     and (best is None or course.length_km < best.length_km))):
             best, best_sim = course, sim
-    return best
+    return rebase_closed_course_start(best) if best is not None else None
 
 
 def suggest_alternatives(params: CourseParams, limit: int = 2) -> list[str]:

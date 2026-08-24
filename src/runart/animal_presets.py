@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from .course import Course
+from .course import Course, rebase_closed_course_start
 from .data_integrity import verify_data_file
 from .models import CourseParams
 
@@ -135,16 +135,20 @@ def get_animal_preset(params: CourseParams):
         return MISSING
     if raw is None:
         return None
-    saved_params = CourseParams(**raw["params"])
-    return Course(
-        params=saved_params,
+    return _deserialize_course(raw)
+
+
+def _deserialize_course(raw: dict) -> Course:
+    """Restore a preset and anchor its cyclic start nearest its named station."""
+    return rebase_closed_course_start(Course(
+        params=CourseParams(**raw["params"]),
         path=raw["path"],
         points=[tuple(point) for point in raw["points"]],
         length_m=raw["length_m"],
         ascent_m=raw["ascent_m"],
         rfs=raw["rfs"],
         shape_similarity=raw.get("shape_similarity"),
-    )
+    ))
 
 
 def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -181,13 +185,7 @@ def find_nearby_animal_presets(params: CourseParams,
             continue
         if distance > max_distance_m:
             continue
-        saved_params = CourseParams(**raw["params"])
-        matches.append(PresetMatch(Course(
-            params=saved_params, path=raw["path"],
-            points=[tuple(point) for point in raw["points"]],
-            length_m=raw["length_m"], ascent_m=raw["ascent_m"],
-            rfs=raw["rfs"], shape_similarity=raw.get("shape_similarity"),
-        ), distance))
+        matches.append(PresetMatch(_deserialize_course(raw), distance))
     matches.sort(key=lambda m: m.distance_m)
     return matches
 
@@ -204,7 +202,9 @@ def serialize_course(course: Course) -> dict:
     return {
         "params": course.params.canonical(),
         "path": course.path,
-        "points": course.points,
+        # Keep the in-memory payload identical to its JSON representation so
+        # --revalidate does not report every tuple-backed route as changed.
+        "points": [list(point) for point in course.points],
         "length_m": course.length_m,
         "ascent_m": course.ascent_m,
         "rfs": course.rfs,
@@ -222,10 +222,5 @@ def all_verified_animal_presets() -> tuple[Course, ...]:
     for raw in entries.values():
         if raw is None:
             continue
-        courses.append(Course(
-            params=CourseParams(**raw["params"]), path=raw["path"],
-            points=[tuple(point) for point in raw["points"]],
-            length_m=raw["length_m"], ascent_m=raw["ascent_m"],
-            rfs=raw["rfs"], shape_similarity=raw.get("shape_similarity"),
-        ))
+        courses.append(_deserialize_course(raw))
     return tuple(courses)

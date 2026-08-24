@@ -1,8 +1,10 @@
 import pytest
 
-from runart.course import CourseError, generate_course
+from runart.course import (Course, CourseError, course_route_issues,
+                           edge_is_runnable, generate_course,
+                           rebase_closed_course_start)
 from runart.models import CourseParams, decode_course_id, encode_course_id
-from runart.render import preview_html
+from runart.render import course_thumbnail_svg, preview_html
 
 CITY_HALL = dict(lat=37.5665, lon=126.9780, location_name="시청")
 
@@ -13,6 +15,74 @@ def test_loop_returns_to_start_within_tolerance():
     assert course.points[0] == course.points[-1]
     assert abs(course.length_km - 5.0) / 5.0 <= 0.10
     assert 0 <= course.rfs["score"] <= 100
+
+
+def test_closed_course_start_is_rebased_to_nearest_requested_point():
+    params = CourseParams(**CITY_HALL, distance_km=5.0, shape="rabbit")
+    original = Course(
+        params=params,
+        path=[10, 20, 30, 10],
+        points=[
+            (37.5750, 126.9900),
+            (37.5666, 126.9781),
+            (37.5600, 126.9700),
+            (37.5750, 126.9900),
+        ],
+        length_m=5000,
+        ascent_m=20,
+        rfs={"score": 80},
+    )
+
+    rebased = rebase_closed_course_start(original)
+
+    assert rebased.path == [20, 30, 10, 20]
+    assert rebased.points[0] == rebased.points[-1] == (37.5666, 126.9781)
+    assert rebased.length_m == original.length_m
+    assert original.path == [10, 20, 30, 10]
+
+
+def test_course_thumbnail_is_square_route_art_without_duplicate_copy():
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+
+    svg = course_thumbnail_svg(course)
+
+    assert 'viewBox="0 0 320 320"' in svg
+    assert "<polyline" in svg and "<circle" in svg
+    assert "<text" not in svg
+    assert "시청" not in svg and "5.0km" not in svg
+
+
+@pytest.mark.parametrize("highway", [
+    "trunk", "trunk_link", "primary_link", "secondary_link", "steps",
+    "track", "bridleway", "busway", "corridor",
+])
+def test_non_runnable_highway_classes_are_blocked(highway):
+    assert not edge_is_runnable({"highway": highway, "slope_pct": 0})
+
+
+def test_steep_mountain_path_and_far_station_start_are_rejected():
+    import networkx as nx
+
+    params = CourseParams(**CITY_HALL, distance_km=5.0, shape="rabbit")
+    course = Course(
+        params=params,
+        path=[1, 2, 1],
+        points=[
+            (37.5700, 126.9820),
+            (37.5710, 126.9830),
+            (37.5700, 126.9820),
+        ],
+        length_m=5000,
+        ascent_m=20,
+        rfs={"score": 70},
+    )
+    graph = nx.Graph()
+    graph.add_edge(1, 2, length=2500, highway="path", slope_pct=14)
+
+    issues = course_route_issues(course, graph)
+
+    assert "start_too_far" in issues
+    assert "blocked_highway:path" in issues
 
 
 def test_flat_course_avoids_hills():
@@ -58,7 +128,8 @@ def test_preview_uses_kakao_maps_without_leaflet():
     assert "basemaps.cartocdn.com" not in page
     assert "© OpenStreetMap contributors" in page
     assert "PretendardVariable.woff2" in page
-    assert "mobile-dock" in page
+    assert 'class="run-locate"' in page
+    assert 'aria-label="내 위치 추적 시작"' in page
     assert "prefers-reduced-motion" in page
     assert "동물 실루엣" not in page  # plain courses use the neutral label
     assert "코스 라인" in page

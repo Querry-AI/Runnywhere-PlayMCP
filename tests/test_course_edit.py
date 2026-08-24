@@ -168,6 +168,27 @@ def test_edit_endpoint_snaps_a_drawn_segment_to_walkable_edges():
     assert all(len(point) == 3 for point in payload["path"])
 
 
+def test_edit_endpoint_detaches_one_edge_and_reconnects_an_alternate_walkway():
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    cid = encode_course_id(source.params)
+    response = asyncio.run(server.edit_course_route(_json_request(cid, {
+        "action": "reroute",
+        "path": source.path,
+        "from_index": 1,
+        "to_index": 2,
+    })))
+    payload = json.loads(response.body)
+
+    assert response.status_code == 200
+    edited_nodes = [point[0] for point in payload["path"]]
+    assert edited_nodes[0] == source.path[0]
+    assert edited_nodes[-1] == source.path[-1]
+    assert edited_nodes != source.path
+    assert source.path[1:3] != edited_nodes[1:3]
+    assert payload["length_km"] > 0
+    assert "summary" in payload
+
+
 def test_edit_endpoint_separates_bad_course_id_from_bad_payload():
     bad_id = _json_request("not-a-course", {"action": "save", "path": [1, 2, 1]})
     response = asyncio.run(server.edit_course_route(bad_id))
@@ -204,19 +225,21 @@ def test_mobile_preview_uses_compact_summary_and_accessible_edit_controls():
     assert 'aria-label="수정한 코스를 새 코스로 저장"' in page
     assert 'aria-live="polite"' in page
     assert 'AbortController' in page and '3500' in page
-    assert "action:'snap'" in page
+    assert "action:'reroute'" in page
     assert "action:'save'" in page
-    assert 'id="drawTool"' in page
-    assert 'id="eraseTool"' in page
+    assert 'id="segmentTool"' in page
+    assert 'id="drawTool"' not in page
+    assert 'id="eraseTool"' not in page
     assert 'id="editUndo"' in page
     assert 'id="editRedo"' not in page
     assert 'class="edit-tool-circle"' in page
     assert '.edit-tools{position:absolute;z-index:950;left:10px;top:10px' in page
     assert 'width:40px;height:40px' in page
     assert 'edit-overlay' in page
-    assert 'body.editing .map-hud' in page
+    assert 'body.editing .run-locate' in page
     assert 'body.editing.tool-active .facility-marker' in page
-    assert "map.setDraggable(!editMode)" in page
+    assert "const syncMapInteraction = () =>" in page
+    assert "map.setDraggable(!selecting)" in page
     assert "map.panBy(panCenter.x-next.x,panCenter.y-next.y)" in page
     assert 'class="edit-bar"' not in page
     assert 'body.editing .edit-bar' not in page
@@ -309,9 +332,9 @@ def test_edit_blocks_duplicate_requests_while_one_is_in_flight():
     assert "editBusy" in page
     # every entry point guards on the busy flag
     assert "if(editBusy)return" in page                        # setMode
-    assert "if(editBusy){clearGesture();return;}" in page      # finishGesture
+    assert "if(editBusy||!selectedRange)return" in page       # replaceSelected
     assert "if(!editing||editBusy)return" in page              # save
-    assert "!editing||!editMode||editBusy" in page             # pointerdown
+    assert "!editing||editMode!=='segment'||editBusy" in page  # pointerdown
 
 
 def test_edit_toolbar_keeps_small_icon_only_buttons():
@@ -322,8 +345,8 @@ def test_edit_toolbar_keeps_small_icon_only_buttons():
     assert "width:40px;height:40px" in page
     assert '.edit-tools{position:absolute;z-index:950;left:10px;top:10px' in page
     # Icon-only: labels stay in aria-label/title, never as visible text nodes.
-    for label in ("펜으로 코스 선 그리기", "직선 지우개로 코스 구간 지우기",
-                  "마지막 선 수정 되돌리기", "원본 코스로 복구", "수정한 코스를 새 코스로 저장"):
+    for label in ("바꿀 코스 구간 선택", "마지막 수정 실행 취소",
+                  "모든 수정 초기화", "수정한 코스를 새 코스로 저장"):
         assert f'aria-label="{label}"' in page
 
 
@@ -361,13 +384,32 @@ def test_mobile_map_gestures_and_facility_taps_do_not_conflict():
     assert "map.panBy(facilityPointer.lastX-ev.clientX" in page
     assert "clickable:true" in page
     assert "kakao.maps.event.addListener(map, 'click', closePop)" in page
+    # Desktop hover remains the primary quick preview for convenience markers.
+    assert "if(canHover){el.addEventListener('mouseenter',show);el.addEventListener('mouseleave',hide);}" in page
 
 
 def test_edit_projection_uses_container_coordinates():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example")
     assert "projection.containerPointFromCoords" in page
-    assert "projection.coordsFromContainerPoint" in page
+    # Selection only maps road nodes to screen pixels. No imprecise finger
+    # stroke is converted back into route coordinates anymore.
+    assert "projection.coordsFromContainerPoint" not in page
+    assert "distanceToSegment" in page
+
+
+def test_editor_selects_an_existing_edge_instead_of_collecting_a_freehand_stroke():
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    assert "const nearestSegment = point" in page
+    assert "selectedRange=[hit.index,hit.index+1]" in page
+    assert "선택한 구간을 다른 보행로로 바꿀까요?" in page
+    assert "label:'다른 길로',persist:true" in page
+    assert "strokeColor:'#e0522d'" in page
+    assert 'class="edit-anchor"' in page
+    assert "stroke:sample" not in page
+    assert "rawStroke" not in page
 
 
 def test_revert_is_undoable_and_separated_from_save():
@@ -386,14 +428,19 @@ def test_revert_is_undoable_and_separated_from_save():
     assert "confirm(" not in page
 
 
-def test_revert_icon_is_not_a_house():
-    """A home glyph on a destructive control reads as 'go to homepage'."""
+def test_undo_once_and_reset_all_use_unmistakably_different_icons():
+    """A curved arrow and a trash can cannot be mistaken for each other."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example")
 
-    assert 'aria-label="원본 코스로 복구"' in page
+    assert 'aria-label="마지막 수정 실행 취소"' in page
+    assert 'title="한 번 되돌리기"' in page
+    assert 'aria-label="모든 수정 초기화"' in page
+    assert 'title="전체 초기화"' in page
     assert "M6.5 10v9h11v-9" not in page       # old roof/door house path
-    assert "M12 7v5l4 2" in page               # history glyph: clock hands
+    assert "M9 7H4V2" in page                   # one-step curved arrow
+    assert "M4 7h16M9 7V4h6v3" in page         # reset-all trash can
+    assert "M12 7v5l4 2" not in page            # old history glyph
 
 
 def test_zoom_control_is_removed_while_editing():
@@ -459,7 +506,8 @@ def test_editing_offers_an_explicit_map_pan_tool():
     assert "setMode('pan')" in page
     # pan is the default on entering edit mode, and it leaves the map draggable
     assert 'id="panTool" class="edit-tool-circle" type="button" aria-label="지도 이동" title="지도 이동" aria-pressed="true"' in page
-    assert "map.setDraggable(!editMode)" in page
+    assert "syncMapInteraction();" in page
+    assert "map.setDraggable(!selecting)" in page
 
 
 def test_drawing_overlay_is_absent_unless_a_drawing_tool_is_active():
@@ -476,7 +524,9 @@ def test_route_decorations_do_not_swallow_map_drags():
     """km bubbles, direction arrows and the start pin are labels, not controls."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example")
-    assert ".km-marker,.dir-marker,.start-marker{pointer-events:none}" in page
+    assert ".km-marker,.dir-marker,.start-marker,.finish-marker{pointer-events:none}" in page
+    assert "routePath[routePath.length - 1]" in page
+    assert "sameEndpoint" in page
 
 
 def test_live_tracking_centers_the_runner_and_keeps_white_arrows_on_colored_route():
@@ -486,9 +536,22 @@ def test_live_tracking_centers_the_runner_and_keeps_white_arrows_on_colored_rout
 
     assert "map.setCenter(posLatLng)" in page
     assert "strokeColor:color(s)" in page
-    assert '<svg viewBox="0 0 12 12"' in page
-    assert "stroke:#fff" in page
+    assert '<svg viewBox="0 0 10 10"' in page
+    assert "fill:#fff" in page
+    assert "width:9px;height:9px" in page
     assert "➤" not in page
+
+
+def test_direction_chevrons_repeat_frequently_across_the_whole_course():
+    from runart.render import _direction_markers
+
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    markers = _direction_markers(course.points)
+
+    # Roughly every 120m on a normal city loop, capped on very long courses:
+    # enough cues to cover short blocks without making a solid arrow ribbon.
+    assert 35 <= len(markers) <= 80
+    assert markers[0]["lat"] != markers[-1]["lat"]
 
 
 def test_map_entry_points_sit_in_the_top_corners():
@@ -499,8 +562,24 @@ def test_map_entry_points_sit_in_the_top_corners():
     assert "코스 선 수정" not in page
     assert "#editRoute{position:absolute;z-index:540;left:14px;top:14px" in page
     assert ".view-toggle{position:absolute;z-index:530;right:14px;top:14px" in page
-    # the metric pills move below them rather than competing for the corners
-    assert ".map-hud{position:absolute;z-index:500;left:14px;right:14px;top:64px" in page
+    assert 'class="map-hud"' not in page
+
+
+def test_map_uses_one_round_runner_button_without_visible_metric_or_gps_boxes():
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example")
+
+    assert 'id="runStart" class="run-locate"' in page
+    assert '.run-locate{position:absolute' in page
+    assert 'border-radius:50%' in page
+    assert '<svg viewBox="0 0 24 24" aria-hidden="true">' in page
+    assert 'aria-label="내 위치 추적 시작"' in page
+    assert 'class="map-hud"' not in page
+    assert 'class="pill"' not in page
+    assert 'class="run-status"' not in page
+    assert 'GPS 안내 대기' not in page
+    assert 'id="inlineRunStart"' not in page
+    assert 'id="mobileRunStart"' not in page
 
 
 def test_course_title_and_badges_share_a_row():
@@ -550,6 +629,9 @@ def test_preview_keeps_a_local_course_editor_available_without_map_sdk():
     assert "initLocalCourseEditor" in page
     assert "로컬 코스 편집 체험" in page
     assert "SVGPoint" in page
-    assert "펜이나 지우개를 선택하세요" in page
+    assert "const arrowsFor=points" in page
+    assert 'fill="#fff" stroke="#064f38"' in page
+    assert "구간 선택을 누른 뒤 바꿀 코스 선을 탭하세요" in page
     assert 'id="localEditRoute"' in page
+    assert 'id="localSegment"' in page
     assert 'id="localEditSave"' in page

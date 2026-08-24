@@ -83,6 +83,14 @@ def test_shape_course_prefers_simple_closed_non_intersecting_loop(shape):
     assert backtrack_fraction(graphmod.get_graph(), course.path) <= BACKTRACK_MAX_FRAC
 
 
+def test_closed_ring_intersection_count_is_invariant_to_start_rotation():
+    square = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.0)]
+    rotated = [(2.0, 2.0), (0.0, 2.0), (0.0, 0.0), (2.0, 0.0), (2.0, 2.0)]
+
+    assert count_self_intersections(square) == 0
+    assert count_self_intersections(rotated) == 0
+
+
 def test_final_usable_gate_rejects_open_or_backtracking_route():
     from runart.course import Course
     from runart.shapes import _course_is_usable

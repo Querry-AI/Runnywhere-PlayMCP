@@ -35,7 +35,7 @@ from .animal_presets import (MISSING as PRESET_MISSING, PresetMatch,
                              find_nearest_animal_preset, get_animal_preset,
                              preset_status)
 from .course import (Course, CourseError, course_from_path, generate_course,
-                     snap_drawn_segment)
+                     reroute_segment, snap_drawn_segment)
 from .courseplan import (CASE_EXACT, CASE_FAR, CASE_NEARBY, NEARBY_RADIUS_M,
                          SAME_START_M, CoursePlan, build_course_plan)
 from .facilities import LABELS_KO, facilities_along
@@ -47,8 +47,9 @@ from .exploration import (atlas_html, create_relay, decode_relay,
                           relay_html)
 from .models import (CourseParams, CourseWaypoint, DEFAULT_PACE_MIN_PER_KM, decode_course_id,
                      decode_shape_token, encode_course_id)
-from .render import (card_svg, course_edit_summary, course_markdown, markdown_text,
-                     preview_html, route_points)
+from .render import (card_svg, course_edit_summary, course_markdown,
+                     course_thumbnail_svg, markdown_text, preview_html,
+                     route_points)
 from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
                      generate_shape_course, list_shapes)
 from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
@@ -85,18 +86,26 @@ mcp = FastMCP(
     "Runnywhere",
     instructions=(
         "Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) creates runnable "
-        "courses on real pedestrian roads in Seoul. For every request to "
-        "create, draw, plan, find, or recommend a running course, call "
-        "create_seoul_running_course before answering feasibility. This "
-        "includes standard courses, location-only requests, animal-shaped "
-        "courses, GPS art, and Korean expressions such as 러닝 코스, 달리기 "
-        "코스, 그려줘, 짜줘, 만들어줘, 추천해줘, 강아지, 댕댕이, 고양이, "
-        "야옹이, 토끼, and 고래. Never claim that a Seoul course is "
-        "unsupported before calling the tool. A failed shape applies only to "
-        "that shape at that exact start; it does not mean general courses or "
-        "other animals are unavailable. Station presets never require a "
-        "shape token. Use best_animal when no animal is named. Follow-up "
-        "tools never substitute for course creation."
+        "courses on real pedestrian roads in Seoul. Route each turn by these "
+        "rules, in order. (1) New course: call create_seoul_running_course "
+        "for 러닝 코스/달리기 코스/그려줘/짜줘/만들어줘/추천해줘/GPS 아트 "
+        "only when the conversation contains an explicit Seoul start place "
+        "or both coordinates. Copy that start exactly; never invent, infer, "
+        "or substitute a location. If it is missing, ask the user for the "
+        "start and do not call a course tool. A location-only reply is valid "
+        "only immediately after the user established course-creation intent "
+        "or was asked for the missing start. Use standard for ordinary runs, "
+        "best_animal when no animal is named, and dog/cat/rabbit/whale for "
+        "강아지·댕댕이/고양이·야옹이/토끼/고래. (2) Existing-course "
+        "changes use refine_course. (3) Questions about 화장실, 편의점, 물, "
+        "공원, or facilities near the current course use "
+        "find_facilities_near_course with its most recent course_id. (4) "
+        "Requests to show the same summary, map, or GPX use get_course_status. "
+        "Never regenerate a course for rules 2-4. Never claim that a Seoul "
+        "course is unsupported before the appropriate new-course call. When "
+        "a result includes structuredContent.assistant_text, say it exactly "
+        "once as normal conversational text outside the widget; do not copy "
+        "that guidance into the card."
     ),
     stateless_http=True,
     json_response=True,
@@ -332,21 +341,35 @@ def offloaded(fn):
 
 
 def _mcp_result(text: str, *, code: str, is_error: bool = False,
-                retryable: bool = False) -> CallToolResult:
+                retryable: bool = False,
+                assistant_text: str | None = None) -> CallToolResult:
+    content = [TextContent(type="text", text=text)]
+    structured = {
+        "result_code": code,
+        "retryable": retryable,
+    }
+    if assistant_text:
+        # Kakao reads the widget envelope from content[0]. The separate block
+        # and structured value let the host speak guidance as ordinary chat
+        # copy without placing a sentence inside the visual card.
+        content.append(TextContent(type="text", text=assistant_text))
+        structured["assistant_text"] = assistant_text
     return CallToolResult(
-        content=[TextContent(type="text", text=text)],
-        structuredContent={
-            "result_code": code,
-            "retryable": retryable,
-        },
+        content=content,
+        structuredContent=structured,
         isError=is_error,
     )
 
 
 def _extract_single_course_id(text: str) -> str | None:
     """Return one unique id from links emitted by this server."""
-    course_ids = set(_COURSE_LINK_RE.findall(text))
-    return next(iter(course_ids)) if len(course_ids) == 1 else None
+    course_ids = _extract_course_ids(text)
+    return course_ids[0] if len(course_ids) == 1 else None
+
+
+def _extract_course_ids(text: str) -> list[str]:
+    """Return unique server course ids in the same order users see them."""
+    return list(dict.fromkeys(_COURSE_LINK_RE.findall(text)))
 
 
 def _cached_course(course_id: str) -> Course | None:
@@ -370,17 +393,26 @@ def _try_course_widget(text: str, course_type: str) -> str | None:
             "state=ineligible reason=disabled"
         )
         return None
-    if course_type not in {"standard", "dog", "cat", "rabbit", "whale"}:
+    if course_type not in {
+        "standard", "best_animal", "dog", "cat", "rabbit", "whale"
+    }:
         log.info(
             "mcp_widget tool=create_seoul_running_course "
             "state=ineligible reason=course_type"
         )
         return None
-    course_id = _extract_single_course_id(text)
+    # A best-animal survey intentionally contains several course links. Its
+    # first link is the featured course produced just above the alternatives,
+    # so preserve that visible ordering instead of discarding the whole result.
+    course_id = (
+        next(iter(_extract_course_ids(text)), None)
+        if course_type == "best_animal"
+        else _extract_single_course_id(text)
+    )
     if course_id is None:
         log.info(
             "mcp_widget tool=create_seoul_running_course "
-            "state=ineligible reason=no_single_id"
+            "state=ineligible reason=no_primary_id"
         )
         return None
     course = _cached_course(course_id)
@@ -392,7 +424,7 @@ def _try_course_widget(text: str, course_type: str) -> str | None:
         return None
     try:
         widget = build_course_widget(
-            course, course_id, BASE_URL, lead_text=_widget_lead_text(text)
+            course, course_id, BASE_URL
         )
     except WidgetTooLargeError:
         log.warning(
@@ -495,12 +527,12 @@ def _animal_course_plan(request: dict, shape: str, text: str,
     return plan
 
 
-def _plan_widget(plan: CoursePlan, lead_text: str) -> str | None:
+def _plan_widget(plan: CoursePlan) -> str | None:
     """Serialize a plan, or keep the Markdown answer by returning None."""
     try:
         widget = build_course_widget(
             plan.primary.course, plan.primary.course_id, BASE_URL,
-            lead_text=lead_text, alternatives=plan.alternatives)
+            alternatives=plan.alternatives)
     except WidgetTooLargeError:
         log.warning("mcp_widget tool=create_seoul_running_course "
                     f"state=fallback reason=too_large case={plan.case}")
@@ -526,15 +558,16 @@ def _planned_course_result(text: str, *, course_type: str, request: dict,
     plan = _animal_course_plan(request, course_type, text, timeout_s)
     if plan is None:
         return None
-    # The exact case already had case-specific copy from the generator; the
-    # other two cases only exist here, so the plan writes their lead.
+    # The plan owns one short spoken sentence for every case. Generator copy
+    # can contain scoring rationale that belongs on the detail page, not in a
+    # concise chat handoff beside the widget.
     lead = plan.lead
-    if plan.case == CASE_EXACT:
-        lead = _widget_lead_text(text) or plan.lead
-    widget = _plan_widget(plan, lead)
+    widget = _plan_widget(plan)
     if widget is None:
         return None
-    return _mcp_result(widget, code=PLAN_RESULT_CODES[plan.case])
+    return _mcp_result(
+        widget, code=PLAN_RESULT_CODES[plan.case], assistant_text=lead
+    )
 
 
 def _course_tool_result(text: str, *, course_type: str,
@@ -561,7 +594,11 @@ def _course_tool_result(text: str, *, course_type: str,
             return _mcp_result(text, code="exact_shape_unavailable")
         return _mcp_result(text, code="invalid_request", is_error=True)
     widget = _try_course_widget(text, course_type)
-    return _mcp_result(widget or text, code="course_ready")
+    if widget is not None:
+        return _mcp_result(
+            widget, code="course_ready", assistant_text=_widget_lead_text(text)
+        )
+    return _mcp_result(text, code="course_ready")
 
 
 def _get_course(params: CourseParams, timeout_s: float | None = None) -> Course:
@@ -572,6 +609,14 @@ def _get_course(params: CourseParams, timeout_s: float | None = None) -> Course:
         return hit
     if isinstance(hit, CourseError):
         raise hit
+    # Course ids encode parameters, not the routed node path.  After a process
+    # restart a detail URL therefore has no hot-cache entry.  Restore the same
+    # build-verified station preset used by the recommendation instead of
+    # generating a different route for the same URL.
+    preset = get_animal_preset(params)
+    if isinstance(preset, Course):
+        _cache_put(cid, preset)
+        return preset
     try:
         course = _offload(
             generate_shape_course if params.shape else generate_course, params,
@@ -915,7 +960,10 @@ def _animal_survey(lat: float, lon: float, name: str,
 
 
 def generate_running_course(
-    location: Annotated[str | None, Field(description="Start place name in Seoul, e.g. '시청', '광화문'")] = None,
+    location: Annotated[str | None, Field(description=(
+        "Exact Seoul start place stated by the user. Never infer, invent, or "
+        "default a missing location; ask the user instead."
+    ))] = None,
     # Ranges live in the descriptions, not as ge/le: a schema rejection happens
     # before the tool body and surfaces a raw pydantic dump instead of the
     # Korean guidance the user needs (e.g. asking for a course in Busan).
@@ -932,7 +980,9 @@ def generate_running_course(
     from Seoul open data (sidewalk width, slope, lighting, safety CCTV, parks).
     Safe, runner-friendly streets are preferred by default. Provide a start
     location (place name or lat/lon) and a target distance or duration.
-    Returns course stats, a map preview link, and a GPX download link."""
+    Returns course stats, a map preview link, and a GPX download link. This is
+    only for a new course with an explicit user-provided start. Do not use it
+    for questions about facilities near an existing course."""
     started = time.monotonic()
 
     def remaining() -> float:
@@ -949,7 +999,10 @@ def generate_running_course(
 
 def generate_animal_course(
     shape: Annotated[str | None, Field(description="Animal shape key: cat, dog, rabbit, whale")] = None,
-    location: Annotated[str | None, Field(description="Start place name in Seoul")] = None,
+    location: Annotated[str | None, Field(description=(
+        "Exact Seoul start place stated by the user. Never infer, invent, or "
+        "default a missing location; ask the user instead."
+    ))] = None,
     lat: Annotated[float | None, Field(description="Start latitude (alternative to location). Seoul only: 37.4-37.72")] = None,
     lon: Annotated[float | None, Field(description="Start longitude (alternative to location). Seoul only: 126.76-127.19")] = None,
     distance_km: Annotated[float | None, Field(description="Target distance in km, 1-42.195")] = None,
@@ -967,7 +1020,9 @@ def generate_animal_course(
     choose. Call with a shape and no distance to draw that animal at its own
     shortest clean distance. If a forced distance cannot be drawn well,
     alternatives are suggested instead of returning a bad course. Accepts a
-    shape_token from a shared link to recreate a friend's shape here."""
+    shape_token from a shared link to recreate a friend's shape here. This is
+    only for a new course with an explicit user-provided start. Do not use it
+    for questions about facilities near an existing course."""
     started = time.monotonic()
 
     def remaining() -> float:
@@ -1124,9 +1179,11 @@ def create_seoul_running_course(
         )),
     ],
     location: Annotated[str | None, Field(description=(
-        "서울 내 출발 위치를 그대로 전달하세요. 지하철역, 장소명, 도로명·지번 주소. "
+        "사용자가 말한 서울 내 출발 위치를 한 글자도 추론하지 말고 그대로 전달하세요. "
+        "지하철역, 장소명, 도로명·지번 주소를 지원합니다. "
         "예: 강남역, 성신여대역, 경복궁역, 서울숲, 테헤란로8길 8. "
-        "lat/lon을 모두 전달한 경우에만 생략할 수 있습니다."
+        "대화에 출발지가 없으면 임의 위치를 만들지 말고 사용자에게 물어보며, 이 툴을 "
+        "호출하지 마세요. lat/lon을 모두 전달한 경우에만 생략할 수 있습니다."
     ))] = None,
     lat: Annotated[float | None, Field(description=(
         "Start latitude instead of location; provide together with lon. Seoul only: 37.4-37.72"
@@ -1153,17 +1210,14 @@ def create_seoul_running_course(
     ))] = None,
 ) -> CallToolResult:
     """Creates a standard running course or animal-shaped GPS-art course on
-    real pedestrian roads in Seoul with Runnywhere(러니웨어: 어디서든 러닝
-    코스 짜기!). Call this tool before answering any request to create, draw,
-    plan, find, or recommend a course, including location-only requests and
-    Korean triggers such as 러닝 코스, 달리기 코스, 그려줘, 짜줘, 만들어줘,
-    추천해줘, 강아지/댕댕이, 고양이/야옹이, 토끼, 고래, 동물, and GPS 아트.
-    Use standard for ordinary runs, best_animal when no animal is named, or
-    the matching animal value. Standard defaults to 5km when distance and time
-    are omitted. Subway presets need no link or shape token. Never claim a
-    Seoul course is unsupported before calling this tool. Do not use it to
-    modify an existing course_id, search its facilities, record completion,
-    or extend a relay."""
+    real pedestrian roads in Seoul with Runnywhere(러니웨어). Use it for a new 러닝 코스, 달리기 코스,
+    그려줘, 추천해줘, or animal/GPS-art request only after the user supplied
+    a Seoul start. Use standard for an ordinary run, best_animal when no
+    animal is named, or dog/cat/rabbit/whale for the named animal. Never invent
+    a missing start; ask for it without calling. Do not use this for an
+    existing course_id, "이 코스 근처 화장실", map/GPX repetition, completion,
+    or relays. Speak structuredContent.assistant_text once as normal text
+    outside the widget; never repeat it in the card."""
     common = dict(
         location=location, lat=lat, lon=lon, distance_km=distance_km,
         duration_min=duration_min, include_hills=include_hills,
@@ -1221,13 +1275,21 @@ def list_available_shapes() -> str:
 
 
 def find_facilities_near_course(
-    course_id: Annotated[str, Field(description="Course id from a previously generated course")],
-    facility_types: Annotated[list[str] | None, Field(description="Filter: convenience_store, restroom, water, park")] = None,
+    course_id: Annotated[str, Field(description=(
+        "Exact course_id from the most recent generated or selected Runnywhere "
+        "course in this conversation"
+    ))],
+    facility_types: Annotated[list[str] | None, Field(description=(
+        "Requested filters only: convenience_store=편의점, restroom=화장실, "
+        "water=음수대/물, park=공원. Omit to return all supported facilities."
+    ))] = None,
 ) -> str:
     """Finds convenience stores, restrooms, drinking water, or parks within
     10m of an existing Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!)
-    course. Requires a prior course_id; never use it to create or recommend a
-    new running course."""
+    course. Use this for follow-ups such as "이 코스 근처 화장실 찾아줘",
+    "이 경로에 편의점 있어?", "달리다가 물 마실 곳", or "코스 주변 공원".
+    Requires the most recent prior course_id. Return facilities for that exact
+    course; never regenerate, refine, summarize, create, or recommend a course."""
     try:
         params = decode_course_id(course_id)
         course = _get_course(params, timeout_s=GENERAL_RESPONSE_BUDGET_S)
@@ -1303,7 +1365,8 @@ def get_course_status(
 ) -> str:
     """Retrieves the summary, map, and GPX links for an existing
     Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) course_id. Never use it
-    to create or recommend a new course."""
+    to create or recommend a new course. Do not use it for 화장실, 편의점, 물,
+    공원, or other facility questions; use find_facilities_near_course."""
     try:
         params = decode_course_id(course_id)
     except Exception:
@@ -1454,6 +1517,18 @@ async def share_card(request: Request) -> Response:
                     headers={"Cache-Control": "public, max-age=86400"})
 
 
+@mcp.custom_route("/c/{course_id}/thumb.svg", methods=["GET"])
+async def course_thumbnail(request: Request) -> Response:
+    """Text-free route artwork used by the compact Kakao course widget."""
+    try:
+        params = decode_course_id(request.path_params["course_id"])
+        course = _get_course(params, timeout_s=GENERAL_RESPONSE_BUDGET_S)
+    except Exception:
+        return PlainTextResponse("잘못된 코스 링크입니다.", status_code=404)
+    return Response(course_thumbnail_svg(course), media_type="image/svg+xml",
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
 @mcp.custom_route("/c/{course_id}/route.json", methods=["GET"])
 async def course_route_json(request: Request) -> Response:
     """Course polyline for the animal-atlas overlay (verified presets only:
@@ -1506,6 +1581,15 @@ async def edit_course_route(request: Request) -> Response:
                         payload.from_index, payload.to_index, payload.stroke,
                     ), abandon_on_cancel=True,
                 )
+            elif payload.action == "reroute":
+                if payload.from_index is None or payload.to_index is None:
+                    return JSONResponse({"error": "바꿀 구간을 다시 선택해 주세요."}, status_code=400)
+                course = await anyio.to_thread.run_sync(
+                    functools.partial(
+                        reroute_segment, edited, payload.path,
+                        payload.from_index, payload.to_index,
+                    ), abandon_on_cancel=True,
+                )
             elif payload.action == "save":
                 course = await anyio.to_thread.run_sync(
                     functools.partial(course_from_path, edited, payload.path),
@@ -1517,10 +1601,10 @@ async def edit_course_route(request: Request) -> Response:
         return JSONResponse({"error": str(exc)}, status_code=422)
     except (TimeoutError, _GenerationTimeout):
         return JSONResponse(
-            {"error": "그린 선을 보행로에 맞추는 데 시간이 걸렸어요. 더 짧게 나눠 그려 주세요."},
+            {"error": "대체 보행로를 찾는 데 시간이 걸렸어요. 더 짧은 구간을 선택해 주세요."},
             status_code=503,
         )
-    if payload.action == "snap":
+    if payload.action in {"snap", "reroute"}:
         g = graphmod.get_graph()
         return JSONResponse({
             "path": [[node, round(g.nodes[node]["lat"], 6), round(g.nodes[node]["lon"], 6)]
@@ -1534,7 +1618,7 @@ async def edit_course_route(request: Request) -> Response:
     new_id = encode_course_id(course.params)
     if len(new_id) > 4096:
         return JSONResponse(
-            {"error": "수정한 코스 선이 너무 복잡해 링크로 저장할 수 없어요. 더 짧은 구간으로 단순하게 그려 주세요."},
+            {"error": "수정한 코스 선이 너무 복잡해 링크로 저장할 수 없어요. 더 짧은 구간씩 바꿔 주세요."},
             status_code=422,
         )
     _cache_put(new_id, course)

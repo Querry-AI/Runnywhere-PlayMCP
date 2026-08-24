@@ -5,7 +5,7 @@ import json
 import pytest
 
 from runart.course import Course
-from runart.models import CourseParams, encode_course_id
+from runart.models import CourseParams, decode_course_id, encode_course_id
 from runart import server
 from runart.widget import (
     WIDGET_MAX_BYTES,
@@ -43,6 +43,19 @@ def _contains_key(value, forbidden: str) -> bool:
     return False
 
 
+def _components(value, kind: str) -> list[dict]:
+    found = []
+    if isinstance(value, dict):
+        if value.get("type") == kind:
+            found.append(value)
+        for child in value.values():
+            found.extend(_components(child, kind))
+    elif isinstance(value, list):
+        for child in value:
+            found.extend(_components(child, kind))
+    return found
+
+
 def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     course = _course()
     course_id = encode_course_id(course.params)
@@ -60,27 +73,40 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     assert "\\uac15" not in first
     assert len(first.encode("utf-8")) < WIDGET_MAX_BYTES
 
-    children = payload["widget"]["children"]
-    assert all(
-        (child["type"] == "Text" and set(child) == {"type", "value"})
-        or (child["type"] == "Button" and "label" in child)
-        for child in children
-    )
-    buttons = [child for child in children if child["type"] == "Button"]
-    assert [button["label"] for button in buttons] == ["코스 지도 열기", "GPX 다운로드"]
-    targets = [button["onClickAction"]["payload"]["target"] for button in buttons]
-    assert targets[0] == {
+    card = payload["widget"]
+    assert card["size"] == "md" and card["padding"] == "sm"
+    row = card["children"][0]
+    assert row["type"] == "Row" and row["align"] == "center"
+    image, overview = row["children"]
+    assert image == {
+        "type": "Image",
+        "src": f"https://runnywhere.example/c/{course_id}/thumb.svg",
+        "alt": "강남역 🐶 댕댕런 코스",
+        "width": 132,
+        "height": 132,
+        "fit": "contain",
+        "radius": "lg",
+        "frame": True,
+    }
+    assert overview["type"] == "Col"
+    assert [child["type"] for child in overview["children"]] == [
+        "Title", "Caption", "Text", "Button",
+    ]
+    assert overview["children"][0]["value"] == "🐶 댕댕런"
+    assert overview["children"][1]["value"] == "강남역 출발·도착"
+    assert overview["children"][2]["value"] == "9.0km · 오르막 31m"
+    buttons = _components(card, "Button")
+    assert [button["label"] for button in buttons] == ["코스 보기"]
+    target = buttons[0]["onClickAction"]["payload"]["target"]
+    assert target == {
         "url": f"https://runnywhere.example/c/{course_id}",
         "pcUrl": f"https://runnywhere.example/c/{course_id}",
-    }
-    assert targets[1] == {
-        "url": f"https://runnywhere.example/c/{course_id}.gpx",
-        "pcUrl": f"https://runnywhere.example/c/{course_id}.gpx",
     }
 
     copy_text = payload["copy_text"]
     assert "러닝 친화도" not in first
-    assert "누적 오르막 31m" in first
+    assert "오르막 31m" in first
+    assert "GPX" not in first
     assert "# " not in copy_text
     assert "|" not in copy_text
     assert "[" not in copy_text and "](" not in copy_text
@@ -135,7 +161,9 @@ def test_mcp_success_uses_cached_course_without_regeneration(monkeypatch):
     assert result.structuredContent["result_code"] == "course_ready"
     assert result.isError is False
     assert payload["widget"]["type"] == "Card"
-    assert "기본 5km" in result.content[0].text
+    assert result.structuredContent["assistant_text"].startswith("거리를 말씀하지 않아")
+    assert result.content[1].text == result.structuredContent["assistant_text"]
+    assert "기본 5km" not in result.content[0].text
 
 
 @pytest.mark.parametrize("shape", ["dog", "cat", "rabbit", "whale"])
@@ -177,9 +205,10 @@ def test_new_course_is_cached_and_widgeted_in_its_first_tool_response(monkeypatc
 
     assert len(calls) == 1
     assert payload["widget"]["type"] == "Card"
-    assert payload["widget"]["children"][-2]["onClickAction"]["payload"]["target"][
-        "url"
-    ].endswith(f"/c/{course_id}")
+    primary = _components(payload["widget"], "Button")[0]
+    assert primary["onClickAction"]["payload"]["target"]["url"].endswith(
+        f"/c/{course_id}"
+    )
     with server._CACHE_LOCK:
         assert server._course_cache.get(course_id) is course
 
@@ -213,14 +242,14 @@ def test_legacy_preview_calls_return_latest_widget_contract(
 
     result = getattr(server, legacy_name)(**kwargs)
     payload = json.loads(result.content[0].text)
-    buttons = {child["label"]: child for child in payload["widget"]["children"]
-               if child["type"] == "Button"}
+    buttons = {child["label"]: child
+               for child in _components(payload["widget"], "Button")}
 
     assert result.structuredContent["result_code"] == "course_ready"
     assert payload["widget"]["type"] == "Card"
     # An animal call may now carry alternative choices, so the primary course
     # is identified by its own button rather than by position.
-    target = buttons["코스 지도 열기"]["onClickAction"]["payload"]["target"]["url"]
+    target = buttons["코스 보기"]["onClickAction"]["payload"]["target"]["url"]
     assert target == f"{server.BASE_URL}/c/{course_id}"
 
 
@@ -241,7 +270,8 @@ def test_mcp_widget_falls_back_to_original_markdown(monkeypatch):
 
     monkeypatch.setattr(server, "KAKAO_WIDGETS_ENABLED", True)
     best_animal = server._course_tool_result(markdown, course_type="best_animal")
-    assert best_animal.content[0].text == markdown
+    best_payload = json.loads(best_animal.content[0].text)
+    assert best_payload["widget"]["type"] == "Card"
 
     second = _course(location_name="잠실역", shape=None)
     second_id = encode_course_id(second.params)
@@ -253,6 +283,20 @@ def test_mcp_widget_falls_back_to_original_markdown(monkeypatch):
         ambiguous, course_type="standard"
     )
     assert multiple_ids.content[0].text == ambiguous
+
+    # best_animal intentionally lists alternatives; its first visible course
+    # is the featured recommendation and must survive as the primary card.
+    best_with_choices = server._course_tool_result(
+        ambiguous, course_type="best_animal"
+    )
+    best_choices_payload = json.loads(best_with_choices.content[0].text)
+    primary_button = next(
+        child for child in _components(best_choices_payload["widget"], "Button")
+        if child.get("label") == "코스 보기"
+    )
+    assert primary_button["onClickAction"]["payload"]["target"]["url"] == (
+        f"{server.BASE_URL}/c/{course_id}"
+    )
 
     error_text = "⚠️ 출발 위치가 필요해요."
     error = server._course_tool_result(error_text, course_type="standard")
@@ -293,7 +337,6 @@ def test_course_widget_offers_the_alternative_choices_as_extra_buttons():
 
     serialized = build_course_widget(
         primary, primary_id, "https://runnywhere.example",
-        lead_text="서울대입구역에는 검증된 강아지 코스가 없어요.",
         alternatives=(
             CourseChoice(other, other_id, "other_animal", 900.0),
             CourseChoice(plain, plain_id, "standard", 0.0),
@@ -301,22 +344,20 @@ def test_course_widget_offers_the_alternative_choices_as_extra_buttons():
     )
     payload = json.loads(serialized)
     children = payload["widget"]["children"]
-    buttons = [child for child in children if child["type"] == "Button"]
+    buttons = _components(children, "Button")
     labels = [button["label"] for button in buttons]
 
     assert payload["widget"]["type"] == "Card"
     assert not _contains_key(payload, "status")
-    assert labels[:2] == ["코스 지도 열기", "GPX 다운로드"]
-    assert len(labels) == 4
-    assert "야옹런" in labels[2] and "6.0km" in labels[2] and "봉천역" in labels[2]
-    assert "0.9km" in labels[2]
-    assert "5.0km" in labels[3]
-    # A choice that starts where the runner asked needs no detour distance.
-    assert "km 떨어진" not in labels[3]
+    assert labels[0] == "코스 보기"
+    assert len(labels) == 3
+    assert "야옹런" in labels[1] and "6.0km" in labels[1] and "봉천역" in labels[1]
+    assert "5.0km" in labels[2]
+    assert all("떨어진" not in label for label in labels)
     targets = [button["onClickAction"]["payload"]["target"]["url"]
                for button in buttons]
-    assert targets[2] == f"https://runnywhere.example/c/{other_id}"
-    assert targets[3] == f"https://runnywhere.example/c/{plain_id}"
+    assert targets[1] == f"https://runnywhere.example/c/{other_id}"
+    assert targets[2] == f"https://runnywhere.example/c/{plain_id}"
     assert len(serialized.encode("utf-8")) < WIDGET_MAX_BYTES
     # KakaoTalk share copy must carry the same choices, without link markup.
     copy_text = payload["copy_text"]
@@ -324,11 +365,31 @@ def test_course_widget_offers_the_alternative_choices_as_extra_buttons():
     assert "[" not in copy_text and "](" not in copy_text
 
 
-def test_course_widget_without_alternatives_keeps_the_two_button_card():
+def test_widget_primary_link_decodes_to_the_same_detail_start_and_course():
+    """A card must never open a detail page for a different course/start."""
+    course = _course(location_name="경복궁역", shape="rabbit")
+    course_id = encode_course_id(course.params)
+    payload = json.loads(build_course_widget(
+        course, course_id, "https://runnywhere.example"
+    ))
+    primary = next(
+        child for child in _components(payload["widget"], "Button")
+        if child.get("label") == "코스 보기"
+    )
+    linked_id = primary["onClickAction"]["payload"]["target"]["url"].rsplit(
+        "/", 1
+    )[1]
+
+    assert linked_id == course_id
+    assert decode_course_id(linked_id).canonical() == course.params.canonical()
+    assert any(child.get("value") == "경복궁역 출발·도착"
+               for child in _components(payload["widget"], "Caption"))
+
+
+def test_course_widget_without_alternatives_keeps_one_primary_action():
     course = _course()
     course_id = encode_course_id(course.params)
     payload = json.loads(
         build_course_widget(course, course_id, "https://runnywhere.example"))
-    buttons = [child for child in payload["widget"]["children"]
-               if child["type"] == "Button"]
-    assert [button["label"] for button in buttons] == ["코스 지도 열기", "GPX 다운로드"]
+    buttons = _components(payload["widget"], "Button")
+    assert [button["label"] for button in buttons] == ["코스 보기"]

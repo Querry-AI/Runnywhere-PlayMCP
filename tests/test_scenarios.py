@@ -58,14 +58,17 @@ def test_failed_shape_does_not_poison_another_animal_or_standard_course():
     rabbit_text = rabbit.content[0].text
     dog_text = dog.content[0].text
     standard_text = standard.content[0].text
+    rabbit_guidance = rabbit.structuredContent["assistant_text"]
+    standard_guidance = standard.structuredContent["assistant_text"]
     # The rabbit answer keeps its own failure scoped to the rabbit, and now
     # proves it by offering the other choices in the same response.
-    assert "토끼" in rabbit_text and "일반 코스만 가능" not in rabbit_text
-    assert _is_course(rabbit_text)
+    assert "토끼" in rabbit_guidance and "일반 코스만 가능" not in rabbit_guidance
+    assert '"widget"' in rabbit_text and "/c/" in rabbit_text
     assert "댕댕런" in rabbit_text or "야옹런" in rabbit_text or "고래런" in rabbit_text
     assert rabbit.structuredContent["result_code"] == "nearby_course_ready"
-    assert _is_course(dog_text) and "댕댕런" in dog_text
-    assert _is_course(standard_text) and "기본 5km" in standard_text
+    assert '"widget"' in dog_text and "/c/" in dog_text and "댕댕런" in dog_text
+    assert '"widget"' in standard_text and "/c/" in standard_text
+    assert "기본 5km" in standard_guidance
 
 
 # P4 야간 러너: 야간 안전 모드
