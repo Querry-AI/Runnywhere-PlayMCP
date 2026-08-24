@@ -185,6 +185,59 @@ def _widget_title(course: Course) -> str:
     return _plain_text(f"{TRACK_EMOJI} {place + '런' if place else '러닝 코스'}", 40)
 
 
+def _course_card_row(course: Course, course_id: str, origin: str) -> dict:
+    """One complete, reusable course card row.
+
+    Primary and alternative recommendations intentionally share this exact
+    structure.  A smaller alternative button made the other valid courses
+    read like filters rather than equally inspectable recommendations.
+    """
+    preview_url = f"{origin}/c/{course_id}"
+    title = _widget_title(course)
+    location = _plain_text(course.params.location_name or "지정한 출발점", 120)
+    metrics = _plain_text(
+        f"{course.length_km:.1f}km · 오르막 {course.ascent_m:.0f}m", 120
+    )
+    button = _button("코스 보기", preview_url)
+    button.update({
+        "style": "primary", "variant": "solid", "size": "sm", "block": True,
+    })
+    return {
+        "type": "Row",
+        "gap": "md",
+        "align": "center",
+        "children": [
+            {
+                "type": "Image",
+                "src": f"{preview_url}/thumb.svg",
+                "alt": _plain_text(f"{location} {title} 실제 지도 코스", 120),
+                "width": 116,
+                "height": 116,
+                "fit": "contain",
+                "radius": "lg",
+                "frame": True,
+            },
+            {
+                "type": "Col",
+                "gap": "xs",
+                "flex": 1,
+                "children": [
+                    {"type": "Title", "value": title, "size": "md", "maxLines": 1},
+                    {
+                        "type": "Caption", "value": f"{location} 출발·도착",
+                        "size": "sm", "maxLines": 1,
+                    },
+                    {
+                        "type": "Text", "value": metrics, "size": "sm",
+                        "weight": "semibold", "maxLines": 1,
+                    },
+                    button,
+                ],
+            },
+        ],
+    }
+
+
 def build_course_widget(
     course: Course,
     course_id: str,
@@ -205,69 +258,16 @@ def build_course_widget(
         if not _COURSE_ID_RE.fullmatch(choice.course_id):
             raise WidgetBuildError("invalid course id")
     origin = _origin(base_url)
-    preview_url = f"{origin}/c/{course_id}"
-    thumbnail_url = f"{preview_url}/thumb.svg"
-
     title = _widget_title(course)
     location = _plain_text(course.params.location_name or "지정한 출발점", 120)
-    metrics = _plain_text(
-        f"{course.length_km:.1f}km · 오르막 {course.ascent_m:.0f}m",
-        120,
-    )
-
-    primary_button = _button("코스 보기", preview_url)
-    primary_button.update({
-        "style": "primary", "variant": "solid", "size": "sm", "block": True,
-    })
-    children: list[dict] = [{
-        "type": "Row",
-        "gap": "md",
-        "align": "center",
-        "children": [
-            {
-                "type": "Image",
-                "src": thumbnail_url,
-                "alt": _plain_text(f"{location} {title} 코스", 120),
-                "width": 132,
-                "height": 132,
-                "fit": "contain",
-                "radius": "lg",
-                "frame": True,
-            },
-            {
-                "type": "Col",
-                "gap": "xs",
-                "flex": 1,
-                "children": [
-                    {"type": "Title", "value": title, "size": "md", "maxLines": 1},
-                    {
-                        "type": "Caption", "value": f"{location} 출발·도착",
-                        "size": "sm", "maxLines": 1,
-                    },
-                    {
-                        "type": "Text", "value": metrics, "size": "sm",
-                        "weight": "semibold", "maxLines": 1,
-                    },
-                    primary_button,
-                ],
-            },
-        ],
-    }]
+    preview_url = f"{origin}/c/{course_id}"
+    children: list[dict] = [_course_card_row(course, course_id, origin)]
     if alternatives:
-        children.append({"type": "Divider", "spacing": "xs"})
-        alternative_buttons = []
         for choice in alternatives:
-            button = _button(
-                _choice_label(choice), f"{origin}/c/{choice.course_id}"
-            )
-            button.update({
-                "style": "secondary", "variant": "soft", "size": "sm",
-                "block": True,
-            })
-            alternative_buttons.append(button)
-        children.append({
-            "type": "Col", "gap": "xs", "children": alternative_buttons,
-        })
+            children.append({"type": "Divider", "spacing": "xs"})
+            children.append(_course_card_row(
+                choice.course, choice.course_id, origin
+            ))
 
     copy_title = _copy_value(title, 80)
     copy_location = _copy_value(location, 120)

@@ -81,9 +81,9 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     assert image == {
         "type": "Image",
         "src": f"https://runnywhere.example/c/{course_id}/thumb.svg",
-        "alt": "강남역 🐶 댕댕런 코스",
-        "width": 132,
-        "height": 132,
+        "alt": "강남역 🐶 댕댕런 실제 지도 코스",
+        "width": 116,
+        "height": 116,
         "fit": "contain",
         "radius": "lg",
         "frame": True,
@@ -162,6 +162,8 @@ def test_mcp_success_uses_cached_course_without_regeneration(monkeypatch):
     assert result.isError is False
     assert payload["widget"]["type"] == "Card"
     assert result.structuredContent["assistant_text"].startswith("거리를 말씀하지 않아")
+    assert result.structuredContent["assistant_text_position"] == "before_widget"
+    assert result.structuredContent["assistant_text_verbatim"] is True
     assert result.content[1].text == result.structuredContent["assistant_text"]
     assert "기본 5km" not in result.content[0].text
 
@@ -242,14 +244,13 @@ def test_legacy_preview_calls_return_latest_widget_contract(
 
     result = getattr(server, legacy_name)(**kwargs)
     payload = json.loads(result.content[0].text)
-    buttons = {child["label"]: child
-               for child in _components(payload["widget"], "Button")}
+    buttons = _components(payload["widget"], "Button")
 
     assert result.structuredContent["result_code"] == "course_ready"
     assert payload["widget"]["type"] == "Card"
     # An animal call may now carry alternative choices, so the primary course
     # is identified by its own button rather than by position.
-    target = buttons["코스 보기"]["onClickAction"]["payload"]["target"]["url"]
+    target = buttons[0]["onClickAction"]["payload"]["target"]["url"]
     assert target == f"{server.BASE_URL}/c/{course_id}"
 
 
@@ -320,8 +321,8 @@ def test_mcp_widget_build_error_preserves_markdown_and_result_code(monkeypatch):
     assert result.isError is False
 
 
-def test_course_widget_offers_the_alternative_choices_as_extra_buttons():
-    """Case 2/3 answers are only useful if the other two choices are clickable."""
+def test_course_widget_offers_every_alternative_as_a_full_matching_card():
+    """All three recommendations need the same image, facts, and action."""
     from runart.courseplan import CourseChoice
 
     primary = _course(location_name="낙성대(강감찬)역")
@@ -346,14 +347,22 @@ def test_course_widget_offers_the_alternative_choices_as_extra_buttons():
     children = payload["widget"]["children"]
     buttons = _components(children, "Button")
     labels = [button["label"] for button in buttons]
+    rows = _components(children, "Row")
+    images = _components(children, "Image")
+    titles = [item["value"] for item in _components(children, "Title")]
+    captions = [item["value"] for item in _components(children, "Caption")]
 
     assert payload["widget"]["type"] == "Card"
     assert not _contains_key(payload, "status")
-    assert labels[0] == "코스 보기"
-    assert len(labels) == 3
-    assert "야옹런" in labels[1] and "6.0km" in labels[1] and "봉천역" in labels[1]
-    assert "5.0km" in labels[2]
-    assert all("떨어진" not in label for label in labels)
+    assert labels == ["코스 보기"] * 3
+    assert len(rows) == len(images) == 3
+    assert "야옹런" in titles[1]
+    assert captions == [
+        "낙성대(강감찬)역 출발·도착",
+        "봉천역 출발·도착",
+        "서울대입구역 출발·도착",
+    ]
+    assert all(image["width"] == image["height"] == 116 for image in images)
     targets = [button["onClickAction"]["payload"]["target"]["url"]
                for button in buttons]
     assert targets[1] == f"https://runnywhere.example/c/{other_id}"

@@ -41,13 +41,17 @@ def test_closed_course_start_is_rebased_to_nearest_requested_point():
     assert original.path == [10, 20, 30, 10]
 
 
-def test_course_thumbnail_is_square_route_art_without_duplicate_copy():
+def test_course_thumbnail_places_route_over_the_real_osm_street_network():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
 
     svg = course_thumbnail_svg(course)
 
     assert 'viewBox="0 0 320 320"' in svg
     assert "<polyline" in svg and "<circle" in svg
+    assert '<clipPath id="map-clip">' in svg
+    assert svg.count("<path") >= 4
+    assert "M0 80H320" not in svg  # decorative grid was not a real map
+    assert 'stroke="#fff" stroke-width="2.2"' in svg
     assert "<text" not in svg
     assert "시청" not in svg and "5.0km" not in svg
 

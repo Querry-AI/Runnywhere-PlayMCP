@@ -1387,7 +1387,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
 # ---------- share card (SVG, no image deps) ----------
 
 def course_thumbnail_svg(course: Course) -> str:
-    """Square, text-free route artwork for compact course widgets."""
+    """Square, text-free route artwork over the real bundled OSM street map."""
     points = route_points(course)
     lats = [point[0] for point in points]
     lons = [point[1] for point in points]
@@ -1404,16 +1404,79 @@ def course_thumbnail_svg(course: Course) -> str:
     )
     first_x = size / 2 + (points[0][1] - lon_c) * scale * 0.79
     first_y = size / 2 - (points[0][0] - lat_c) * scale
+
+    # Draw the actual walk-network under the course instead of a decorative
+    # grid.  The image stays self-contained (important for Kakao's image
+    # proxy), while every background line corresponds to a real OSM edge.
+    pad_lat = max(span_lat * 0.18, 0.0007)
+    pad_lon = max((max(lons) - min(lons)) * 0.18, 0.0007)
+    lat_lo, lat_hi = min(lats) - pad_lat, max(lats) + pad_lat
+    lon_lo, lon_hi = min(lons) - pad_lon, max(lons) + pad_lon
+    radius_m = max(
+        haversine_m(lat_c, lon_c, lat, lon)
+        for lat, lon in ((lat_lo, lon_lo), (lat_lo, lon_hi),
+                         (lat_hi, lon_lo), (lat_hi, lon_hi))
+    )
+    streets = graphmod.subgraph_around(lat_c, lon_c, radius_m)
+    major_types = {"primary", "secondary", "tertiary"}
+    major: list[tuple[float, object, object]] = []
+    minor: list[tuple[float, object, object]] = []
+    for u, v, attrs in streets.edges(data=True):
+        a, b = streets.nodes[u], streets.nodes[v]
+        if not (
+            lat_lo <= a["lat"] <= lat_hi and lon_lo <= a["lon"] <= lon_hi
+            or lat_lo <= b["lat"] <= lat_hi and lon_lo <= b["lon"] <= lon_hi
+        ):
+            continue
+        highway = attrs.get("highway")
+        if isinstance(highway, (list, tuple)):
+            highway = highway[0] if highway else ""
+        target = major if str(highway) in major_types else minor
+        target.append((float(attrs.get("length", 0.0)), u, v))
+    major.sort(reverse=True, key=lambda item: item[0])
+    minor.sort(reverse=True, key=lambda item: item[0])
+
+    def project(point: tuple[float, float]) -> tuple[float, float]:
+        lat, lon = point
+        return (
+            size / 2 + (lon - lon_c) * scale * 0.79,
+            size / 2 - (lat - lat_c) * scale,
+        )
+
+    def street_path(edges: list[tuple[float, object, object]]) -> str:
+        commands: list[str] = []
+        for _, u, v in edges:
+            geometry = graphmod.edge_points(streets, u, v)
+            if len(geometry) > 8:
+                step = max(1, math.ceil(len(geometry) / 8))
+                geometry = geometry[::step] + [geometry[-1]]
+            xy = [project(point) for point in geometry]
+            commands.append("M" + " L".join(
+                f"{x:.1f},{y:.1f}" for x, y in xy
+            ))
+        return " ".join(commands)
+
+    major_roads = street_path(major[:180])
+    minor_roads = street_path(minor[:360])
     return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}">
- <rect width="{size}" height="{size}" rx="32" fill="#eef6f1"/>
- <path d="M0 80H320M0 160H320M0 240H320M80 0V320M160 0V320M240 0V320"
-   fill="none" stroke="#dcebe2" stroke-width="1"/>
+ <defs><clipPath id="map-clip"><rect width="{size}" height="{size}" rx="32"/></clipPath></defs>
+ <g clip-path="url(#map-clip)">
+  <rect width="{size}" height="{size}" fill="#edf2ed"/>
+  <path d="{minor_roads}" fill="none" stroke="#d8ded9" stroke-width="4"
+    stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="{minor_roads}" fill="none" stroke="#fff" stroke-width="2.2"
+    stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="{major_roads}" fill="none" stroke="#ccd4ce" stroke-width="7"
+    stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="{major_roads}" fill="none" stroke="#fff" stroke-width="4.5"
+    stroke-linecap="round" stroke-linejoin="round"/>
  <polyline points="{route}" fill="none" stroke="#fff" stroke-width="15"
    stroke-linejoin="round" stroke-linecap="round"/>
  <polyline points="{route}" fill="none" stroke="#087b59" stroke-width="8"
    stroke-linejoin="round" stroke-linecap="round"/>
  <circle cx="{first_x:.1f}" cy="{first_y:.1f}" r="8" fill="#fff"
    stroke="#087b59" stroke-width="5"/>
+ </g>
 </svg>"""
 
 

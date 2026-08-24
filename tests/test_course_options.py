@@ -71,6 +71,8 @@ def _urls(payload) -> list[str]:
 def _lead(result) -> str:
     lead = result.structuredContent["assistant_text"]
     assert result.content[1].text == lead
+    assert result.structuredContent["assistant_text_position"] == "before_widget"
+    assert result.structuredContent["assistant_text_verbatim"] is True
     return lead
 
 
@@ -81,6 +83,7 @@ def test_case1_exact_course_here_also_offers_another_animal_and_a_plain_course()
     result = server.create_seoul_running_course(course_type="dog", location="강남역")
     payload = _card(result)
     labels = _labels(payload)
+    titles = _values(payload, "Title")
 
     assert result.structuredContent["result_code"] == "course_ready"
     assert result.isError is False
@@ -88,8 +91,8 @@ def test_case1_exact_course_here_also_offers_another_animal_and_a_plain_course()
     assert len(labels) == 3
     assert "댕댕런" in json.dumps(payload, ensure_ascii=False)
     # (b) a different animal, (c) a plain course — both at the requested start.
-    assert any(run in labels[1] for run in ANIMAL_RUNS if run != "댕댕런")
-    assert not any(run in labels[2] for run in ANIMAL_RUNS)
+    assert any(run in titles[1] for run in ANIMAL_RUNS if run != "댕댕런")
+    assert not any(run in titles[2] for run in ANIMAL_RUNS)
     assert len(set(_urls(payload)[1:])) == 2
 
 
@@ -121,17 +124,18 @@ def test_case3_no_animal_within_two_km_leads_with_the_plain_course_here():
     payload = _card(result)
     lead = _lead(result)
     labels = _labels(payload)
+    titles = _values(payload, "Title")
 
     assert "도봉산역" in lead
     assert "1~2km" in lead
     assert "강아지" in lead
     # (a) the plain course at the requested start leads the card.
-    title = _values(payload, "Title")[0]
+    title = titles[0]
     assert "도봉산" in title
     assert not any(run in title for run in ANIMAL_RUNS)
     # (b)/(c) the animal courses stay one click away.
     assert len(labels) >= 3
-    assert any(run in label for run in ANIMAL_RUNS for label in labels[1:])
+    assert any(run in candidate for run in ANIMAL_RUNS for candidate in titles[1:])
 
 
 def test_every_choice_url_resolves_to_a_real_course_page():

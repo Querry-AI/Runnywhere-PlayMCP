@@ -103,9 +103,10 @@ mcp = FastMCP(
         "Requests to show the same summary, map, or GPX use get_course_status. "
         "Never regenerate a course for rules 2-4. Never claim that a Seoul "
         "course is unsupported before the appropriate new-course call. When "
-        "a result includes structuredContent.assistant_text, say it exactly "
-        "once as normal conversational text outside the widget; do not copy "
-        "that guidance into the card."
+        "a result includes structuredContent.assistant_text, your response "
+        "MUST begin with that exact sentence verbatim as normal conversational "
+        "text before introducing the widget. Never paraphrase, replace, or "
+        "repeat it, and do not copy that guidance into the card."
     ),
     stateless_http=True,
     json_response=True,
@@ -354,6 +355,8 @@ def _mcp_result(text: str, *, code: str, is_error: bool = False,
         # copy without placing a sentence inside the visual card.
         content.append(TextContent(type="text", text=assistant_text))
         structured["assistant_text"] = assistant_text
+        structured["assistant_text_position"] = "before_widget"
+        structured["assistant_text_verbatim"] = True
     return CallToolResult(
         content=content,
         structuredContent=structured,
@@ -1216,8 +1219,9 @@ def create_seoul_running_course(
     animal is named, or dog/cat/rabbit/whale for the named animal. Never invent
     a missing start; ask for it without calling. Do not use this for an
     existing course_id, "이 코스 근처 화장실", map/GPX repetition, completion,
-    or relays. Speak structuredContent.assistant_text once as normal text
-    outside the widget; never repeat it in the card."""
+    or relays. The final response MUST start with
+    structuredContent.assistant_text verbatim before introducing the widget;
+    never paraphrase it or repeat it in the card."""
     common = dict(
         location=location, lat=lat, lon=lon, distance_km=distance_km,
         duration_min=duration_min, include_hills=include_hills,
