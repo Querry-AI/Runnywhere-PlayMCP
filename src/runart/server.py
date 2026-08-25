@@ -58,6 +58,30 @@ from .widget import WidgetTooLargeError, build_course_widget
 DEFAULT_BASE_URL = (
     "https://runnywhere-kakaotools.playmcp-endpoint.kakaocloud.io"
 )
+# What a start place may be. The four forms all resolve, but the tools used to
+# describe only "a Seoul place", so an assistant reading the schema had no
+# reason to pass a shop name or a lot-number address and asked for a station
+# instead.
+LOCATION_FORMS_KO = (
+    "지하철역(강남역), 가게·건물 상호명(스타벅스 서울숲점), "
+    "도로명 주소(서울 성동구 아차산로 100), 지번 주소(마포구 상암동 1601)"
+)
+LOCATION_FIELD_KO = (
+    "사용자가 말한 서울 내 출발 위치를 한 글자도 추론하지 말고 그대로 전달하세요. "
+    f"{LOCATION_FORMS_KO}를 모두 지원합니다. "
+    "사용자가 상호명이나 주소를 말했다면 가까운 역 이름으로 바꾸지 말고 말한 그대로 넘기세요. "
+    "대화에 출발지가 없으면 임의 위치를 만들지 말고 사용자에게 물어보며, 이 툴을 "
+    "호출하지 마세요. lat/lon을 모두 전달한 경우에만 생략할 수 있습니다."
+)
+LOCATION_FIELD_EN = (
+    "Exact Seoul start place stated by the user: a subway station, a shop or "
+    "building name, a road-name address, or a lot-number address. Pass it "
+    "verbatim -- do not substitute a nearby station for a shop name or "
+    "address. Never infer, invent, or default a missing location; ask the "
+    "user instead."
+)
+
+
 BASE_URL = os.environ.get("RUNART_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
 _BASE_PARTS = urllib.parse.urlparse(BASE_URL)
 if (_BASE_PARTS.scheme not in {"http", "https"} or not _BASE_PARTS.hostname
@@ -987,10 +1011,7 @@ def _animal_survey(lat: float, lon: float, name: str,
 
 
 def generate_running_course(
-    location: Annotated[str | None, Field(description=(
-        "Exact Seoul start place stated by the user. Never infer, invent, or "
-        "default a missing location; ask the user instead."
-    ))] = None,
+    location: Annotated[str | None, Field(description=LOCATION_FIELD_EN)] = None,
     # Ranges live in the descriptions, not as ge/le: a schema rejection happens
     # before the tool body and surfaces a raw pydantic dump instead of the
     # Korean guidance the user needs (e.g. asking for a course in Busan).
@@ -1026,10 +1047,7 @@ def generate_running_course(
 
 def generate_animal_course(
     shape: Annotated[str | None, Field(description="Animal shape key: cat, dog, rabbit, whale")] = None,
-    location: Annotated[str | None, Field(description=(
-        "Exact Seoul start place stated by the user. Never infer, invent, or "
-        "default a missing location; ask the user instead."
-    ))] = None,
+    location: Annotated[str | None, Field(description=LOCATION_FIELD_EN)] = None,
     lat: Annotated[float | None, Field(description="Start latitude (alternative to location). Seoul only: 37.4-37.72")] = None,
     lon: Annotated[float | None, Field(description="Start longitude (alternative to location). Seoul only: 126.76-127.19")] = None,
     distance_km: Annotated[float | None, Field(description="Target distance in km, 1-42.195")] = None,
@@ -1205,13 +1223,7 @@ def create_seoul_running_course(
             "동물 표현이 있으면 standard를 선택하지 마세요."
         )),
     ],
-    location: Annotated[str | None, Field(description=(
-        "사용자가 말한 서울 내 출발 위치를 한 글자도 추론하지 말고 그대로 전달하세요. "
-        "지하철역, 장소명, 도로명·지번 주소를 지원합니다. "
-        "예: 강남역, 성신여대역, 경복궁역, 서울숲, 테헤란로8길 8. "
-        "대화에 출발지가 없으면 임의 위치를 만들지 말고 사용자에게 물어보며, 이 툴을 "
-        "호출하지 마세요. lat/lon을 모두 전달한 경우에만 생략할 수 있습니다."
-    ))] = None,
+    location: Annotated[str | None, Field(description=LOCATION_FIELD_KO)] = None,
     lat: Annotated[float | None, Field(description=(
         "Start latitude instead of location; provide together with lon. Seoul only: 37.4-37.72"
     ))] = None,
@@ -1339,7 +1351,8 @@ def refine_course(
     include_hills: Annotated[bool | None, Field(description="Change hill preference")] = None,
     night_mode: Annotated[bool | None, Field(description="Change night-safety mode")] = None,
     shape: Annotated[str | None, Field(description="Change animal shape, or 'none' to remove the shape")] = None,
-    location: Annotated[str | None, Field(description="New start place name")] = None,
+    location: Annotated[str | None, Field(
+        description="New start place: " + LOCATION_FIELD_EN)] = None,
     need_facilities: Annotated[list[str] | None, Field(description="New facility requirements")] = None,
 ) -> str:
     """Refines an existing Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!)

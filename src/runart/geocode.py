@@ -462,7 +462,12 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
         # The missing-API-key state is an operator concern; it is already logged
         # at startup and must not be described to end users.
         raise CourseError(
-            f"'{shown}' 위치를 찾지 못했어요. 역 이름이나 도로명·번지까지 포함한 "
-            f"서울 주소로 다시 알려주세요. 예: {known}"
+            f"'{shown}' 위치를 찾지 못했어요. 역 이름, 가게 상호명, 도로명 주소, "
+            "지번 주소 모두 쓸 수 있어요. "
+            "예: 성수역, 스타벅스 서울숲점, 서울 성동구 아차산로 100, 마포구 상암동 1601. "
+            f"근처 역으로 시작하려면: {known}"
         )
-    raise CourseError("출발 위치가 필요해요. 역 이름이나 서울 주소를 알려주세요. 예: 시청, 강남역")
+    raise CourseError(
+        "출발 위치가 필요해요. 역 이름, 가게 상호명, 도로명·지번 주소 중 하나를 "
+        "알려주세요. 예: 강남역, 스타벅스 서울숲점, 서울 중구 세종대로 110"
+    )

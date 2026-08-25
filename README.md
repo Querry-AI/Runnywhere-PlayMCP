@@ -23,7 +23,7 @@ RUNART_LOADTEST_REPORT=artifacts/playmcp-loadtest.json python scripts/loadtest.p
 주소 검색, 재시도, 코스 생성을 포함한 MCP Tool 전체 응답에는 2.85초 상한을
 적용하며, 내부 코스 생성과 외부 지오코딩도 더 짧은 같은 데드라인을 공유한다.
 
-환경변수: `HOST`(로컬 기본 127.0.0.1, 컨테이너 0.0.0.0) · `PORT`(기본 8000) · `RUNART_BASE_URL`(미리보기 링크 도메인) · `RUNART_RELEASE_SHA`(배포 Git SHA, Docker 빌드 인자와 연동) · `KAKAO_JAVASCRIPT_KEY`(카카오맵 Web API, 필수) · `KAKAO_REST_API_KEY`(지오코딩, 선택) · `RUNART_KAKAO_CACHE_TTL_S`(Kakao Local 성공 응답과 원문 검색어의 메모리 캐시 유효시간, 기본 600초) · `RUNART_TOKEN_SECRET`(32자 이상 도감·릴레이 토큰 서명키, 운영 환경 필수) · `RUNART_LEGAL_CONTACT`(정책 문의 이메일, 공개 배포 시 필수) · `WEB_CONCURRENCY`(웹 워커 수, 기본 1) · `RUNART_POOL_WORKERS`(코스 탐색 프로세스 수, 기본 2) · `RATE_LIMIT_RPS`(IP당, 기본 20) · `RUNART_MAX_BODY_BYTES`(MCP 요청 본문, 기본 65,536) · `RUNART_MAX_CONCURRENT_MCP`(컨테이너당 동시 MCP 요청, 기본 10) · `RUNART_MAX_QUEUED_MCP`(동시 처리 한도 초과 시 대기 가능한 요청, 기본 32) · `RUNART_MCP_QUEUE_TIMEOUT_S`(대기열 최대 체류시간, 기본 1초) · `RUNART_KAKAO_WIDGETS`(Kakao Tools 코스 카드, 기본 1; 문제 시 0으로 Markdown 폴백) · `RUNART_ROUTE_EDIT`(코스 편집, 기본 1) · `RUNART_MAX_CONCURRENT_ROUTE_EDITS`(동시 편집 재계산, 기본 1) · `RUNART_ETL_LOCAL_ONLY=1`(기존 OSM 속성은 보존하고 로컬 경사도/신호등/가로등만 재반영)
+환경변수: `HOST`(로컬 기본 127.0.0.1, 컨테이너 0.0.0.0) · `PORT`(기본 8000) · `RUNART_BASE_URL`(미리보기 링크 도메인) · `RUNART_RELEASE_SHA`(배포 Git SHA, Docker 빌드 인자와 연동) · `KAKAO_JAVASCRIPT_KEY`(카카오맵 Web API, 필수) · `KAKAO_REST_API_KEY`(지오코딩; 없으면 지하철역·주요 지명만 해석되고 상호명·주소는 불가) · `RUNART_KAKAO_CACHE_TTL_S`(Kakao Local 성공 응답과 원문 검색어의 메모리 캐시 유효시간, 기본 600초) · `RUNART_TOKEN_SECRET`(32자 이상 도감·릴레이 토큰 서명키, 운영 환경 필수) · `RUNART_LEGAL_CONTACT`(정책 문의 이메일, 공개 배포 시 필수) · `WEB_CONCURRENCY`(웹 워커 수, 기본 1) · `RUNART_POOL_WORKERS`(코스 탐색 프로세스 수, 기본 2) · `RATE_LIMIT_RPS`(IP당, 기본 20) · `RUNART_MAX_BODY_BYTES`(MCP 요청 본문, 기본 65,536) · `RUNART_MAX_CONCURRENT_MCP`(컨테이너당 동시 MCP 요청, 기본 10) · `RUNART_MAX_QUEUED_MCP`(동시 처리 한도 초과 시 대기 가능한 요청, 기본 32) · `RUNART_MCP_QUEUE_TIMEOUT_S`(대기열 최대 체류시간, 기본 1초) · `RUNART_KAKAO_WIDGETS`(Kakao Tools 코스 카드, 기본 1; 문제 시 0으로 Markdown 폴백) · `RUNART_ROUTE_EDIT`(코스 편집, 기본 1) · `RUNART_MAX_CONCURRENT_ROUTE_EDITS`(동시 편집 재계산, 기본 1) · `RUNART_ETL_LOCAL_ONLY=1`(기존 OSM 속성은 보존하고 로컬 경사도/신호등/가로등만 재반영)
 
 MCP 요청은 컨테이너당 10개를 동시에 처리하고, 순간적으로 몰린 요청은 최대
 32개까지 1초 동안 대기한다. 그래도 용량이 부족하면 `Retry-After: 1`과
@@ -62,7 +62,7 @@ pickle 형식의 그래프·시설·인프라 파일은 로드 전에 `src/runar
 | `src/runart/models.py` | 자기완결형 course_id — stateless (§5.1) |
 | `etl/` | 오프라인 데이터 파이프라인 — 경로 생성 중 데이터 API 호출 없음 (§5.7) |
 
-경로·안전·시설 데이터는 컨테이너에 미리 적재되어 런타임에 외부로 조회하지 않는다. 단, 사용자가 입력한 임의의 서울 주소를 좌표로 바꾸는 지오코딩은 `KAKAO_REST_API_KEY`가 설정된 경우 Kakao Local API를 선택적으로 사용하며, 지하철역 289개와 주요 지명은 네트워크 없이 해석한다.
+경로·안전·시설 데이터는 컨테이너에 미리 적재되어 런타임에 외부로 조회하지 않는다. 단, 출발지 해석(지오코딩)은 `KAKAO_REST_API_KEY`가 설정된 경우 Kakao Local API를 사용한다. 지원하는 입력은 네 가지다 — 지하철역(`강남역`), 가게·건물 상호명(`스타벅스 서울숲점`), 도로명 주소(`서울 성동구 아차산로 100`), 지번 주소(`마포구 상암동 1601`). 지하철역 289개와 주요 지명은 네트워크 없이 해석하므로 키가 없어도 동작하지만, **상호명과 임의 주소는 키가 있어야 해석된다.**
 
 ## 툴 (7개, 모두 stateless·idempotent)
 
