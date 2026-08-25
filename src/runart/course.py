@@ -435,9 +435,9 @@ def snap_drawn_segment(params: CourseParams, path: list[int], from_index: int,
 # any real circuit, while a short shared spur stays acceptable.
 RETRACE_PENALTY = 120.0
 RETRACE_ACCEPTABLE = 0.25
-STROKE_WAYPOINT_MIN_M = 90.0
+STROKE_WAYPOINT_MIN_M = 140.0
 # Perpendicular deviation below which a drawn line counts as straight.
-STROKE_SIMPLIFY_TOLERANCE_M = 22.0
+STROKE_SIMPLIFY_TOLERANCE_M = 45.0
 STROKE_WAYPOINT_MAX = 8
 # How far a drawn waypoint may sit from a walkable way before it is ignored.
 # A finger is not a surveyor and a phone's GPS-free tap has real slop.
@@ -447,7 +447,11 @@ STROKE_SNAP_MAX_M = 220.0
 DOUBLED_STROKE_M = 35.0
 # ...and how much drawn line must separate them, so a slowly drawn straight
 # line full of near-identical samples does not read as a double pass.
-DOUBLED_STROKE_MIN_GAP_M = 120.0
+DOUBLED_STROKE_MIN_GAP_M = 250.0
+# Headings this opposed (about 120 degrees apart) mean the line turned back on
+# itself. A wobble never reverses; only a deliberate return does.
+DOUBLED_STROKE_MAX_FACING = -0.5
+DOUBLED_STROKE_MIN_PAIRS = 4
 
 
 def _perpendicular_m(point, start, end) -> float:
@@ -501,31 +505,54 @@ def stroke_waypoints(stroke) -> list[tuple[float, float]]:
     return spaced[::step]
 
 
-def stroke_is_doubled(stroke) -> bool:
-    """Did the drawn line deliberately go over its own ground twice?
+def _local_direction(points: list[tuple[float, float]], i: int) -> tuple[float, float]:
+    """Unit heading of the stroke at sample ``i``, in local metres."""
+    a = points[max(0, i - 1)]
+    b = points[min(len(points) - 1, i + 1)]
+    dx, dy = to_xy(b[0], b[1], a[0], a[1])
+    span = math.hypot(dx, dy)
+    return (dx / span, dy / span) if span else (0.0, 0.0)
 
-    Drawing one line down a street asks for a route along it; drawing down the
-    same street twice asks for an out-and-back on it. Backtrack removal must
-    not quietly undo the second intent, so it is skipped when the stroke
-    itself revisits a place it has already been.
+
+def stroke_is_doubled(stroke) -> bool:
+    """Did the drawn line deliberately go back over its own ground?
+
+    Proximity alone is not enough: a finger drawing a straight line wobbles,
+    and a wobble of a few tens of metres brings the line back within reach of
+    ground it covered a moment earlier. Read as doubling, that skipped spur
+    removal and returned a route 2.4x the length of the line with ten repeated
+    nodes -- the overlapping course a runner saw after drawing straight.
+
+    A real second pass *reverses*: the heading at the two nearby samples is
+    roughly opposite. Jitter never is, so the heading test is what separates
+    an intentional out-and-back from an unsteady hand.
     """
     points = [(point.lat, point.lon) for point in stroke]
-    if len(points) < 4:
+    if len(points) < 6:
         return False
     step = max(1, len(points) // 80)
     sampled = points[::step]
-    # Separation has to be measured along the stroke, not by sample count: a
-    # slowly drawn straight line puts many samples within metres of each other
-    # and would otherwise read as doubled.
     walked = [0.0]
     for a, b in zip(sampled, sampled[1:]):
         walked.append(walked[-1] + haversine_m(a[0], a[1], b[0], b[1]))
+    if walked[-1] < DOUBLED_STROKE_MIN_GAP_M:
+        return False
+    headings = [_local_direction(sampled, i) for i in range(len(sampled))]
+    # A real return leg shares a whole stretch, so it produces many reversed
+    # near-matches. Violent jitter can fake one or two by coincidence; it
+    # cannot fake a run of them.
+    matches = 0
     for i, a in enumerate(sampled):
         for j in range(i + 1, len(sampled)):
             if walked[j] - walked[i] < DOUBLED_STROKE_MIN_GAP_M:
                 continue
-            if haversine_m(a[0], a[1], sampled[j][0], sampled[j][1]) <= DOUBLED_STROKE_M:
-                return True
+            if haversine_m(a[0], a[1], sampled[j][0], sampled[j][1]) > DOUBLED_STROKE_M:
+                continue
+            facing = headings[i][0] * headings[j][0] + headings[i][1] * headings[j][1]
+            if facing <= DOUBLED_STROKE_MAX_FACING:
+                matches += 1
+                if matches >= DOUBLED_STROKE_MIN_PAIRS:
+                    return True
     return False
 
 

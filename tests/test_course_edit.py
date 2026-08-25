@@ -809,3 +809,45 @@ def test_drawing_a_spur_twice_keeps_the_out_and_back_in_the_route():
     # Two passes: the out-and-back the runner drew is still in the route.
     assert len(twice_repl) - len(set(twice_repl)) > 1
     assert twice.length_km > once.length_km
+
+
+def test_an_unsteady_hand_still_draws_a_straight_route():
+    """A finger drawing a straight line wobbles. A wobble of a few tens of
+    metres brought the line back within reach of ground it had just covered,
+    which read as a deliberate double pass, skipped spur removal and returned
+    a route 2.4x the length of the line with ten repeated nodes."""
+    import random
+
+    from runart import graph as graphmod
+    from runart.course import snap_drawn_segment, stroke_is_doubled
+    from runart.geo import haversine_m
+    from runart.models import CourseWaypoint
+
+    g = graphmod.get_graph()
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    a, b = 8, 30
+    pa, pb = g.nodes[course.path[a]], g.nodes[course.path[b]]
+    direct = haversine_m(pa["lat"], pa["lon"], pb["lat"], pb["lon"])
+
+    for jitter_m in (0, 10, 25, 45, 60):
+        random.seed(11)
+        stroke = []
+        for i in range(60):
+            t = i / 59
+            wobble = random.uniform(-jitter_m, jitter_m)
+            stroke.append(CourseWaypoint(
+                lat=pa["lat"] + (pb["lat"] - pa["lat"]) * t + wobble / 111_000.0,
+                lon=pa["lon"] + (pb["lon"] - pa["lon"]) * t + wobble / 88_000.0))
+
+        assert not stroke_is_doubled(stroke), f"±{jitter_m}m read as a double pass"
+        edited = snap_drawn_segment(course.params, course.path, a, b, stroke)
+        tail = len(course.path) - b - 1
+        replacement = edited.path[a:len(edited.path) - tail]
+        walked = sum(
+            haversine_m(g.nodes[u]["lat"], g.nodes[u]["lon"],
+                        g.nodes[v]["lat"], g.nodes[v]["lon"])
+            for u, v in zip(replacement, replacement[1:])
+        )
+
+        assert len(set(replacement)) == len(replacement), f"±{jitter_m}m backtracked"
+        assert walked <= direct * 2.0, f"±{jitter_m}m: {walked:.0f}m for {direct:.0f}m"
