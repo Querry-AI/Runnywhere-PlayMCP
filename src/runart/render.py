@@ -399,7 +399,7 @@ def _edit_chrome_html() -> str:
     "코스 편집" button pinned to the map, which is how the map came to hold an
     edit toolbar, a tracking control and a view switch at the same time.
     """
-    return """<svg id="editOverlay" class="edit-overlay" aria-hidden="true"></svg><div class="edit-tools" role="toolbar" aria-label="코스 편집 도구"><button id="panTool" class="edit-tool-circle" type="button" aria-label="지도 이동" title="지도 이동" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/><path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/></svg></button><button id="segmentTool" class="edit-tool-circle" type="button" aria-label="바꿀 코스 구간 선택" title="구간 선택" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h5M14 7h5M10 7h4"/><circle cx="5" cy="7" r="2"/><circle cx="19" cy="7" r="2"/><path d="M5 17h14" stroke-dasharray="2.5 2.5"/></svg></button><button id="editUndo" class="edit-tool-circle" type="button" aria-label="마지막 수정 실행 취소" title="한 번 되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7H4V2"/><path d="M4 7c2.2-2.4 5-3.4 8-3 4.6.6 8 4.5 8 9"/></svg></button><button id="editCancel" class="edit-tool-circle" type="button" aria-label="모든 수정 초기화" title="전체 초기화"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/><path d="M10 11v5M14 11v5"/></svg></button><button id="editSave" class="edit-tool-circle save" type="button" aria-label="수정한 코스를 새 코스로 저장" title="저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></svg></button></div><div id="editDistance" class="edit-distance" aria-label="수정 중인 코스 거리"></div><div class="sel-bar" id="selBar" hidden><span class="sel-count" id="selCount"></span><button class="sel-ghost" id="selClear" type="button">선택 지우기</button><button class="sel-primary" id="selReroute" type="button">다른 길로 바꾸기</button></div><div id="editToast" class="edit-toast" role="status" aria-live="polite" data-tone="info" hidden><span class="edit-toast-spin" aria-hidden="true"></span><span id="editToastText" class="edit-toast-text"></span><button id="editToastAction" class="edit-toast-action" type="button" hidden></button></div></div>"""
+    return """<svg id="editOverlay" class="edit-overlay" aria-hidden="true"></svg><div class="edit-tools" role="toolbar" aria-label="코스 편집 도구"><button id="panTool" class="edit-tool-circle" type="button" aria-label="지도 이동" title="지도 이동" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/><path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/></svg></button><button id="eraserTool" class="edit-tool-circle" type="button" aria-label="지우개 · 코스 선을 문질러 지우기" title="지우개" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 4 6 6-8 8H6l-3-3Z"/><path d="M9 20h11"/><path d="m10 8 6 6"/></svg></button><button id="penTool" class="edit-tool-circle" type="button" aria-label="연필 · 도로 위에 새 코스 선 그리기" title="연필" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10-10-4-4L4 16Z"/><path d="m14 6 4 4"/><path d="m16 4 4 4"/></svg></button><button id="editUndo" class="edit-tool-circle" type="button" aria-label="마지막 수정 실행 취소" title="한 번 되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7H4V2"/><path d="M4 7c2.2-2.4 5-3.4 8-3 4.6.6 8 4.5 8 9"/></svg></button><button id="editCancel" class="edit-tool-circle" type="button" aria-label="모든 수정 초기화" title="전체 초기화"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/><path d="M10 11v5M14 11v5"/></svg></button><button id="editSave" class="edit-tool-circle save" type="button" aria-label="수정한 코스를 새 코스로 저장" title="저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></svg></button></div><div id="editDistance" class="edit-distance" aria-label="수정 중인 코스 거리"></div><div class="sel-bar" id="selBar" hidden><span class="sel-count" id="selCount"></span><button class="sel-ghost" id="selClear" type="button">되돌리기</button><button class="sel-primary" id="selReroute" type="button">자동으로 잇기</button></div><div id="editToast" class="edit-toast" role="status" aria-live="polite" data-tone="info" hidden><span class="edit-toast-spin" aria-hidden="true"></span><span id="editToastText" class="edit-toast-text"></span><button id="editToastAction" class="edit-toast-action" type="button" hidden></button></div></div>"""
 
 
 def _tab_bar_html(base_url: str, cid: str, page: str) -> str:
@@ -587,7 +587,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
     )
     edit_chrome = _edit_chrome_html() if page == "edit" and edit_enabled else ""
     page_sections = {
-        "info": identity + character_panel + facility_panel + howto_panel,
+        "info": identity + character_panel + facility_panel,
         "run": effort_card + howto_panel,
         "edit": editor_card,
     }[page]
@@ -791,6 +791,11 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
     wide, which collides with a top-right chip at 375px. The pill row that
     normally occupies this line is hidden while editing. */
  /* The selection's own controls, on the map beside it. */
+ /* The two tools read as what they do, and the active one stays obvious
+    while a finger is on the map. */
+ #eraserTool[aria-pressed="true"]{{background:#c0392b;color:#fff}}
+ #penTool[aria-pressed="true"]{{background:#1668dc;color:#fff}}
+ body.tool-active .edit-overlay{{touch-action:none}}
  .sel-bar{{position:absolute;z-index:955;left:10px;right:10px;
       bottom:calc(10px + env(safe-area-inset-bottom));display:flex;align-items:center;gap:8px;
       padding:9px 10px;border-radius:14px;background:rgba(255,255,255,.98);
@@ -992,10 +997,17 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
        .catch(() => window.prompt('아래 링크를 복사하세요', url));
    else window.prompt('아래 링크를 복사하세요', url);
  }});
+ // Declared like its siblings rather than leaned on as the implicit global
+ // an id="" attribute creates: once the edit chrome stopped shipping on every
+ // page that global vanished, and `if(editOverlay)` threw a ReferenceError
+ // that aborted the rest of kakao.maps.load() -- taking every handler bound
+ // after it -- the run start control and the map view toggle among them.
+ const editOverlay = document.getElementById('editOverlay');
  const editCancel = document.getElementById('editCancel');
  const editSave = document.getElementById('editSave');
  const panTool = document.getElementById('panTool');
- const segmentTool = document.getElementById('segmentTool');
+ const eraserTool = document.getElementById('eraserTool');
+ const penTool = document.getElementById('penTool');
  const editUndo = document.getElementById('editUndo');
  const editTools = document.querySelector('.edit-tools');
  const editToast = document.getElementById('editToast');
@@ -1389,7 +1401,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const setEditBusy = value => {{
    editBusy = value;
    if (editTools) editTools.setAttribute('aria-busy', String(value));
-   for (const button of [panTool, segmentTool, editUndo, editCancel, editSave]) {{
+   for (const button of [panTool, eraserTool, penTool, editUndo, editCancel, editSave]) {{
      if (!button) continue;
      if (value) button.disabled = true;
      else if (button === editUndo) button.disabled = !undoStack.length;
@@ -1412,7 +1424,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    selBar.hidden=!selectedRange;
    if(!selectedRange)return;
    const span=selectedRange[1]-selectedRange[0];
-   if(selCount)selCount.textContent='선택한 구간 '+span+'개';
+   if(selCount)selCount.textContent='지운 구간 '+span+'개';
    if(selClear)selClear.disabled=editBusy;
    if(selReroute)selReroute.disabled=editBusy;
  }};
@@ -1489,11 +1501,12 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    if(editUndo)editUndo.disabled=editBusy||!undoStack.length;
    if(editSave)editSave.disabled=editBusy;
  }};
- // 'pan' is the no-selection state and remains the default so one-finger map
- // movement works normally until the user explicitly asks to pick a segment.
+ // 'pan' is the no-tool state and remains the default so one-finger map
+ // movement works normally until the user picks up a tool.
  const syncToolPressed = () => {{
    if(panTool)panTool.setAttribute('aria-pressed',String(!editMode));
-   if(segmentTool)segmentTool.setAttribute('aria-pressed',String(editMode==='segment'));
+   if(eraserTool)eraserTool.setAttribute('aria-pressed',String(editMode==='erase'));
+   if(penTool)penTool.setAttribute('aria-pressed',String(editMode==='pen'));
  }};
  const applyMode = () => {{
    syncToolPressed();
@@ -1506,7 +1519,10 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    if(editBusy)return;
    editMode=(mode==='pan'||editMode===mode)?null:mode;
    applyMode();
-   setEditStatus(editMode==='segment'?'바꾸려는 코스 선을 탭하세요.':'지도 이동 모드예요. 끌어서 코스를 살펴보세요.','info');
+   setEditStatus(
+     editMode==='erase'?'지울 코스 선을 문지르세요. 끝점을 끌어 넓힐 수도 있어요.'
+     :editMode==='pen'?'지운 자리를 이을 새 길을 도로 위에 그려 주세요.'
+     :'지도 이동 모드예요. 끌어서 코스를 살펴보세요.','info');
  }};
  // A selected line stays highlighted, but the tool releases so the map can be
  // moved again while the user decides whether to replace it.
@@ -1559,19 +1575,75 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      setEditStatus(error.name==='AbortError'?'대체 경로 검색 시간이 초과됐어요. 선택한 선은 그대로예요.':(error.message||'다른 보행로를 찾지 못했어요.'),'error',{{label:'닫기',run:()=>{{}}}});
    }}finally{{setEditBusy(false);renderDraft();releaseTool();}}
  }};
- const selectSegmentAt = point => {{
+ // The eraser widens a range as it sweeps: a runner rubs out the stretch that
+ // is wrong rather than tapping one edge of it and hoping that was the one.
+ const HIT_SLOP = 28;
+ const eraseAt = point => {{
    const hit=nearestSegment(point);
-   if(hit.d>28){{releaseTool();setEditStatus('코스 선 가까이를 탭해 주세요.','error',{{label:'닫기',run:()=>{{}}}});return;}}
-   selectedRange=[hit.index,hit.index+1];renderDraft();releaseTool();
-   setEditStatus('끝점을 끌어 구간을 넓힌 뒤 아래 버튼을 눌러 주세요.','info');
+   if(hit.d>HIT_SLOP)return false;
+   selectedRange = selectedRange
+     ? [Math.min(selectedRange[0],hit.index),Math.max(selectedRange[1],hit.index+1)]
+     : [hit.index,hit.index+1];
+   renderDraft();
+   return true;
+ }};
+ const selectSegmentAt = point => {{
+   if(eraseAt(point))
+     setEditStatus('지웠어요. 연필로 새 길을 긋거나 자동으로 잇기를 누르세요.','info');
+   else
+     setEditStatus('코스 선 가까이를 문질러 주세요.','error',{{label:'닫기',run:()=>{{}}}});
+ }};
+ // The pencil collects screen points and hands the server the walkable path
+ // underneath them; snapping is the server's job, not the finger's.
+ let penStroke=[],penLine=null;
+ const renderPen = () => {{
+   if(penLine){{penLine.setMap(null);penLine=null;}}
+   if(penStroke.length<2)return;
+   penLine=new kakao.maps.Polyline({{
+     map,path:penStroke.map(point=>projection.coordsFromContainerPoint(
+       new kakao.maps.Point(point.x,point.y))),
+     strokeColor:'#1668dc',strokeWeight:6,strokeOpacity:.95,strokeStyle:'solid'}});
+ }};
+ const strokeRange = () => {{
+   if(selectedRange)return [...selectedRange];
+   const a=nearestNodeIndex(penStroke[0]);
+   const b=nearestNodeIndex(penStroke[penStroke.length-1]);
+   const lo=Math.min(a,b),hi=Math.max(a,b);
+   return [lo,Math.min(hi,editNodes.length-2)];
+ }};
+ const finishPen = async () => {{
+   if(editBusy||penStroke.length<2){{penStroke=[];renderPen();return;}}
+   const range=strokeRange();
+   if(!(range[0]<range[1])){{
+     penStroke=[];renderPen();
+     setEditStatus('기존 코스 선에서 시작해 다른 지점까지 그려 주세요.','error',{{label:'닫기',run:()=>{{}}}});
+     return;
+   }}
+   const stroke=penStroke.map(point=>{{
+     const latlng=projection.coordsFromContainerPoint(new kakao.maps.Point(point.x,point.y));
+     return {{lat:latlng.getLat(),lon:latlng.getLng()}};
+   }});
+   const before=snapshot();
+   setEditBusy(true);setEditStatus('그린 길을 보행로에 맞추는 중…','busy');
+   try{{
+     const payload=await postEdit({{action:'snap',path:editNodes.map(point=>point[0]),
+       from_index:range[0],to_index:range[1],stroke}});
+     undoStack.push(before);if(undoStack.length>40)undoStack.shift();
+     editNodes=payload.path.map(point=>[...point]);selectedRange=null;
+     setEditDistance(payload.length_km);applySummary(payload.summary);
+     setEditStatus('새 길로 이었어요 · '+editLengthKm.toFixed(2)+'km','success');
+   }}catch(error){{
+     setEditStatus(error.name==='AbortError'?'길을 맞추는 시간이 초과됐어요. 조금 짧게 그려 주세요.':(error.message||'그린 길을 잇지 못했어요.'),'error',{{label:'닫기',run:()=>{{}}}});
+   }}finally{{penStroke=[];renderPen();setEditBusy(false);renderDraft();releaseTool();}}
  }};
  if(selReroute)selReroute.addEventListener('click',replaceSelected);
  if(selClear)selClear.addEventListener('click',()=>{{
    if(editBusy)return;
-   selectedRange=null;renderDraft();setEditStatus('선택을 지웠어요.','info');
+   selectedRange=null;renderDraft();setEditStatus('지운 구간을 되돌렸어요.','info');
  }});
  if(panTool)panTool.addEventListener('click',()=>setMode('pan'));
- if(segmentTool)segmentTool.addEventListener('click',()=>setMode('segment'));
+ if(eraserTool)eraserTool.addEventListener('click',()=>setMode('erase'));
+ if(penTool)penTool.addEventListener('click',()=>setMode('pen'));
  if(editOverlay){{
    const editPointers=new Map();
    let twoFingerPan=false,panCenter=null;
@@ -1587,11 +1659,14 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      }}
      if(event.pointerId===selectPointer){{
        selectPointer=null;
+       if(editMode==='pen'){{finishPen();return;}}
+       // A tap is a sweep of length zero; erase the one segment under it.
        if(Math.hypot(info.current.x-info.start.x,info.current.y-info.start.y)<=10)selectSegmentAt(info.current);
+       else setEditStatus('지웠어요. 연필로 새 길을 긋거나 자동으로 잇기를 누르세요.','info');
      }}
    }};
    editOverlay.addEventListener('pointerdown',event=>{{
-     if(!editing||editMode!=='segment'||editBusy)return;
+     if(!editing||!editMode||editMode==='pan'||editBusy)return;
      const point=overlayPoint(event);editPointers.set(event.pointerId,{{start:point,current:point}});
      editOverlay.setPointerCapture(event.pointerId);
      if(event.pointerType==='touch'&&editPointers.size>=2){{
@@ -1599,6 +1674,8 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      }}
      if(twoFingerPan)return;
      selectPointer=event.pointerId;
+     if(editMode==='pen'){{penStroke=[point];renderPen();}}
+     else if(editMode==='erase')eraseAt(point);
    }});
    editOverlay.addEventListener('pointermove',event=>{{
      if(!editPointers.has(event.pointerId))return;
@@ -1609,9 +1686,17 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
        if(panCenter)map.panBy(panCenter.x-next.x,panCenter.y-next.y);
        panCenter=next;return;
      }}
+     if(event.pointerId!==selectPointer)return;
+     if(editMode==='erase')eraseAt(point);
+     else if(editMode==='pen'){{
+       const last=penStroke[penStroke.length-1];
+       // Thin the stroke as it is drawn: the server samples it anyway, and a
+       // point every pixel makes the preview polyline crawl.
+       if(!last||Math.hypot(point.x-last.x,point.y-last.y)>=6){{penStroke.push(point);renderPen();}}
+     }}
    }});
    editOverlay.addEventListener('pointerup',endOverlayPointer);
-   editOverlay.addEventListener('pointercancel',event=>{{editPointers.delete(event.pointerId);if(event.pointerId===selectPointer)selectPointer=null;}});
+   editOverlay.addEventListener('pointercancel',event=>{{editPointers.delete(event.pointerId);if(event.pointerId===selectPointer)selectPointer=null;penStroke=[];renderPen();}});
  }}
  if(editUndo)editUndo.addEventListener('click',()=>{{if(editBusy||!undoStack.length)return;restore(undoStack.pop());setEditStatus('마지막 수정을 한 번 되돌렸어요.','info');}});
  // Reverting is the only irreversible action in the editor, so it is made

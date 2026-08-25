@@ -223,7 +223,7 @@ def test_mobile_preview_uses_compact_summary_and_accessible_edit_controls():
     assert 'AbortController' in page and '3500' in page
     assert "action:'reroute'" in page
     assert "action:'save'" in page
-    assert 'id="segmentTool"' in page
+    assert 'id="eraserTool"' in page and 'id="penTool"' in page
     assert 'id="drawTool"' not in page
     assert 'id="eraseTool"' not in page
     assert 'id="editUndo"' in page
@@ -330,7 +330,7 @@ def test_edit_blocks_duplicate_requests_while_one_is_in_flight():
     assert "if(editBusy)return" in page                        # setMode
     assert "if(editBusy||!selectedRange)return" in page       # replaceSelected
     assert "if(!editing||editBusy)return" in page              # save
-    assert "!editing||editMode!=='segment'||editBusy" in page  # pointerdown
+    assert "!editing||!editMode||editMode==='pan'||editBusy" in page  # pointerdown
 
 
 def test_edit_toolbar_keeps_small_icon_only_buttons():
@@ -388,25 +388,27 @@ def test_edit_projection_uses_container_coordinates():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example", page="edit")
     assert "projection.containerPointFromCoords" in page
-    # Selection only maps road nodes to screen pixels. No imprecise finger
-    # stroke is converted back into route coordinates anymore.
-    assert "projection.coordsFromContainerPoint" not in page
+    # The eraser only maps road nodes to screen pixels; the pencil needs the
+    # inverse, but its stroke is snapped to walkable roads by the server
+    # rather than becoming route coordinates as drawn.
+    assert "projection.coordsFromContainerPoint" in page
     assert "distanceToSegment" in page
 
 
-def test_editor_selects_an_existing_edge_instead_of_collecting_a_freehand_stroke():
+def test_editor_erases_a_swept_range_and_draws_its_replacement():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert "const nearestSegment = point" in page
-    assert "selectedRange=[hit.index,hit.index+1]" in page
+    assert "const eraseAt" in page
     # The prompt became a hint and the action became a button beside it.
-    assert "끝점을 끌어 구간을 넓힌 뒤 아래 버튼을 눌러 주세요." in page
+    assert "지웠어요. 연필로 새 길을 긋거나 자동으로 잇기를 누르세요." in page
     assert 'id="selReroute"' in page
     assert "strokeColor:'#e0522d'" in page
     assert 'class="edit-anchor" data-end=' in page
-    assert "stroke:sample" not in page
-    assert "rawStroke" not in page
+    # The pencil is back, but the stroke is thinned and snapped server-side.
+    assert "penStroke.push(point)" in page
+    assert "action:'snap'" in page
 
 
 def test_revert_is_undoable_and_separated_from_save():

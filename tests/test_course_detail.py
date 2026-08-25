@@ -77,9 +77,9 @@ def test_facilities_are_listed_in_course_order_with_their_km_mark():
 
 def test_how_to_run_section_keeps_only_the_other_ways_to_run_it():
     """Running it here is the product; GPX and Kakao Map are the escape
-    hatches for people who want another app."""
+    hatches for people who want another app, and they close the run page."""
     course = _course()
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="run")
 
     assert "다른 앱으로 달리기" in page
     assert "GPX 파일 받기" in page and "카카오맵에서 열기" in page
@@ -212,7 +212,7 @@ def test_edited_course_hands_out_the_edited_file_not_the_original():
 
     course = _course()
     summary = course_edit_summary(course)
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="run")
 
     assert "course_id" in summary
     assert decode_course_id(summary["course_id"]).canonical() == course.params.canonical()
@@ -260,20 +260,20 @@ def test_elevation_profile_is_gone_and_its_band_stays_a_number():
     assert 'id="mElev"' in page_run  # the range survives as one figure
 
 
-def test_gpx_is_offered_once_per_page_and_never_on_the_editor():
-    """It closes the info page and the run page -- both are places a runner
-    decides to take the course elsewhere -- but never twice on one screen."""
+def test_gpx_is_offered_once_and_only_where_a_runner_is_about_to_run():
+    """Taking the course to another app is decided while looking at running
+    it, so it closes the run page and appears nowhere else."""
     from runart.models import encode_course_id
 
     course = _course()
     course_id = encode_course_id(course.params)
 
-    for page in ("info", "run"):
-        markup = preview_html(course, [], "https://runnywhere.example", page=page)
-        assert markup.count(f"/c/{course_id}.gpx") == 1
-        assert "위 GPX 파일 받기를 눌러" in markup
-    editor = preview_html(course, [], "https://runnywhere.example", page="edit")
-    assert f"/c/{course_id}.gpx" not in editor
+    run = preview_html(course, [], "https://runnywhere.example", page="run")
+    assert run.count(f"/c/{course_id}.gpx") == 1
+    assert "위 GPX 파일 받기를 눌러" in run
+    for page in ("info", "edit"):
+        other = preview_html(course, [], "https://runnywhere.example", page=page)
+        assert f"/c/{course_id}.gpx" not in other
 
 
 def test_sharing_an_edited_course_sends_the_edited_link():

@@ -125,7 +125,7 @@ def test_course_id_rejects_oversized_input():
 def test_preview_uses_kakao_maps_without_leaflet():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example",
-                        kakao_javascript_key="javascript-key")
+                        kakao_javascript_key="javascript-key", page="run")
     assert "dapi.kakao.com/v2/maps/sdk.js?appkey=javascript-key" in page
     assert "new kakao.maps.Map" in page
     assert "Leaflet" not in page and "leaflet" not in page

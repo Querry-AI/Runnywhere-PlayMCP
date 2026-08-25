@@ -68,7 +68,7 @@ def test_run_page_owns_the_effort_figures_and_the_start_control():
 def test_editor_page_is_only_the_editor():
     edit = _page(_course(), "edit")
 
-    assert 'id="editSave"' in edit and 'id="segmentTool"' in edit
+    assert 'id="editSave"' in edit and 'id="eraserTool"' in edit
     assert "edit-steps" in edit
     assert 'id="paceRange"' not in edit
     assert "이 코스는 이런 코스예요" not in edit
@@ -142,7 +142,7 @@ def test_selection_actions_are_buttons_not_a_link_inside_a_message():
 
     assert 'id="selBar"' in edit
     assert 'id="selReroute"' in edit and 'id="selClear"' in edit
-    assert "다른 길로 바꾸기" in edit and "선택 지우기" in edit
+    assert "자동으로 잇기" in edit and "되돌리기" in edit
     # The toast goes back to reporting, with no action riding on it.
     assert "{label:'다른 길로',persist:true,run:replaceSelected}" not in edit
 
@@ -156,3 +156,46 @@ def test_selection_ends_are_draggable_handles_that_grow_the_selection():
     assert "nearestNodeIndex" in edit
     assert "onHandleDown" in edit
     assert "map.setDraggable(false)" in edit
+
+
+def test_no_control_is_referenced_through_an_implicit_id_global():
+    """`id="x"` makes window.x, so a bare `x` works until the element stops
+    shipping -- then it is a ReferenceError that aborts the rest of the
+    script. Every control the script touches must be looked up explicitly."""
+    import re
+
+    edit = _page(_course(), "edit")
+    script = edit.split("<script>")[-1]
+    ids = set(re.findall(r'id="([A-Za-z][A-Za-z0-9]*)"', edit))
+    declared = set(re.findall(r"(?:const|let|var)\s+([A-Za-z0-9_]+)\s*=\s*"
+                              r"document\.(?:getElementById|querySelector)", script))
+    for name in sorted(ids):
+        if re.search(rf"(?<![.'\"\w]){name}\b\s*(?:\.|\)|&&|\|\|)", script):
+            assert name in declared or f"'{name}'" in script, (
+                f"{name} is used as a bare identifier but never declared")
+
+
+def test_info_page_does_not_carry_the_other_apps_box():
+    """Taking the course elsewhere is something you decide while looking at
+    running it, so it closes the run page only."""
+    info = _page(_course(), "info")
+
+    assert "다른 앱으로 달리기" not in info
+    assert "GPX 파일 받기" not in info
+    assert "다른 앱으로 달리기" in _page(_course(), "run")
+
+
+def test_editor_offers_an_eraser_and_a_pencil_not_one_select_tool():
+    """AllTrails splits its editor into Tap and Draw; erasing what is wrong
+    and drawing what is right are different intents and need different tools."""
+    edit = _page(_course(), "edit")
+
+    assert 'id="eraserTool"' in edit and 'id="penTool"' in edit
+    assert 'id="segmentTool"' not in edit
+    assert "지우개" in edit and "연필" in edit
+    assert "되돌리기" in edit and "자동으로 잇기" in edit
+    # Eraser sweeps a range; pencil collects a stroke and snaps it to roads.
+    assert "const eraseAt" in edit
+    assert "penStroke" in edit
+    assert "action:'snap'" in edit
+    assert "coordsFromContainerPoint" in edit
