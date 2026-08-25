@@ -150,15 +150,19 @@ def test_erasing_is_one_button_and_the_pencil_reconnects():
     assert "if(gapRange)return [...gapRange]" in edit
 
 
-def test_selection_ends_are_draggable_handles_that_grow_the_selection():
-    """Fi's "Drag the points to shape the area" -- one tapped edge is rarely
-    the stretch a runner wants to replace."""
+def test_selection_ends_drag_both_ways_through_the_drawing_overlay():
+    """Fi's "Drag the points to shape the area". The overlay covers the map
+    while a tool is active, so the handles cannot get their own pointer
+    events -- and an over-sweep used to be undoable only by starting over."""
     edit = _page(_course(), "edit")
 
     assert 'class="edit-anchor" data-end=' in edit
     assert "nearestNodeIndex" in edit
-    assert "onHandleDown" in edit
-    assert "map.setDraggable(false)" in edit
+    assert "const handleAt" in edit and "const moveHandle" in edit
+    # Hit-tested in the overlay's own handler, not bound to the element.
+    assert "editMode==='erase'&&handleAt(point)!==null" in edit
+    # Inward drags shrink: lo/hi are recomputed from whichever end moved.
+    assert "const lo=Math.min(index,other),hi=Math.max(index,other)" in edit
 
 
 def test_no_control_is_referenced_through_an_implicit_id_global():
@@ -232,3 +236,12 @@ def test_tools_take_the_map_out_of_drag_while_they_are_active():
 
     assert "editMode === 'erase' || editMode === 'pen'" in edit
     assert "editMode === 'segment'" not in edit
+
+
+def test_pencil_thins_its_stroke_before_sending_it():
+    """A finger crossing the screen makes hundreds of points; the server used
+    to cap them at 96 and reject an ordinary line as bad input."""
+    edit = _page(_course(), "edit")
+
+    assert "const STROKE_MAX=240" in edit
+    assert "penStroke.filter" in edit

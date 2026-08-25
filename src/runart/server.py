@@ -1573,13 +1573,50 @@ async def course_route_json(request: Request) -> Response:
                         headers={"Cache-Control": "public, max-age=86400"})
 
 
+# A finger crossing a phone screen produces hundreds of points. The old 96
+# cap rejected most real pencil strokes outright, and the runner saw a generic
+# "check the line" error for drawing normally. The client thins the stroke
+# before sending; this cap is the safety net, not the editing rule.
+STROKE_MAX_POINTS = 600
+
+
 class _CourseEditPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: str
     path: list[int] = Field(min_length=3, max_length=1200)
-    stroke: list[CourseWaypoint] = Field(default_factory=list, max_length=96)
+    stroke: list[CourseWaypoint] = Field(
+        default_factory=list, max_length=STROKE_MAX_POINTS)
     from_index: int | None = None
     to_index: int | None = None
+
+
+def _payload_problem(error: Exception, body: object) -> str:
+    """Name what is actually wrong with an edit request.
+
+    "코스 선 정보를 확인해 주세요" told a runner who had just drawn a normal
+    line nothing they could act on, and hid a plain length-cap rejection.
+    """
+    if not isinstance(body, dict):
+        return "코스 편집 요청 형식이 올바르지 않아요. 새로고침한 뒤 다시 시도해 주세요."
+    stroke = body.get("stroke")
+    path = body.get("path")
+    if isinstance(stroke, list) and len(stroke) > STROKE_MAX_POINTS:
+        return (f"그린 선의 점이 {len(stroke)}개로 너무 많아요. "
+                "조금 짧게 나눠 그려 주세요.")
+    if isinstance(stroke, list) and any(
+        not isinstance(point, dict)
+        or not (37.4 <= float(point.get("lat", 0) or 0) <= 37.72)
+        or not (126.76 <= float(point.get("lon", 0) or 0) <= 127.19)
+        for point in stroke
+    ):
+        return "그린 선이 서울 밖으로 나갔어요. 지도 안쪽 도로를 따라 그려 주세요."
+    if isinstance(path, list) and len(path) > 1200:
+        return "코스가 너무 복잡해졌어요. 저장한 뒤 이어서 수정해 주세요."
+    if isinstance(path, list) and len(path) < 3:
+        return "코스 선을 불러오지 못했어요. 새로고침한 뒤 다시 시도해 주세요."
+    if not isinstance(body.get("action"), str):
+        return "지원하지 않는 편집 동작이에요. 새로고침한 뒤 다시 시도해 주세요."
+    return f"코스 선을 처리하지 못했어요 ({type(error).__name__}). 다시 시도해 주세요."
 
 
 @mcp.custom_route("/c/{course_id}/edit", methods=["POST"])
@@ -1594,9 +1631,15 @@ async def edit_course_route(request: Request) -> Response:
     except Exception:
         return JSONResponse({"error": "잘못된 코스 링크입니다."}, status_code=404)
     try:
-        payload = _CourseEditPayload.model_validate(await request.json())
-    except (ValidationError, ValueError, TypeError):
-        return JSONResponse({"error": "코스 선 정보를 확인해 주세요."}, status_code=400)
+        body = await request.json()
+    except (ValueError, TypeError):
+        return JSONResponse(
+            {"error": "코스 편집 요청을 읽지 못했어요. 새로고침한 뒤 다시 시도해 주세요."},
+            status_code=400)
+    try:
+        payload = _CourseEditPayload.model_validate(body)
+    except (ValidationError, ValueError, TypeError) as exc:
+        return JSONResponse({"error": _payload_problem(exc, body)}, status_code=400)
     edited = current.model_copy(update={"shape": None, "manual_waypoints": [], "manual_path": []})
     try:
         with anyio.fail_after(ROUTE_EDIT_RESPONSE_BUDGET_S):

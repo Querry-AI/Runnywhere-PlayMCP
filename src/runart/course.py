@@ -367,29 +367,49 @@ def snap_drawn_segment(params: CourseParams, path: list[int], from_index: int,
     """Replace only one route section with the pedestrian path under a finger stroke."""
     course_from_path(params, path)
     if not (0 <= from_index < to_index < len(path) - 1):
-        raise CourseError("지울 구간의 양 끝을 기존 코스 선 위에서 선택해 주세요.")
-    if to_index - from_index > max(80, (len(path) - 1) // 2):
-        raise CourseError("한 번에 수정할 구간이 너무 길어요. 짧게 나눠 그려 주세요.")
+        raise CourseError(
+            "지울 구간의 양 끝이 코스 선 위에 있어야 해요. "
+            "지우개로 다시 구간을 고른 뒤 그려 주세요.")
+    # Sweeping with the eraser routinely marks more than 80 nodes; the old cap
+    # rejected ordinary edits. The real limit is how much walking the server
+    # has to re-route, which the stroke-length check below already bounds.
+    if to_index - from_index > max(400, (len(path) - 1) * 3 // 4):
+        raise CourseError(
+            f"한 번에 바꾸려는 구간이 {to_index - from_index}개로 너무 길어요. "
+            "절반쯤씩 나눠서 수정해 주세요.")
     if len(stroke) < 2:
-        raise CourseError("펜으로 기존 코스 선에서 시작해 다른 지점까지 그려 주세요.")
+        raise CourseError("연필로 지운 구간의 한쪽 끝에서 다른 쪽 끝까지 이어 그려 주세요.")
 
     walked = sum(
         haversine_m(a.lat, a.lon, b.lat, b.lon)
         for a, b in zip(stroke, stroke[1:])
     )
-    if walked < 20:
-        raise CourseError("그린 선이 너무 짧아요. 바꾸려는 길을 조금 더 길게 그려 주세요.")
-    if walked > 4000:
-        raise CourseError("한 번에 그린 선이 너무 길어요. 4km보다 짧게 나눠 그려 주세요.")
+    if walked < 8:
+        raise CourseError(
+            f"그린 선이 {walked:.0f}m로 너무 짧아요. "
+            "지운 구간의 한쪽 끝에서 다른 쪽 끝까지 이어 그려 주세요.")
+    if walked > 6000:
+        raise CourseError(
+            f"한 번에 그린 선이 {walked / 1000:.1f}km로 너무 길어요. "
+            "6km보다 짧게 나눠 그려 주세요.")
 
     g = graphmod.get_graph()
     drawn_nodes = []
+    far_from_road = 0
     for point in stroke_waypoints(stroke):
         node, snap_m = graphmod.nearest_node(point[0], point[1])
-        if node is None or snap_m > 120:
-            raise CourseError("그린 선이 걸을 수 있는 길에서 너무 멀어요. 지도에 보이는 길을 따라 그려 주세요.")
+        # A waypoint that lands nowhere near a walkable way is dropped rather
+        # than fatal: the drawn line says roughly where to go, and one stray
+        # sample should not refuse the whole edit.
+        if node is None or snap_m > STROKE_SNAP_MAX_M:
+            far_from_road += 1
+            continue
         if not drawn_nodes or drawn_nodes[-1] != node:
             drawn_nodes.append(node)
+    if far_from_road and not drawn_nodes:
+        raise CourseError(
+            "그린 선이 걸을 수 있는 길에서 너무 멀어요. "
+            "지도에 보이는 도로나 보도를 따라 그려 주세요.")
 
     stops = [path[from_index], *drawn_nodes, path[to_index]]
     weight = easy_route_weight(routing_weight(params.night_mode, params.include_hills))
@@ -418,6 +438,9 @@ STROKE_WAYPOINT_MIN_M = 90.0
 # Perpendicular deviation below which a drawn line counts as straight.
 STROKE_SIMPLIFY_TOLERANCE_M = 22.0
 STROKE_WAYPOINT_MAX = 8
+# How far a drawn waypoint may sit from a walkable way before it is ignored.
+# A finger is not a surveyor and a phone's GPS-free tap has real slop.
+STROKE_SNAP_MAX_M = 220.0
 
 
 def _perpendicular_m(point, start, end) -> float:

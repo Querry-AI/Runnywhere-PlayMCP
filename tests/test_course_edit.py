@@ -690,3 +690,65 @@ def test_drawn_replacement_stays_on_walkable_ways():
 
     assert all(edge_is_runnable(g.edges[u, v])
                for u, v in zip(edited.path, edited.path[1:]))
+
+
+def _edit_error(course, body):
+    """POST an edit payload through the route and return its error text."""
+    import json as _json
+
+    from runart.models import encode_course_id
+
+    cid = encode_course_id(course.params)
+
+    async def _call():
+        request = Request({
+            "type": "http", "method": "POST",
+            "path": f"/c/{cid}/edit",
+            "path_params": {"course_id": cid},
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+        })
+        payload = _json.dumps(body).encode()
+        request._body = payload
+        return await server.edit_course_route(request)
+
+    response = asyncio.run(_call())
+    return _json.loads(bytes(response.body).decode())
+
+
+def test_an_ordinary_pencil_stroke_is_not_rejected_for_its_length():
+    """The stroke cap was 96 points. A finger crossing a phone screen makes
+    hundreds, so drawing normally produced a generic "check the line" error."""
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    stroke = [{"lat": 37.5665 + i * 0.00002, "lon": 126.9780 + i * 0.00002}
+              for i in range(300)]
+    result = _edit_error(course, {
+        "action": "snap", "path": course.path,
+        "from_index": 5, "to_index": 40, "stroke": stroke,
+    })
+
+    assert "error" not in result, result.get("error")
+    assert result["length_km"] > 0
+
+
+def test_each_edit_failure_names_its_own_cause():
+    """One generic message for every rejection hid a plain length cap behind
+    advice the runner could not act on."""
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    outside = [{"lat": 35.1, "lon": 129.0}, {"lat": 35.2, "lon": 129.1}]
+
+    causes = {
+        "서울 밖": _edit_error(course, {
+            "action": "snap", "path": course.path,
+            "from_index": 5, "to_index": 40, "stroke": outside}),
+        "점 과다": _edit_error(course, {
+            "action": "snap", "path": course.path, "from_index": 5, "to_index": 40,
+            "stroke": [{"lat": 37.5665, "lon": 126.9780}] * 700}),
+        "동작": _edit_error(course, {"action": 123, "path": course.path}),
+    }
+    messages = [value["error"] for value in causes.values()]
+
+    assert all("코스 선 정보를 확인해 주세요" not in m for m in messages)
+    assert len(set(messages)) == len(messages)   # each cause reads differently
+    assert "서울 밖" in causes["서울 밖"]["error"]
+    assert "700개" in causes["점 과다"]["error"]

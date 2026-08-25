@@ -1419,42 +1419,32 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    return {{x:event.clientX-rect.left,y:event.clientY-rect.top}};
  }};
  let dragEnd=null;
- const onHandleMove = event => {{
-   if(dragEnd===null)return;
-   const index=nearestNodeIndex(mapPoint(event));
+ const HANDLE_GRAB_PX=26;
+ // Which end of the swept range, if any, the pointer has hold of. The drawing
+ // overlay covers the map while a tool is active, so the handles cannot
+ // receive their own pointer events and are hit-tested here instead.
+ const handleAt = point => {{
+   if(!selectedRange)return null;
+   const ends=[selectedRange[0],selectedRange[1]];
+   let best=null,bestD=HANDLE_GRAB_PX;
+   ends.forEach((nodeIndex,end)=>{{
+     const screen=screenPoint(editNodes[nodeIndex]);
+     const d=Math.hypot(point.x-screen.x,point.y-screen.y);
+     if(d<=bestD){{bestD=d;best=end;}}
+   }});
+   return best;
+ }};
+ // Either end can move either way: dragging outward grows the range, inward
+ // shrinks it back. An over-sweep used to be undoable only by starting over.
+ const moveHandle = point => {{
+   if(dragEnd===null||!selectedRange)return;
+   const index=nearestNodeIndex(point);
    const other=selectedRange[dragEnd?0:1];
    const lo=Math.min(index,other),hi=Math.max(index,other);
    if(lo===hi)return;                       // never collapse to a single node
    selectedRange=[lo,hi];
    dragEnd=index<=other?0:1;
    renderDraft();
- }};
- const onHandleUp = event => {{
-   if(dragEnd===null)return;
-   dragEnd=null;
-   document.body.classList.remove('handle-drag');
-   syncMapInteraction();
-   window.removeEventListener('pointermove',onHandleMove);
-   window.removeEventListener('pointerup',onHandleUp);
-   window.removeEventListener('pointercancel',onHandleUp);
- }};
- const onHandleDown = event => {{
-   if(editBusy||!selectedRange)return;
-   dragEnd=Number(event.currentTarget.dataset.end)||0;
-   document.body.classList.add('handle-drag');
-   map.setDraggable(false);
-   event.preventDefault();
-   event.stopPropagation();
-   window.addEventListener('pointermove',onHandleMove);
-   window.addEventListener('pointerup',onHandleUp);
-   window.addEventListener('pointercancel',onHandleUp);
- }};
- const attachHandles = () => {{
-   for(const handle of mapNode.querySelectorAll('.edit-anchor')){{
-     if(handle.dataset.bound)continue;
-     handle.dataset.bound='1';
-     handle.addEventListener('pointerdown',onHandleDown);
-   }}
  }};
  const renderDraft = () => {{
    draftLines.forEach(line=>line.setMap(null));draftLines=[];
@@ -1481,7 +1471,6 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      }}
    }}
    syncSelectionBar();
-   attachHandles();
    if(editUndo)editUndo.disabled=editBusy||!undoStack.length;
    if(editRedo)editRedo.disabled=editBusy||!redoStack.length;
    if(editSave)editSave.disabled=editBusy;
@@ -1591,7 +1580,15 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      setEditStatus('기존 코스 선에서 시작해 다른 지점까지 그려 주세요.','error',{{label:'닫기',run:()=>{{}}}});
      return;
    }}
-   const stroke=penStroke.map(point=>{{
+   // The server caps the stroke, and a finger crossing the screen produces
+   // hundreds of points; thin here so an ordinary line is never rejected for
+   // its length alone.
+   const STROKE_MAX=240;
+   const source=penStroke.length>STROKE_MAX
+     ? penStroke.filter((_,i)=>i%Math.ceil(penStroke.length/STROKE_MAX)===0)
+       .concat([penStroke[penStroke.length-1]])
+     : penStroke;
+   const stroke=source.map(point=>{{
      const latlng=projection.coordsFromContainerPoint(new kakao.maps.Point(point.x,point.y));
      return {{lat:latlng.getLat(),lon:latlng.getLng()}};
    }});
@@ -1636,6 +1633,12 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      }}
      if(event.pointerId===selectPointer){{
        selectPointer=null;
+       if(dragEnd!==null){{
+         dragEnd=null;
+         document.body.classList.remove('handle-drag');
+         setEditStatus('구간을 조절했어요. 지우기를 누르세요.','info');
+         return;
+       }}
        if(editMode==='pen'){{finishPen();return;}}
        // A tap is a sweep of length zero; erase the one segment under it.
        if(Math.hypot(info.current.x-info.start.x,info.current.y-info.start.y)<=10)selectSegmentAt(info.current);
@@ -1651,6 +1654,13 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      }}
      if(twoFingerPan)return;
      selectPointer=event.pointerId;
+     if(editMode==='erase'&&handleAt(point)!==null){{
+       // Grabbing an end of the swept range adjusts it -- in either
+       // direction. Dragging inward is how you take back an over-sweep.
+       dragEnd=handleAt(point);
+       document.body.classList.add('handle-drag');
+       return;
+     }}
      if(editMode==='pen'){{penStroke=[point];renderPen();}}
      else if(editMode==='erase')eraseAt(point);
    }});
@@ -1664,6 +1674,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
        panCenter=next;return;
      }}
      if(event.pointerId!==selectPointer)return;
+     if(dragEnd!==null){{moveHandle(point);return;}}
      if(editMode==='erase')eraseAt(point);
      else if(editMode==='pen'){{
        const last=penStroke[penStroke.length-1];
