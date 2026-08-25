@@ -121,6 +121,9 @@ mcp = FastMCP(
         "or was asked for the missing start. Use standard for ordinary runs, "
         "best_animal when no animal is named, and dog/cat/rabbit/whale for "
         "강아지·댕댕이/고양이·야옹이/토끼/고래. (2) Existing-course "
+        "For a new course, include need_facilities=park only when the user "
+        "explicitly asks to run in or through a park, riverside park, or "
+        "green trail; never infer park mode merely from nearby green space. "
         "changes use refine_course. (3) Questions about 화장실, 편의점, 물, "
         "공원, or facilities near the current course use "
         "find_facilities_near_course with its most recent course_id. (4) "
@@ -1032,7 +1035,11 @@ def generate_running_course(
     duration_min: Annotated[float | None, Field(description="Target duration in minutes, 10-360; converted to distance at 6:30/km if distance_km is absent")] = None,
     include_hills: Annotated[bool, Field(description="True to include uphill training segments (3-8% grade); False prefers flat routes")] = False,
     night_mode: Annotated[bool, Field(description="Prefer well-lit streets with safety CCTV coverage for night runs")] = False,
-    need_facilities: Annotated[list[str] | None, Field(description="Facility types the course should pass: convenience_store, restroom, water, park")] = None,
+    need_facilities: Annotated[list[str] | None, Field(description=(
+        "Facility types the course should pass: convenience_store, restroom, "
+        "water, park. Pass park only when the user explicitly asks to run in "
+        "or through a park, riverside park, or green trail."
+    ))] = None,
 ) -> str:
     """Generates a loop running course in Seoul from Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!), snapped to
     real pedestrian roads and scored with the Running Friendliness Score built
@@ -1065,7 +1072,10 @@ def generate_animal_course(
     duration_min: Annotated[float | None, Field(description="Target duration in minutes, 10-360")] = None,
     include_hills: Annotated[bool, Field(description="Include uphill segments")] = False,
     night_mode: Annotated[bool, Field(description="Prefer well-lit, CCTV-covered streets")] = False,
-    need_facilities: Annotated[list[str] | None, Field(description="Facility types to pass by")] = None,
+    need_facilities: Annotated[list[str] | None, Field(description=(
+        "Facility types to pass by. Pass park only for an explicit park, "
+        "riverside park, or green-trail running request."
+    ))] = None,
     shape_token: Annotated[str | None, Field(description="Share token like 'whale-5k' from a friend's course link; recreates the same shape at this user's location")] = None,
 ) -> str:
     """Generates a GPS-art running course shaped like an animal (cat, dog,
@@ -1256,7 +1266,9 @@ def create_seoul_running_course(
         "야간·밤·가로등·CCTV·안전 경로를 요청했을 때 true; 언급이 없으면 false"
     ))] = False,
     need_facilities: Annotated[list[str] | None, Field(description=(
-        "요청한 경유 시설만 전달: convenience_store, restroom, water, park"
+        "요청한 경유 시설만 전달: convenience_store, restroom, water, park. "
+        "park는 사용자가 공원·한강공원·강변·녹지 산책로에서 달리고 싶다고 "
+        "명시한 경우에만 전달하고, 단순히 주변에 공원이 있다는 이유로 추론하지 마세요."
     ))] = None,
 ) -> CallToolResult:
     """Creates a standard running course or animal-shaped GPS-art course on
@@ -1364,7 +1376,10 @@ def refine_course(
     shape: Annotated[str | None, Field(description="Change animal shape, or 'none' to remove the shape")] = None,
     location: Annotated[str | None, Field(
         description="New start place: " + LOCATION_FIELD_EN)] = None,
-    need_facilities: Annotated[list[str] | None, Field(description="New facility requirements")] = None,
+    need_facilities: Annotated[list[str] | None, Field(description=(
+        "New facility requirements. Use park only when the user explicitly "
+        "changes the course to park or riverside-park running."
+    ))] = None,
 ) -> str:
     """Refines an existing Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!)
     course by changing distance, hills, night mode, animal shape, start, or

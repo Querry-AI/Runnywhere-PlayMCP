@@ -128,22 +128,67 @@ def citywide_top_percent(score01: float) -> int:
     return max(1, round(100 * (1 - below / len(sample))))
 
 
-def weight_value(attrs: dict, night_mode: bool, include_hills: bool) -> float:
+# Kakao's basemap labels named streets and draws most unnamed footpaths not at
+# all, so a route over them reads as a line floating across a green polygon.
+# Measured over the whole graph, the name tag separates the two cleanly:
+# residential 92% named, primary 98%, tertiary 97% — against footway 3% and
+# path 12%. Preferring the named way where one exists is what keeps the drawn
+# course and the map underneath it telling the same story.
+UNNAMED_WAY_PENALTY = 2.2
+UNNAMED_PENALISED_HIGHWAYS = frozenset({"footway", "path"})
+
+
+def _is_unnamed_path(attrs: dict) -> bool:
+    if attrs.get("name"):
+        return False
+    highway = attrs.get("highway")
+    if isinstance(highway, (list, tuple)):
+        highway = highway[0] if highway else ""
+    return str(highway or "") in UNNAMED_PENALISED_HIGHWAYS
+
+
+def prefers_park_paths(need_facilities: list[str] | None) -> bool:
+    """Whether the user explicitly asked to run through a park.
+
+    ``park`` already is the public MCP contract for a park-routing request.
+    Keeping the signal there preserves old course ids and avoids inferring a
+    preference merely because the start happens to be near green space.
+    """
+    return "park" in (need_facilities or ())
+
+
+def map_alignment_factor(attrs: dict, prefer_parks: bool = False) -> float:
+    """Strongly prefer OSM ways that are also likely visible on Kakao Maps."""
+    if prefer_parks or not _is_unnamed_path(attrs):
+        return 1.0
+    return UNNAMED_WAY_PENALTY
+
+
+def weight_value(attrs: dict, night_mode: bool, include_hills: bool,
+                 prefer_parks: bool = False) -> float:
     """Edge weight for shortest-path search: distance inflated by RFS deficit,
     so equal-length friendlier edges win (PRD §5.3). Flat mode adds an
     explicit grade penalty — the RFS slope term alone is too soft to steer a
-    loop around a hill."""
+    loop around a hill.
+
+    ``prefer_parks`` drops the unnamed-path penalty: park and riverside paths
+    are exactly the ways Kakao does not draw, so a runner who asks for one has
+    to be able to get it.
+    """
     cost = 1.0 + 1.0 * (1.0 - edge_rfs(attrs, night_mode, include_hills))
     if not include_hills:
         cost += 0.22 * max(0.0, attrs.get("slope_pct", 2.0) - 1.0)
+    cost *= map_alignment_factor(attrs, prefer_parks)
     return attrs["length"] * cost
 
 
-def weight_attr(night_mode: bool, include_hills: bool) -> str:
+def weight_attr(night_mode: bool, include_hills: bool,
+                prefer_parks: bool = False) -> str:
     """Attribute name of the precomputed weight (see graph.get_graph).
     String weights let Dijkstra do dict lookups instead of calling a Python
     function per edge — the single biggest latency lever we have."""
-    return f"w_{'n' if night_mode else 'd'}{'h' if include_hills else 'f'}"
+    return (f"w_{'n' if night_mode else 'd'}{'h' if include_hills else 'f'}"
+            f"{'p' if prefer_parks else ''}")
 
 
 # Ticketed palace grounds, closed overnight. OSM maps their internal paths in
@@ -209,10 +254,12 @@ def precompute_weights(g) -> None:
         penalty = GATED_WEIGHT_FACTOR if attrs.get("gated") else 1.0
         for night in (False, True):
             for hills in (False, True):
-                attrs[weight_attr(night, hills)] = (
-                    weight_value(attrs, night, hills) * penalty)
+                for parks in (False, True):
+                    attrs[weight_attr(night, hills, parks)] = (
+                        weight_value(attrs, night, hills, parks) * penalty)
 
 
-def routing_weight(night_mode: bool, include_hills: bool) -> str:
+def routing_weight(night_mode: bool, include_hills: bool,
+                   prefer_parks: bool = False) -> str:
     """Weight argument for nx.dijkstra_path — precomputed attr name."""
-    return weight_attr(night_mode, include_hills)
+    return weight_attr(night_mode, include_hills, prefer_parks)

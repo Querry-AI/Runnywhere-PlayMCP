@@ -22,7 +22,7 @@ from .course import (Course, CourseError, _path_metrics, course_route_issues,
 from .facilities import facility_requirement_score
 from .geo import to_latlon, to_xy
 from .models import CourseParams
-from .rfs import route_rfs_summary, routing_weight
+from .rfs import map_alignment_factor, prefers_park_paths, route_rfs_summary
 
 SIMILARITY_GATE = 0.55  # below this we refuse to ship the course (PRD §5.4)
 UPRIGHT_ROTATIONS = (0, 15, 345, 30, 330)
@@ -640,7 +640,7 @@ HIGHWAY_COST_FACTOR = {
 }
 
 
-def main_road_cost(attrs: dict) -> float:
+def main_road_cost(attrs: dict, prefer_parks: bool = False) -> float:
     """Lower cost for broad, named streets; higher for alleys and tiny paths."""
     highway = attrs.get("highway")
     if isinstance(highway, (list, tuple)):
@@ -651,20 +651,18 @@ def main_road_cost(attrs: dict) -> float:
         factor *= 0.88
     elif sidewalk < 0.55:
         factor *= 1.16
-    if not attrs.get("name") and str(highway) in {"service", "footway", "path"}:
-        factor *= 1.10
-    return factor
+    return factor * map_alignment_factor(attrs, prefer_parks)
 
 
-def _road_weight(u, v, attrs) -> float | None:
+def _road_weight(u, v, attrs, prefer_parks: bool = False) -> float | None:
     """Dijkstra weight that prefers broad main streets over alleys, so the
     silhouette strokes run straight along big walkable roads."""
     if not edge_is_runnable(attrs):
         return None
-    return attrs["length"] * main_road_cost(attrs)
+    return attrs["length"] * main_road_cost(attrs, prefer_parks)
 
 
-def main_road_badness(g, path: list) -> float:
+def main_road_badness(g, path: list, prefer_parks: bool = False) -> float:
     """Length-weighted penalty for alley-like streets in the final trace."""
     total = 0.0
     bad = 0.0
@@ -672,7 +670,7 @@ def main_road_badness(g, path: list) -> float:
         attrs = g.edges[u, v]
         length = attrs["length"]
         total += length
-        bad += max(0.0, main_road_cost(attrs) - 1.0) * length
+        bad += max(0.0, main_road_cost(attrs, prefer_parks) - 1.0) * length
     return bad / max(total, 1.0)
 
 
@@ -864,7 +862,8 @@ def _densify_route_guides(g, major_nodes: list,
     return dense_nodes, dense_anchors, dense_snaps
 
 
-def _corridor_route(g, node_xy, a, b, seg_a, seg_b, corridor_m: float) -> list:
+def _corridor_route(g, node_xy, a, b, seg_a, seg_b, corridor_m: float,
+                    prefer_parks: bool = False) -> list:
     ax, ay = seg_a
     bx, by = seg_b
     dx, dy = bx - ax, by - ay
@@ -888,18 +887,24 @@ def _corridor_route(g, node_xy, a, b, seg_a, seg_b, corridor_m: float) -> list:
             return None  # hidden edge — stay inside the ribbon
         # Main-road preference inside the ribbon: given several streets that
         # trace the same silhouette stroke, take the broad straight one.
-        return attrs["length"] * main_road_cost(attrs) * (1.0 + 16.0 * (d / ribbon) ** 2)
+        return (attrs["length"] * main_road_cost(attrs, prefer_parks)
+                * (1.0 + 16.0 * (d / ribbon) ** 2))
 
     return nx.bidirectional_dijkstra(g, a, b, weight=weight)[1]
 
 
 def _route_loop(g, nodes: list, anchors_xy: list, node_xy: dict | None,
-                corridor_m: float | None) -> list:
+                corridor_m: float | None,
+                prefer_parks: bool = False) -> list:
     """Concatenate per-segment routes into a closed loop. With node_xy and
     corridor_m set, segments follow the template; otherwise plain shortest."""
     # Map each snapped node to its anchor position for corridor endpoints.
     path: list = []
     n = len(nodes)
+
+    def free_weight(u, v, attrs):
+        return _road_weight(u, v, attrs, prefer_parks)
+
     for i in range(n):
         a, b = nodes[i], nodes[(i + 1) % n]
         seg = None
@@ -908,7 +913,8 @@ def _route_loop(g, nodes: list, anchors_xy: list, node_xy: dict | None,
                 try:
                     seg = _corridor_route(g, node_xy, a, b,
                                           anchors_xy[i], anchors_xy[(i + 1) % len(anchors_xy)],
-                                          min(CORRIDOR_MAX_M, width))
+                                          min(CORRIDOR_MAX_M, width),
+                                          prefer_parks)
                     break
                 except (nx.NetworkXNoPath, nx.NodeNotFound):
                     seg = None
@@ -916,7 +922,7 @@ def _route_loop(g, nodes: list, anchors_xy: list, node_xy: dict | None,
             # must not kill the whole candidate: route just that segment
             # freely and keep the rest of the outline corridor-following.
         if seg is None:
-            seg = nx.bidirectional_dijkstra(g, a, b, weight=_road_weight)[1]
+            seg = nx.bidirectional_dijkstra(g, a, b, weight=free_weight)[1]
         path.extend(seg if not path else seg[1:])
     return _strip_backtracks(path)
 
@@ -959,7 +965,8 @@ def _evaluate(g, params: CourseParams, path: list, anchors_xy: list,
     aspect_badness = aspect_penalty(routed_xy, style)
     pose_badness = side_profile_pose_penalty(routed_xy)
     zigzag_badness = small_zigzag_penalty(routed_xy, length)
-    road_badness = main_road_badness(g, path)
+    road_badness = main_road_badness(
+        g, path, prefers_park_paths(params.need_facilities))
     self_intersects = check_self_intersection and count_self_intersections(routed_xy) > 0
     if self_intersects:
         # Hard forbid ("self-intersection 금지"): never let this clear the
@@ -1079,6 +1086,7 @@ def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
     # All three are location-cached and shared across the distance sweep.
     g, node_xy, occupied = _search_area(
         lat0, lon0, diameter_units * base_scale * max(scales) * 1.05 + 1000)
+    prefer_parks = prefers_park_paths(params.need_facilities)
     cell = _OCCUPANCY_CELL_M
 
     def _placement_coverage(anchors) -> float:
@@ -1135,7 +1143,8 @@ def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
                 if len(nodes) < 6:
                     continue
                 try:
-                    path = _route_loop(g, nodes, kept_anchors, None, None)
+                    path = _route_loop(
+                        g, nodes, kept_anchors, None, None, prefer_parks)
                 except (nx.NetworkXNoPath, nx.NodeNotFound):
                     continue
                 course, sim, length_err, key = _evaluate(
@@ -1165,7 +1174,8 @@ def _search_shape(spec: ShapeSpec, params: CourseParams, deadline: float,
             corridor_m = min(CORRIDOR_MAX_M,
                              max(CORRIDOR_MIN_M, diameter_m * style.corridor_frac))
             try:
-                path = _route_loop(g, nodes, route_guides, node_xy, corridor_m)
+                path = _route_loop(
+                    g, nodes, route_guides, node_xy, corridor_m, prefer_parks)
             except (nx.NetworkXNoPath, nx.NodeNotFound):
                 return None
             path = _snip_small_loops(g, path, node_xy)

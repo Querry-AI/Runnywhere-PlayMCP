@@ -18,7 +18,8 @@ from . import graph as graphmod
 from .facilities import facility_requirement_score
 from .geo import haversine_m, to_latlon, to_xy
 from .models import CourseParams, CourseWaypoint
-from .rfs import GATED_WEIGHT_FACTOR, route_rfs_summary, routing_weight
+from .rfs import (GATED_WEIGHT_FACTOR, prefers_park_paths,
+                  route_rfs_summary, routing_weight)
 
 DISTANCE_TOLERANCE = 0.05  # ±5% (PRD §7.2)
 N_WAYPOINTS = 4
@@ -60,6 +61,15 @@ FLAT_CUM_GAIN_PER_KM = 8.0
 
 class CourseError(Exception):
     """User-facing generation failure; message must say what to do next."""
+
+
+def _routing_weight_for(params: CourseParams) -> str:
+    """Select the map-aligned profile unless park running was explicit."""
+    return routing_weight(
+        params.night_mode,
+        params.include_hills,
+        prefers_park_paths(params.need_facilities),
+    )
 
 
 @dataclass
@@ -252,7 +262,7 @@ def _manual_waypoint_course(params: CourseParams) -> Course:
     stops = [start_node, *(node for node, _ in snapped), start_node]
     if any(node not in g for node in stops):
         raise CourseError("경유점이 현재 도로망 범위를 벗어났어요. 경유점을 가까이 옮겨 주세요.")
-    weight = easy_route_weight(routing_weight(params.night_mode, params.include_hills))
+    weight = easy_route_weight(_routing_weight_for(params))
     deadline = time.perf_counter() + 0.8
     path: list = []
     for a, b in zip(stops, stops[1:]):
@@ -337,9 +347,7 @@ def reroute_segment(params: CourseParams, path: list[int], from_index: int,
         frozenset((a, b))
         for a, b in zip(path[from_index:to_index], path[from_index + 1:to_index + 1])
     }
-    base_weight = easy_route_weight(
-        routing_weight(params.night_mode, params.include_hills)
-    )
+    base_weight = easy_route_weight(_routing_weight_for(params))
 
     def alternative_weight(u, v, attrs):
         if frozenset((u, v)) in blocked_edges:
@@ -412,7 +420,7 @@ def snap_drawn_segment(params: CourseParams, path: list[int], from_index: int,
             "지도에 보이는 도로나 보도를 따라 그려 주세요.")
 
     stops = [path[from_index], *drawn_nodes, path[to_index]]
-    weight = easy_route_weight(routing_weight(params.night_mode, params.include_hills))
+    weight = easy_route_weight(_routing_weight_for(params))
     replacement: list[int] = []
     # A waypoint can land on a node that no walkable way reaches -- a courtyard
     # inside a building complex, say. Skipping it and carrying on to the next
@@ -751,7 +759,7 @@ def generate_course(params: CourseParams) -> Course:
     # Local subgraph keeps every Dijkstra bounded regardless of city size.
     g = graphmod.subgraph_around(params.lat, params.lon,
                                  target_m / math.pi * 1.4 + 400)
-    weight = easy_route_weight(routing_weight(params.night_mode, params.include_hills))
+    weight = easy_route_weight(_routing_weight_for(params))
 
     best: Course | None = None
     best_key: tuple | None = None
