@@ -355,6 +355,7 @@ def build_course_widget(
         f"- {copy_location} 출발·도착",
         f"- {_copy_value(_effort_line(course), 120)}",
         f"- 지도: {preview_url}",
+        "- 경로 데이터: © OpenStreetMap contributors · ODbL 1.0",
     ]
     if alternatives:
         copy_lines.extend(

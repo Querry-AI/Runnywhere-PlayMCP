@@ -74,6 +74,6 @@ MCP Endpoint: `https://<kc-endpoint>/mcp` — PlayMCP 등록 전 [MCP Inspector]
 
 ## 라이선스·데이터·안전
 
-소스 코드는 [MIT License](LICENSE)로 배포한다. OSM 파생 DB는 ODbL 1.0, 서울시 경사도 OA-22241·가로등 OA-22205·보행자 신호등 OA-22356·공중화장실 OA-22586·서울교통공사 역주소는 공공누리 1유형으로 이용한다. 역 좌표는 서울교통공사 1–8호선 좌표 공공데이터(이용허락 제한 없음)를 기준으로 한다. NASA SRTM 30m를 고도 폴백으로 사용한다. 안심이 CCTV 포인트는 서비스 종료로 사용하지 않고 OSM surveillance 태그만 사용한다.
+소스 코드는 [MIT License](LICENSE)로 배포한다. OSM 파생 DB는 ODbL 1.0, 서울시 경사도 OA-22241·가로등 OA-22205·보행자 신호등 OA-22356·공중화장실 OA-22586·서울교통공사 역주소는 공공누리 1유형으로 이용한다. 역 좌표는 서울교통공사 1–8호선 좌표 공공데이터(이용허락 제한 없음)를 기준으로 한다. Mapzen Terrain Tiles에서 취득한 NASA SRTM 30m를 고도 폴백으로 사용하며, 상세 출처와 USGS 고지는 데이터 고지 문서에 기록한다. 안심이 CCTV 포인트는 서비스 종료로 사용하지 않고 OSM surveillance 태그만 사용한다.
 
 세부 출처·가공·재배포 조건은 [DATA_LICENSES.md](DATA_LICENSES.md), 의존성 고지는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 참고한다. 웹 UI의 `/terms`, `/privacy`, `/data-licenses`에서 이용·안전, 정보 처리, 출처를 확인할 수 있다. 코스는 실시간 내비게이션이 아닌 참고용이며, 사용자가 현장 통행·공사·날씨·건강 상태를 확인해야 한다.
