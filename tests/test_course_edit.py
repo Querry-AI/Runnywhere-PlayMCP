@@ -851,3 +851,53 @@ def test_an_unsteady_hand_still_draws_a_straight_route():
 
         assert len(set(replacement)) == len(replacement), f"±{jitter_m}m backtracked"
         assert walked <= direct * 2.0, f"±{jitter_m}m: {walked:.0f}m for {direct:.0f}m"
+
+
+def test_a_drawn_detour_survives_spur_removal():
+    """Drawing a line out around something and back is an excursion, and so
+    is a spur the router invented -- both repeat nodes. Cutting every repeat
+    threw the drawn detour away: a line drawn north around 경복궁 came back as
+    the original route, its northernmost point lower than before."""
+    from runart import graph as graphmod
+    from runart.course import snap_drawn_segment
+    from runart.models import CourseWaypoint
+
+    g = graphmod.get_graph()
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=8.0))
+    top = max(range(len(course.path)),
+              key=lambda i: g.nodes[course.path[i]]["lat"])
+    a, b = max(0, top - 4), min(len(course.path) - 2, top + 4)
+    pa, pb = g.nodes[course.path[a]], g.nodes[course.path[b]]
+
+    def between(p, q, n=14):
+        return [CourseWaypoint(lat=p[0] + (q[0] - p[0]) * i / (n - 1),
+                               lon=p[1] + (q[1] - p[1]) * i / (n - 1))
+                for i in range(n)]
+
+    via = [(pa["lat"], pa["lon"]), (37.5860, 126.9840), (37.5866, 126.9748),
+           (37.5820, 126.9760), (pb["lat"], pb["lon"])]
+    stroke = [point for x, y in zip(via, via[1:]) for point in between(x, y)]
+
+    before = max(g.nodes[n]["lat"] for n in course.path)
+    edited = snap_drawn_segment(course.params, course.path, a, b, stroke)
+    after = max(g.nodes[n]["lat"] for n in edited.path)
+
+    assert after > before, "the drawn northern detour was thrown away"
+    assert edited.length_km > course.length_km
+
+
+def test_only_waypoints_far_off_the_line_count_as_a_detour():
+    """An unsteady hand scatters waypoints along the line it meant to draw.
+    Protecting those from spur removal makes every wobble a detour the route
+    has to honour, which is the zigzag all over again."""
+    from runart import graph as graphmod
+    from runart.course import DETOUR_WAYPOINT_MIN_M, _detour_nodes
+
+    g = graphmod.get_graph()
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    start, end = course.path[8], course.path[30]
+    on_the_line = course.path[15]
+
+    assert DETOUR_WAYPOINT_MIN_M >= 100
+    # A node the route already passes through is never a detour.
+    assert on_the_line not in _detour_nodes(g, [on_the_line], start, end)

@@ -172,10 +172,21 @@ GENERAL_RESPONSE_BUDGET_S = 2.65
 ROUTE_EDIT_RESPONSE_BUDGET_S = 2.65
 ROUTE_EDIT_MAX_CONCURRENT = max(1, int(os.environ.get("RUNART_MAX_CONCURRENT_ROUTE_EDITS", "1")))
 # At an arbitrary address (no station preset), we first try to draw the animal
-# from that exact start briefly; if it cannot complete, we substitute a nearby
-# station's verified preset and cache that decision under the requested point.
-# The outer 2.85s cap also includes queueing and response serialization.
-ADDRESS_TRY_BUDGET_S = 0.8
+# from that exact start; if it cannot complete, we substitute a nearby station's
+# verified preset and cache that decision under the requested point.
+#
+# This used to be 0.8s while the shape search itself is built around a 2.2s cap
+# (shapes.MIN_CLEAN_TOTAL_BUDGET_S), so the search was killed before it could
+# finish and almost every address request fell back to a station. Measured over
+# eight non-station starts, the searches that do succeed take 84ms to 1.65s:
+# 0.8s captured three of seven, 1.8s captures five and every cat course, which
+# scored zero before. What is left over are searches that exhaust the shape
+# search's own cap, so a larger slice here would not save them either.
+#
+# Budget: 2.65s for the tool, minus geocoding (two Kakao variants, ~0.5s worst
+# case) and the widget build, leaves this comfortably inside the outer 2.85s
+# cap that also covers queueing and response serialization.
+ADDRESS_TRY_BUDGET_S = 1.8
 # The plain-course choice still has to be generated. Below this much remaining
 # budget it is dropped: an option is never worth risking the whole answer.
 PLAIN_OPTION_MIN_BUDGET_S = 0.6

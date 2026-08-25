@@ -421,7 +421,8 @@ def snap_drawn_segment(params: CourseParams, path: list[int], from_index: int,
             raise CourseError("그린 선을 잇는 보행로를 찾지 못했어요. 가까운 길을 따라 다시 그려 주세요.") from exc
         replacement.extend(segment if not replacement else segment[1:])
     if not stroke_is_doubled(stroke):
-        replacement = drop_backtracking(replacement)
+        replacement = drop_backtracking(
+            replacement, _detour_nodes(g, drawn_nodes, path[from_index], path[to_index]))
     edited_path = path[:from_index] + replacement + path[to_index + 1:]
     return course_from_path(params, edited_path)
 
@@ -452,6 +453,9 @@ DOUBLED_STROKE_MIN_GAP_M = 250.0
 # itself. A wobble never reverses; only a deliberate return does.
 DOUBLED_STROKE_MAX_FACING = -0.5
 DOUBLED_STROKE_MIN_PAIRS = 4
+# How far off the straight run between the two ends a drawn waypoint must sit
+# before it counts as a detour the runner meant rather than a wobble.
+DETOUR_WAYPOINT_MIN_M = 150.0
 
 
 def _perpendicular_m(point, start, end) -> float:
@@ -556,21 +560,56 @@ def stroke_is_doubled(stroke) -> bool:
     return False
 
 
-def drop_backtracking(nodes: list[int]) -> list[int]:
-    """Cut every excursion that returns to a node the route already visited.
+def _detour_nodes(graph, drawn: list[int], start: int, end: int) -> frozenset[int]:
+    """Which drawn waypoints actually send the route somewhere else.
 
-    A repeated node *is* an out-and-back spur: whatever happens between the
-    two visits leaves and comes back to the same place, so removing it leaves
-    a shorter walk over the same graph edges.
+    An unsteady hand leaves waypoints scattered along the line it meant to
+    draw; they sit within tens of metres of the straight run between the two
+    ends and take the route nowhere. A deliberate detour -- north around
+    경복궁, say -- sits hundreds of metres off it. Only the second kind is
+    worth protecting from spur removal, or every wobble becomes a spur the
+    route has to honour.
+    """
+    a = (graph.nodes[start]["lat"], graph.nodes[start]["lon"])
+    b = (graph.nodes[end]["lat"], graph.nodes[end]["lon"])
+    out = set()
+    for node in drawn:
+        point = (graph.nodes[node]["lat"], graph.nodes[node]["lon"])
+        if _perpendicular_m(point, a, b) >= DETOUR_WAYPOINT_MIN_M:
+            out.add(node)
+    return frozenset(out)
+
+
+def drop_backtracking(nodes: list[int],
+                      protected: frozenset[int] = frozenset()) -> list[int]:
+    """Cut excursions the router invented, keep the ones the runner drew.
+
+    A repeated node is usually an out-and-back spur, and removing what lies
+    between the two visits leaves a shorter walk over the same edges. But the
+    same shape appears when a runner deliberately draws a detour -- out to a
+    place and back to the line -- and cutting that threw the drawn detour
+    away: a line drawn north around 경복궁 came back as the original route,
+    its northernmost point *lower* than before.
+
+    ``protected`` holds the nodes the drawn waypoints snapped to. They are
+    the runner's explicit instruction, so an excursion containing one is
+    never cut; a spur the router invented on its own contains none.
     """
     trimmed: list[int] = []
     seen: dict[int, int] = {}
     for node in nodes:
-        if node in seen:
-            del trimmed[seen[node] + 1:]
-            for gone in list(seen):
-                if seen[gone] > seen[node]:
-                    del seen[gone]
+        start = seen.get(node)
+        if start is not None:
+            span = trimmed[start + 1:]
+            if protected.isdisjoint(span):
+                del trimmed[start + 1:]
+                for gone in list(seen):
+                    if seen[gone] > start:
+                        del seen[gone]
+                continue
+            # The runner asked to go here; keep the excursion and let the
+            # repeat stand rather than deleting what they drew.
+            trimmed.append(node)
             continue
         seen[node] = len(trimmed)
         trimmed.append(node)
