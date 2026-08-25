@@ -215,12 +215,8 @@ def test_edit_endpoint_converts_animal_course_to_direct_edit():
 
 def test_mobile_preview_uses_compact_summary_and_accessible_edit_controls():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
-    assert 'class="course-metrics"' in page
-    # 2x2 on mobile: auto-fit squeezed four cells into ~96px each, and the UA
-    # margin on dt/dd then clipped values like "32~40분" out of the cell.
-    assert 'repeat(2,minmax(0,1fr))' in page
-    assert '.course-metrics dt,.course-metrics dd{margin:0}' in page
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
+    assert "edit-steps" in page
     assert '내 위치 추적 시작' in page
     assert 'aria-label="수정한 코스를 새 코스로 저장"' in page
     assert 'aria-live="polite"' in page
@@ -285,7 +281,7 @@ def _hidden_text(page: str) -> str:
 def test_edit_feedback_is_visible_not_only_screen_reader_text():
     """F-01 regression guard: edit status must not live in an sr-only node."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     # The toast is the single feedback channel: visible *and* announced.
     assert 'id="editToast"' in page
@@ -300,7 +296,7 @@ def test_edit_feedback_is_visible_not_only_screen_reader_text():
 
 def test_edit_toast_distinguishes_blocking_errors_from_transient_hints():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     # Errors and blocked states must not auto-dismiss; hints must.
     assert "AUTO_DISMISS_MS" in page
@@ -315,7 +311,7 @@ def test_edit_toast_distinguishes_blocking_errors_from_transient_hints():
 def test_edit_shows_live_distance_from_the_snap_response():
     """F-03 regression guard: the server returns length_km; the UI must use it."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert 'id="editDistance"' in page
     assert "setEditDistance(payload.length_km)" in page
@@ -326,7 +322,7 @@ def test_edit_shows_live_distance_from_the_snap_response():
 
 def test_edit_blocks_duplicate_requests_while_one_is_in_flight():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert "setEditBusy" in page
     assert "editBusy" in page
@@ -340,7 +336,7 @@ def test_edit_blocks_duplicate_requests_while_one_is_in_flight():
 def test_edit_toolbar_keeps_small_icon_only_buttons():
     """Product requirement: small top-left icons, no text labels."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert "width:40px;height:40px" in page
     assert '.edit-tools{position:absolute;z-index:950;left:10px;top:10px' in page
@@ -354,7 +350,7 @@ def test_edit_tools_have_44px_tap_targets_without_growing():
     """F-07: the icons stay 40px by product requirement, so the touch area is
     widened invisibly instead of enlarging the buttons."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert "width:40px;height:40px" in page                      # visual size unchanged
     assert ".edit-tool-circle::before" in page
@@ -369,7 +365,7 @@ def test_edit_tools_have_44px_tap_targets_without_growing():
 def test_mobile_map_gestures_and_facility_taps_do_not_conflict():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     markers = [{"type": "restroom", "name": "화장실", "at_km": 0.1, "lat": 37.566, "lon": 126.978}]
-    page = preview_html(course, markers, "https://runnywhere.example")
+    page = preview_html(course, markers, "https://runnywhere.example", page="edit")
 
     # An active tool owns one finger; two touch pointers pan the map instead of
     # accidentally submitting a stroke.
@@ -390,7 +386,7 @@ def test_mobile_map_gestures_and_facility_taps_do_not_conflict():
 
 def test_edit_projection_uses_container_coordinates():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
     assert "projection.containerPointFromCoords" in page
     # Selection only maps road nodes to screen pixels. No imprecise finger
     # stroke is converted back into route coordinates anymore.
@@ -400,14 +396,15 @@ def test_edit_projection_uses_container_coordinates():
 
 def test_editor_selects_an_existing_edge_instead_of_collecting_a_freehand_stroke():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert "const nearestSegment = point" in page
     assert "selectedRange=[hit.index,hit.index+1]" in page
-    assert "선택한 구간을 다른 보행로로 바꿀까요?" in page
-    assert "label:'다른 길로',persist:true" in page
+    # The prompt became a hint and the action became a button beside it.
+    assert "끝점을 끌어 구간을 넓힌 뒤 아래 버튼을 눌러 주세요." in page
+    assert 'id="selReroute"' in page
     assert "strokeColor:'#e0522d'" in page
-    assert 'class="edit-anchor"' in page
+    assert 'class="edit-anchor" data-end=' in page
     assert "stroke:sample" not in page
     assert "rawStroke" not in page
 
@@ -416,7 +413,7 @@ def test_revert_is_undoable_and_separated_from_save():
     """F-04: reverting is the only irreversible action, so it is made
     reversible rather than guarded by a map-covering confirm sheet."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert "label:'실행 취소'" in page
     assert "원본 코스로 되돌렸어요." in page
@@ -431,7 +428,7 @@ def test_revert_is_undoable_and_separated_from_save():
 def test_undo_once_and_reset_all_use_unmistakably_different_icons():
     """A curved arrow and a trash can cannot be mistaken for each other."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert 'aria-label="마지막 수정 실행 취소"' in page
     assert 'title="한 번 되돌리기"' in page
@@ -447,7 +444,7 @@ def test_zoom_control_is_removed_while_editing():
     """F-10: setZoomable(false) only stops wheel/pinch; a zoom press mid-gesture
     would move the ground under the screen-space stroke being collected."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert "const zoomControl = new kakao.maps.ZoomControl()" in page
     assert "map.removeControl(zoomControl)" in page
@@ -458,12 +455,11 @@ def test_detail_panels_follow_an_edit():
     """The panels under the map describe the course; once the course changes
     they must follow, or the page shows one route and describes another."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     # every element the summary rewrites has to be addressable
     for element_id in ("courseTitle", "courseBadges", "mLength", "mDuration", "mAscent",
-                       "mSteps", "mKcal", "mElev", "factSignals",
-                       "factStores", "factRestrooms", "facilityTally", "facilityList"):
+                       "editDistance"):
         assert f'id="{element_id}"' in page, element_id
     assert "applySummary(payload.summary)" in page
     assert "const initialSummary =" in page
@@ -483,12 +479,14 @@ def test_edit_summary_matches_what_a_full_page_load_shows():
     summary = course_edit_summary(course)
     facilities = [f for f in facilities_along(route_points(course),
                                               ["convenience_store", "restroom"], limit=80)]
-    page = preview_html(course, facilities, "https://runnywhere.example")
+    page = preview_html(course, facilities, "https://runnywhere.example", page="edit")
 
     assert summary["title"] == course_title(course)
     assert summary["length_km"] == round(course.length_km, 2)
     assert summary["ascent_m"] == round(course.ascent_m)
-    assert summary["facility_tally"] in page
+    # Every facility row the summary carries is on the page a load renders.
+    for row in summary["facility_rows"]:
+        assert row["name"] in page and row["at_km"] in page
     # Running-friendliness was removed from the page; it must not come back
     # through the live-update payload either.
     assert "rfs" not in summary
@@ -499,7 +497,7 @@ def test_editing_offers_an_explicit_map_pan_tool():
     """Two-finger panning exists but nothing on screen says so; one-finger drag
     is the gesture people reach for."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert 'id="panTool"' in page
     assert 'aria-label="지도 이동"' in page
@@ -514,7 +512,7 @@ def test_drawing_overlay_is_absent_unless_a_drawing_tool_is_active():
     """A full-bleed touch-action:none layer over the map is exactly what eats a
     drag on mobile -- keep it out of the tree unless it is being drawn on."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert "touch-action:none;pointer-events:none;display:none" in page
     assert "body.editing.tool-active .edit-overlay{display:block}" in page
@@ -523,7 +521,7 @@ def test_drawing_overlay_is_absent_unless_a_drawing_tool_is_active():
 def test_route_decorations_do_not_swallow_map_drags():
     """km bubbles, direction arrows and the start pin are labels, not controls."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
     assert ".km-marker,.dir-marker,.start-marker,.finish-marker{pointer-events:none}" in page
     assert "routePath[routePath.length - 1]" in page
     assert "sameEndpoint" in page
@@ -532,7 +530,7 @@ def test_route_decorations_do_not_swallow_map_drags():
 def test_live_tracking_centers_the_runner_and_keeps_white_arrows_on_colored_route():
     """GPS tracking follows the runner without flattening route colours."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert "map.setCenter(posLatLng)" in page
     assert "strokeColor:color(s)" in page
@@ -554,20 +552,23 @@ def test_direction_chevrons_repeat_frequently_across_the_whole_course():
     assert markers[0]["lat"] != markers[-1]["lat"]
 
 
-def test_map_entry_points_sit_in_the_top_corners():
+def test_editor_page_needs_no_entry_control_on_the_map():
+    """Editing used to start from a button pinned to the map. The editor is
+    its own page now, so arriving is the intent and the map keeps only the
+    view switch."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
-    assert ">코스 편집</button>" in page
+    assert 'id="editRoute"' not in page
     assert "코스 선 수정" not in page
-    assert "#editRoute{position:absolute;z-index:540;left:14px;top:14px" in page
+    assert "if (PAGE === 'edit' && editEnabled) setEditing(true);" in page
     assert ".view-toggle{position:absolute;z-index:530;right:14px;top:14px" in page
     assert 'class="map-hud"' not in page
 
 
 def test_map_uses_one_round_runner_button_without_visible_metric_or_gps_boxes():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert 'id="runStart" class="run-locate"' in page
     assert '.run-locate{position:absolute' in page
@@ -585,7 +586,7 @@ def test_map_uses_one_round_runner_button_without_visible_metric_or_gps_boxes():
 def test_course_title_and_badges_share_a_row():
     course = generate_course(CourseParams(lat=CITY_HALL["lat"], lon=CITY_HALL["lon"],
                                           distance_km=5.0, location_name="강남대로 401-2"))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert "강남대로런" in page and "401-2런" not in page
     assert 'class="course-head"' in page
@@ -598,15 +599,14 @@ def test_map_container_is_positioned_for_its_absolute_controls():
     """The HUD, toolbar and toast are absolutely positioned inside #map; do not
     rely on the Kakao SDK setting position:relative at runtime."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
     assert "#map{position:relative" in page
 
 
 def test_animal_preview_explains_save_as_new_editing():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     course.params = course.params.model_copy(update={"shape": "dog"})
-    page = preview_html(course, [], "https://runnywhere.example")
-    assert 'id="editRoute"' in page
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
     assert "원본 동물 코스는 유지" in page
     assert "직접 편집한 코스" in page
     # F-02: the warning has to be shown, not buried in screen-reader-only text.
@@ -617,14 +617,14 @@ def test_animal_preview_explains_save_as_new_editing():
 
 def test_plain_course_has_no_animal_edit_notice():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
     assert 'const editNotice = ""' in page
     assert "원본 동물 코스는 유지" not in page
 
 
 def test_preview_keeps_a_local_course_editor_available_without_map_sdk():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert "initLocalCourseEditor" in page
     assert "로컬 코스 편집 체험" in page

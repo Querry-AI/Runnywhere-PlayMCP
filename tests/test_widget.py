@@ -75,7 +75,11 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
 
     card = payload["widget"]
     assert card["size"] == "md" and card["padding"] == "sm"
-    row = card["children"][0]
+    # The card leads with a heading so the runner knows what the list is.
+    header = card["children"][0]
+    assert header["type"] == "Col"
+    assert header["children"][0]["value"] == "추천 코스"
+    row = card["children"][1]
     assert row["type"] == "Row" and row["align"] == "center"
     image, overview = row["children"]
     assert image == {
@@ -90,11 +94,13 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     }
     assert overview["type"] == "Col"
     assert [child["type"] for child in overview["children"]] == [
-        "Title", "Caption", "Text", "Button",
+        "Title", "Caption", "Text", "Caption", "Button",
     ]
     assert overview["children"][0]["value"] == "🐶 댕댕런"
     assert overview["children"][1]["value"] == "강남역 출발·도착"
-    assert overview["children"][2]["value"] == "9.0km · 오르막 31m"
+    # Distance pairs with time, not ascent: time is what a runner plans around.
+    assert overview["children"][2]["value"] == "9.0km · 약 63분"
+    assert "평지 위주" in overview["children"][3]["value"]
     buttons = _components(card, "Button")
     assert [button["label"] for button in buttons] == ["코스 보기"]
     target = buttons[0]["onClickAction"]["payload"]["target"]
@@ -105,7 +111,7 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
 
     copy_text = payload["copy_text"]
     assert "러닝 친화도" not in first
-    assert "오르막 31m" in first
+    assert "약 63분" in first
     assert "GPX" not in first
     assert "# " not in copy_text
     assert "|" not in copy_text
@@ -356,8 +362,13 @@ def test_course_widget_offers_every_alternative_as_a_full_matching_card():
     assert not _contains_key(payload, "status")
     assert labels == ["코스 보기"] * 3
     assert len(rows) == len(images) == 3
-    assert "야옹런" in titles[1]
-    assert captions == [
+    # Alternatives are introduced, not silently appended under the winner.
+    assert any(child.get("value") == "다른 코스도 있어요"
+               for child in _components(children, "Text"))
+    course_titles = [value for value in titles if value != "추천 코스"]
+    assert "야옹런" in course_titles[1]
+    starts = [caption for caption in captions if caption.endswith("출발·도착")]
+    assert starts == [
         "낙성대(강감찬)역 출발·도착",
         "봉천역 출발·도착",
         "서울대입구역 출발·도착",
@@ -402,3 +413,64 @@ def test_course_widget_without_alternatives_keeps_one_primary_action():
         build_course_widget(course, course_id, "https://runnywhere.example"))
     buttons = _components(payload["widget"], "Button")
     assert [button["label"] for button in buttons] == ["코스 보기"]
+
+
+def test_course_card_reads_like_a_recommendation_not_a_data_dump():
+    """The card has to answer 'is this my run?' before 'what are its numbers?'."""
+    course = _course(location_name="성수역")
+    course_id = encode_course_id(course.params)
+    payload = json.loads(build_course_widget(
+        course, course_id, "https://runnywhere.example"))
+    values = [child["value"] for child in
+              _components(payload["widget"], "Caption")
+              + _components(payload["widget"], "Text")
+              + _components(payload["widget"], "Title")]
+    joined = " ".join(values)
+
+    # Heading, then identity, start, effort, character -- in that order.
+    assert "추천 코스" in joined
+    assert "성수역 출발·도착" in joined
+    assert "약 63분" in joined
+    # Character chips carry the words, not bare emoji.
+    assert "평지 위주" in joined or "오르막 포함" in joined or "완만한 경사" in joined
+
+
+def test_widget_effort_matches_the_detail_page_default_pace():
+    """A card promising 63분 must not open a page that says something else."""
+    from runart.pace import DEFAULT_PACE_S, effort
+
+    course = _course()
+    course_id = encode_course_id(course.params)
+    payload = json.loads(build_course_widget(
+        course, course_id, "https://runnywhere.example"))
+    expected = effort(course.length_km, DEFAULT_PACE_S)["duration_min"]
+
+    assert f"약 {expected}분" in json.dumps(payload, ensure_ascii=False)
+
+
+def test_card_chips_prefer_what_separates_one_course_from_another():
+    """Three courses around one station are all 도심 위주; saying so on each
+    card costs a slot and settles nothing."""
+    from runart.insights import CourseFacts
+    from runart.widget import _card_traits
+
+    facts = CourseFacts(
+        traits=(
+            {"emoji": "🛣️", "label": "평지 위주"},
+            {"emoji": "🏙️", "label": "도심 위주"},
+            {"emoji": "🚦", "label": "신호 적음"},
+        ),
+        highlights=(), cautions=(), signals=4,
+        facility_counts={"convenience_store": 0, "restroom": 0},
+    )
+    labels = [trait["label"] for trait in _card_traits(facts)]
+    assert labels == ["평지 위주", "신호 적음"]
+
+    # With no specific opinion to show, terrain keeps the slot.
+    plain = CourseFacts(
+        traits=({"emoji": "🛣️", "label": "평지 위주"},
+                {"emoji": "🌳", "label": "공원·강변 위주"}),
+        highlights=(), cautions=(), signals=0,
+        facility_counts={"convenience_store": 0, "restroom": 0},
+    )
+    assert [t["label"] for t in _card_traits(plain)] == ["평지 위주", "공원·강변 위주"]

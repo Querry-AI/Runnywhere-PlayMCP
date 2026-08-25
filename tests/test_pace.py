@@ -68,7 +68,7 @@ def test_steps_imply_a_plausible_stride():
 
 def test_page_opens_at_the_default_pace_and_ships_the_shared_model():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="run")
     baseline = effort(course.length_km, DEFAULT_PACE_S)
 
     assert 'id="paceRange"' in page
@@ -83,21 +83,21 @@ def test_page_opens_at_the_default_pace_and_ships_the_shared_model():
 
 def test_page_shows_steps_calories_and_elevation_band():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
-    for label in ("걸음 수", "칼로리", "고도 범위", "총 오르막"):
+    page = preview_html(course, [], "https://runnywhere.example", page="run")
+    for label in ("걸음 수", "칼로리", "고도 범위", "누적 오르막"):
         assert label in page
     assert "65kg 기준" in page
 
 
 def test_running_friendliness_metrics_are_gone_from_the_page():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="run")
     assert "러닝 친화도" not in page
     assert 'id="mRfs"' not in page
 
 
 def test_no_disclosure_toggles_remain_on_the_page():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="run")
     assert "<details" not in page
     assert "<summary" not in page

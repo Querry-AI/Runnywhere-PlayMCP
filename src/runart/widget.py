@@ -11,10 +11,16 @@ import urllib.parse
 
 from .course import Course
 from .courseplan import CourseChoice
+from .insights import CourseFacts, course_facts
 from .naming import RUN_NAMES_KO, TRACK_EMOJI, short_place
+from .pace import DEFAULT_PACE_S, effort
 from .shapes import SHAPES
 
 WIDGET_NAME = "runnywhere_course"
+# Two chips plus the facility tally is the most a Kakao Caption fits on one
+# phone line; a wrapped chip line reads as a second, weaker title.
+CARD_TRAIT_LIMIT = 2
+FACILITY_EMOJI = {"convenience_store": "🏪", "restroom": "🚻"}
 WIDGET_MAX_BYTES = 12_000
 # A Kakao button label is one line on a phone; past this it truncates anyway.
 LABEL_MAX_CHARS = 60
@@ -185,6 +191,66 @@ def _widget_title(course: Course) -> str:
     return _plain_text(f"{TRACK_EMOJI} {place + '런' if place else '러닝 코스'}", 40)
 
 
+def _effort_line(course: Course) -> str:
+    """Distance and the time it takes at the page's default pace.
+
+    Ascent used to sit here, but a runner picking between three cards is
+    budgeting minutes, not metres.  The number must be the one the detail
+    page opens with, or the card promises a run the page then contradicts.
+    """
+    minutes = effort(course.length_km, DEFAULT_PACE_S)["duration_min"]
+    return _plain_text(f"{course.length_km:.1f}km · 약 {minutes}분", 120)
+
+
+def _card_traits(facts: CourseFacts) -> tuple[dict, ...]:
+    """Grade plus whatever most distinguishes this course from its neighbours.
+
+    Terrain is the second trait on the detail page, but three courses around
+    one station are almost always all 도심 위주 -- repeating it on every card
+    tells a runner comparing them nothing.  A specific opinion (신호, 조명,
+    보도, 야간) wins the slot whenever the course has one.
+    """
+    if not facts.traits:
+        return ()
+    grade, *rest = facts.traits
+    specific = next((trait for trait in rest[1:]), None)
+    second = specific or (rest[0] if rest else None)
+    return (grade, second) if second else (grade,)
+
+
+def _character_line(facts: CourseFacts) -> str:
+    """What kind of run it is, plus what the runner will find on the way."""
+    parts = [
+        f"{trait['emoji']} {trait['label']}"
+        for trait in _card_traits(facts)[:CARD_TRAIT_LIMIT]
+    ]
+    parts.extend(
+        f"{FACILITY_EMOJI[kind]} {count}"
+        for kind, count in facts.facility_counts.items() if count
+    )
+    return _plain_text(" · ".join(parts), 120)
+
+
+def _section_heading(title: str, caption: str, *, lead: bool) -> dict:
+    """A titled group so the runner reads a recommendation, not a list."""
+    heading = (
+        {"type": "Title", "value": _plain_text(title, 40), "size": "md",
+         "maxLines": 1}
+        if lead else
+        {"type": "Text", "value": _plain_text(title, 40), "size": "sm",
+         "weight": "semibold", "maxLines": 1}
+    )
+    return {
+        "type": "Col",
+        "gap": "xs",
+        "children": [
+            heading,
+            {"type": "Caption", "value": _plain_text(caption, 80),
+             "size": "sm", "maxLines": 2},
+        ],
+    }
+
+
 def _course_card_row(course: Course, course_id: str, origin: str) -> dict:
     """One complete, reusable course card row.
 
@@ -195,9 +261,8 @@ def _course_card_row(course: Course, course_id: str, origin: str) -> dict:
     preview_url = f"{origin}/c/{course_id}"
     title = _widget_title(course)
     location = _plain_text(course.params.location_name or "지정한 출발점", 120)
-    metrics = _plain_text(
-        f"{course.length_km:.1f}km · 오르막 {course.ascent_m:.0f}m", 120
-    )
+    metrics = _effort_line(course)
+    character = _character_line(course_facts(course))
     button = _button("코스 보기", preview_url)
     button.update({
         "style": "primary", "variant": "solid", "size": "sm", "block": True,
@@ -231,6 +296,10 @@ def _course_card_row(course: Course, course_id: str, origin: str) -> dict:
                         "type": "Text", "value": metrics, "size": "sm",
                         "weight": "semibold", "maxLines": 1,
                     },
+                    {
+                        "type": "Caption", "value": character,
+                        "size": "sm", "maxLines": 1,
+                    },
                     button,
                 ],
             },
@@ -261,10 +330,20 @@ def build_course_widget(
     title = _widget_title(course)
     location = _plain_text(course.params.location_name or "지정한 출발점", 120)
     preview_url = f"{origin}/c/{course_id}"
-    children: list[dict] = [_course_card_row(course, course_id, origin)]
+    # Without a heading the cards read as an undifferentiated list and the
+    # runner cannot tell which one answered their request.
+    children: list[dict] = [
+        _section_heading("추천 코스", "요청 조건에 가장 잘 맞는 코스예요.", lead=True),
+        _course_card_row(course, course_id, origin),
+    ]
     if alternatives:
-        for choice in alternatives:
-            children.append({"type": "Divider", "spacing": "xs"})
+        children.append({"type": "Divider", "spacing": "xs"})
+        children.append(_section_heading(
+            "다른 코스도 있어요", "조건에 맞는 다른 코스도 비교해 보세요.", lead=False
+        ))
+        for index, choice in enumerate(alternatives):
+            if index:
+                children.append({"type": "Divider", "spacing": "xs"})
             children.append(_course_card_row(
                 choice.course, choice.course_id, origin
             ))
@@ -274,7 +353,7 @@ def build_course_widget(
     copy_lines = [
         f"**{copy_title}**",
         f"- {copy_location} 출발·도착",
-        f"- {course.length_km:.1f}km · 오르막 {course.ascent_m:.0f}m",
+        f"- {_copy_value(_effort_line(course), 120)}",
         f"- 지도: {preview_url}",
     ]
     if alternatives:

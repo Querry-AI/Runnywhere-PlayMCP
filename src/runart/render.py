@@ -13,16 +13,25 @@ from .course import Course, smooth_series
 from .facilities import LABELS_KO, facilities_along
 from .geo import haversine_m, to_xy
 from .infrastructure import pedestrian_signals_crossed
+from .insights import CourseFacts, course_facts, is_loop
 from .models import encode_course_id
 from .naming import course_badges, course_title
-from .pace import DEFAULT_PACE_S, PACE_MODEL, PACE_TIERS, effort
+from .pace import DEFAULT_PACE_S, PACE_MODEL, effort
 from .rfs import edge_rfs
 from .shapes import SHAPES
 
 PREVIEW_FACILITY_TYPES = {"convenience_store", "restroom"}
 FACILITY_CHIP_LIMIT = 10
-
-
+FACILITY_EMOJI = {"convenience_store": "🏪", "restroom": "🚻"}
+# Matches the server's own guard: past this an edited route cannot be a link.
+COURSE_ID_MAX_CHARS = 4096
+# One course, three jobs. Reading about a route, running it, and redrawing it
+# want different things on screen -- and on one page the map ended up carrying
+# an edit toolbar, a tracking control and a page of prose at the same time.
+COURSE_PAGES = ("info", "run", "edit")
+TAB_LABELS = {"info": "코스 정보", "run": "달리기", "edit": "코스 편집"}
+TAB_ICONS = {"info": "📋", "run": "▶", "edit": "✏️"}
+PAGE_PATHS = {"info": "", "run": "/run", "edit": "/editor"}
 
 
 def script_json(value) -> str:
@@ -136,28 +145,6 @@ def _elevation_range(profile: list) -> tuple[int, int] | None:
     return round(min(elevations)), round(max(elevations))
 
 
-def _profile_svg(profile: list) -> str:
-    if not profile:
-        return ""
-    w, h, pad = 640, 120, 8
-    kms = [p[0] for p in profile]
-    els = [p[1] for p in profile]
-    kmax = kms[-1] or 1.0
-    lo, hi = min(els), max(els)
-    span = max(hi - lo, 6.0)  # keep a flat course visually flat
-    pts = " ".join(
-        f"{pad + (w - 2 * pad) * k / kmax:.1f},{h - pad - (h - 2 * pad) * (e - lo) / span:.1f}"
-        for k, e in profile
-    )
-    return (
-        f'<svg viewBox="0 0 {w} {h}" style="width:100%;height:auto;background:#f7f7f7;'
-        f'border-radius:10px" aria-label="고도 프로파일">'
-        f'<polyline points="{pts}" fill="none" stroke="#0a7d43" stroke-width="2"/>'
-        f'<text x="{pad}" y="14" font-size="11" fill="#666">고도 {lo:.0f}~{hi:.0f}m</text>'
-        f"</svg>"
-    )
-
-
 def _km_markers(points: list[tuple[float, float]]) -> list[dict]:
     markers = []
     target = 1.0
@@ -252,28 +239,118 @@ def _shape_only_route(course: Course) -> list[list[float]]:
     return [[round(lat, 6), round(lon, 6)] for lat, lon in route_points(course)]
 
 
-def _course_fact_html(course: Course, facilities: list[dict],
-                      detailed_points: list[tuple[float, float]]) -> str:
-    g = graphmod.get_graph()
-    signals = pedestrian_signals_crossed(g, course.path)
-    preview_facilities = [f for f in facilities if f["type"] in PREVIEW_FACILITY_TYPES]
-    restroom_count = sum(1 for f in preview_facilities if f["type"] == "restroom")
-    convenience_count = sum(1 for f in preview_facilities if f["type"] == "convenience_store")
-    items = [
-        ("보행 신호", f"{signals}개"),
-        ("편의점", f"{convenience_count}개"),
-        ("화장실", f"{restroom_count}개"),
-    ]
-    ids = ("factSignals", "factStores", "factRestrooms")
+def _facility_rows(facilities: list[dict], course: Course) -> list[dict]:
+    """Course-ordered rows, bracketed by the start and the finish.
+
+    One shape for both consumers is the only way the panel a runner sees after
+    an edit stays identical to the one a full page load renders. The anchors
+    are part of that list rather than separate markup for the same reason --
+    komoot's waypoint list carries its Starting Point / End Point the same way,
+    and a list that opens at 1.9km leaves the runner placing it by guesswork.
+    """
+    start_name = course.params.location_name or "출발점"
+    rows = [{
+        "at_km": "0km", "emoji": "🚩", "kind": "",
+        "name": f"{start_name} 출발", "anchor": True,
+    }]
+    for f in facilities[:FACILITY_CHIP_LIMIT]:
+        kind = LABELS_KO[f["type"]]
+        name = f.get("name") or kind
+        rows.append({
+            "at_km": f"{f['at_km']:g}km",
+            "emoji": FACILITY_EMOJI[f["type"]],
+            # Unnamed POIs fall back to their category, and "화장실 · 화장실"
+            # is a rendering bug the runner has to decode.
+            "kind": "" if name == kind else kind,
+            "name": name,
+            "anchor": False,
+        })
+    rows.append({
+        "at_km": f"{course.length_km:.1f}km", "emoji": "🏁", "kind": "",
+        "name": f"{start_name} 도착" if is_loop(course) else "도착",
+        "anchor": True,
+    })
+    return rows
+
+
+def _trait_chips_html(traits) -> str:
+    return "".join(
+        f'<span class="trait"><i aria-hidden="true">{html.escape(t["emoji"])}</i>'
+        f'{html.escape(t["label"])}</span>'
+        for t in traits
+    )
+
+
+def _note_box_html(box_id: str, list_id: str, tone: str, heading: str,
+                   notes) -> str:
+    """A good-points or caveats box, hidden when the course has nothing to say."""
+    items = "".join(f"<li>{html.escape(note)}</li>" for note in notes)
+    hidden = "" if notes else " hidden"
+    return (
+        f'<div class="note-box {tone}" id="{box_id}"{hidden}>'
+        f"<b>{heading}</b>"
+        f'<ul id="{list_id}">{items}</ul></div>'
+    )
+
+
+def _character_panel_html(facts: CourseFacts) -> str:
+    """What kind of run this is, before any number is discussed.
+
+    Emoji badges next to the title identify the course; they cannot say that
+    it is flat, dark or crossing-heavy. That belongs here, in words.
+    """
+    return (
+        '<section class="panel" id="character"><h2>이 코스는 이런 코스예요</h2>'
+        f'<div class="trait-chips" id="courseTraits">'
+        f"{_trait_chips_html(facts.traits)}</div>"
+        + _note_box_html("courseGoodBox", "courseGood", "good", "👍 좋은 점",
+                         facts.highlights)
+        + _note_box_html("courseCareBox", "courseCare", "care", "⚠️ 참고할 점",
+                         facts.cautions)
+        + "</section>"
+    )
+
+
+def _facility_rows_html(rows: list[dict]) -> str:
+    items = "".join(
+        f'<li class="facility-row{" anchor" if row["anchor"] else ""}">'
+        f'<span class="facility-km">{html.escape(row["at_km"])}</span>'
+        f'<span class="facility-icon" aria-hidden="true">{html.escape(row["emoji"])}</span>'
+        f'<span class="facility-name">{html.escape(row["name"])}</span>'
+        + (f'<span class="facility-kind">{html.escape(row["kind"])}</span>'
+           if row["kind"] else "")
+        + "</li>"
+        for row in rows
+    )
+    empty = (
+        '<p class="facility-empty" id="facilityEmpty">'
+        "코스 10m 안에 편의점·화장실이 없어요. 출발 전에 준비해 주세요.</p>"
+        if all(row["anchor"] for row in rows) else ""
+    )
+    return f'{empty}<ul class="facility-rows">{items}</ul>'
+
+
+def _facility_panel_html(facts: CourseFacts, rows: list[dict]) -> str:
+    """Crossings and on-route facilities in one panel.
+
+    They used to be two panels showing the same three numbers twice. What a
+    runner actually asks is "where, and how far in" -- so the counts summarise
+    and the list answers.
+    """
+    counts = facts.facility_counts
     cells = "".join(
-        f'<div class="fact"><b id="{el_id}">{value}</b><span>{label}</span></div>'
-        for (label, value), el_id in zip(items, ids)
+        f'<div class="fact"><b id="{el_id}">{value}개</b><span>{label}</span></div>'
+        for label, value, el_id in (
+            ("보행 신호", facts.signals, "factSignals"),
+            ("편의점", counts["convenience_store"], "factStores"),
+            ("화장실", counts["restroom"], "factRestrooms"),
+        )
     )
     return (
-        '<section class="panel"><h2>러너 체크포인트</h2>'
+        '<section class="panel" id="facilities"><h2>러닝 중 편의시설</h2>'
         f'<div class="facts">{cells}</div>'
-        '<p class="hint">신호 횡단 수와 코스 10m 안의 편의시설입니다.</p>'
-        '</section>'
+        f'<div id="facilityList">{_facility_rows_html(rows)}</div>'
+        "</section>"
     )
 
 
@@ -284,32 +361,113 @@ def course_edit_summary(course: Course) -> dict:
     the course the user just changed. Mirrors what preview_html() renders on a
     full page load, so the two never disagree.
     """
-    g = graphmod.get_graph()
     points = route_points(course)
     facilities = [f for f in facilities_along(points, sorted(PREVIEW_FACILITY_TYPES), limit=80)
                   if f["type"] in PREVIEW_FACILITY_TYPES]
+    facts = course_facts(course, facilities)
     elev_range = _elevation_range(_elevation_profile(course))
     lo, hi = course.duration_range_min
-    counts = {t: sum(1 for f in facilities if f["type"] == t)
-              for t in sorted(PREVIEW_FACILITY_TYPES)}
+    counts = facts.facility_counts
+    # The download, card and share links all address a course by id. Editing
+    # rewrote every panel but left them pointing at the original route, so a
+    # runner who edited and tapped GPX got the course they had just changed
+    # away from. The id travels with the numbers it belongs to.
+    course_id = encode_course_id(course.params)
     return {
+        "course_id": course_id if len(course_id) <= COURSE_ID_MAX_CHARS else "",
         "length_km": round(course.length_km, 2),
         "ascent_m": round(course.ascent_m),
         "elev_range": list(elev_range) if elev_range else None,
         "grade_label": course.grade_label,
         "duration_min": [lo, hi],
-        "signals": pedestrian_signals_crossed(g, course.path),
+        "signals": facts.signals,
         "facility_counts": counts,
-        "facility_tally": " · ".join(f"{LABELS_KO[t]} {counts[t]}곳" for t in counts),
-        "facility_chips": [f"{LABELS_KO[f['type']]} · {f['at_km']:g}km"
-                           for f in facilities[:FACILITY_CHIP_LIMIT]],
+        "facility_rows": _facility_rows(facilities, course),
+        "traits": [dict(trait) for trait in facts.traits],
+        "highlights": list(facts.highlights),
+        "cautions": list(facts.cautions),
+        "start_name": course.params.location_name or "지정한 출발점",
         "badges": [{"emoji": b["emoji"], "label": b["label"]} for b in course_badges(course)],
         "title": course_title(course),
     }
 
 
+def _edit_chrome_html() -> str:
+    """The drawing overlay, toolbar, distance readout and toast.
+
+    Only the editor page ships these. They used to sit on every page behind a
+    "코스 편집" button pinned to the map, which is how the map came to hold an
+    edit toolbar, a tracking control and a view switch at the same time.
+    """
+    return """<svg id="editOverlay" class="edit-overlay" aria-hidden="true"></svg><div class="edit-tools" role="toolbar" aria-label="코스 편집 도구"><button id="panTool" class="edit-tool-circle" type="button" aria-label="지도 이동" title="지도 이동" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/><path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/></svg></button><button id="segmentTool" class="edit-tool-circle" type="button" aria-label="바꿀 코스 구간 선택" title="구간 선택" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h5M14 7h5M10 7h4"/><circle cx="5" cy="7" r="2"/><circle cx="19" cy="7" r="2"/><path d="M5 17h14" stroke-dasharray="2.5 2.5"/></svg></button><button id="editUndo" class="edit-tool-circle" type="button" aria-label="마지막 수정 실행 취소" title="한 번 되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7H4V2"/><path d="M4 7c2.2-2.4 5-3.4 8-3 4.6.6 8 4.5 8 9"/></svg></button><button id="editCancel" class="edit-tool-circle" type="button" aria-label="모든 수정 초기화" title="전체 초기화"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/><path d="M10 11v5M14 11v5"/></svg></button><button id="editSave" class="edit-tool-circle save" type="button" aria-label="수정한 코스를 새 코스로 저장" title="저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></svg></button></div><div id="editDistance" class="edit-distance" aria-label="수정 중인 코스 거리"></div><div class="sel-bar" id="selBar" hidden><span class="sel-count" id="selCount"></span><button class="sel-ghost" id="selClear" type="button">선택 지우기</button><button class="sel-primary" id="selReroute" type="button">다른 길로 바꾸기</button></div><div id="editToast" class="edit-toast" role="status" aria-live="polite" data-tone="info" hidden><span class="edit-toast-spin" aria-hidden="true"></span><span id="editToastText" class="edit-toast-text"></span><button id="editToastAction" class="edit-toast-action" type="button" hidden></button></div></div>"""
+
+
+def _tab_bar_html(base_url: str, cid: str, page: str) -> str:
+    """The one control that is on every page.
+
+    komoot, AllTrails, Strava and Slopes all keep a persistent bar and give
+    the primary action extra weight (Strava's Record is a filled circle);
+    running the course is this product's Record.
+    """
+    tabs = "".join(
+        f'<a class="tab{" primary" if key == "run" else ""}'
+        f'{" current" if key == page else ""}"'
+        f' href="{base_url}/c/{cid}{PAGE_PATHS[key]}"'
+        f' data-page="{PAGE_PATHS[key]}"'
+        f'{" aria-current=\"page\"" if key == page else ""}>'
+        f'<span class="tab-icon" aria-hidden="true">{TAB_ICONS[key]}</span>'
+        f"<span>{TAB_LABELS[key]}</span></a>"
+        for key in COURSE_PAGES
+    )
+    return f'<nav class="tab-bar" aria-label="코스 화면 전환">{tabs}</nav>'
+
+
+def _howto_panel_html(base_url: str, cid: str) -> str:
+    """The ways to run this course somewhere other than here.
+
+    Running it on this page with live location is the product, so it owns the
+    bottom bar. These are for a runner who wants their own watch or app, and
+    they belong below that, not in competition with it.
+    """
+    return f"""<section class="panel" id="howto"><h2>다른 앱으로 달리기</h2>
+ <a class="action-row" id="gpxLink" href="{base_url}/c/{cid}.gpx">
+  <span class="action-icon" aria-hidden="true">📥</span>
+  <span class="action-text"><b>GPX 파일 받기</b>
+   <span>GPS 파일을 내려받아 쓰던 러닝 앱에서 바로 열어요.</span></span>
+ </a>
+ <div class="action-row action-guide">
+  <div class="action-head">
+   <span class="action-icon" aria-hidden="true">🗺️</span>
+   <span class="action-text"><b>카카오맵에서 열기</b>
+    <span>받은 GPX를 카카오맵에 불러오면 음성 안내로 달릴 수 있어요.</span></span>
+  </div>
+  <ol class="steps">
+   <li>위 GPX 파일 받기를 눌러 코스를 저장합니다.</li>
+   <li>카카오맵 앱에서 우측 상단 길찾기를 누르세요.</li>
+   <li>이동수단을 자전거로 고른 뒤, 도착지 입력 화면 우측 하단의 GPX를 선택하세요.</li>
+   <li>저장한 파일을 고르고 완료한 뒤, 우측 하단 주행 시작을 누르면 안내가 시작됩니다.</li>
+  </ol>
+ </div>
+ <div class="actions secondary-actions">
+  <a class="btn ghost" id="cardLink" href="{base_url}/c/{cid}/card.svg">코스 카드</a>
+  <button class="btn ghost" id="shareCourse" type="button">공유하기</button>
+  <a class="btn ghost" href="{base_url}/animals">동물 지도</a>
+ </div>
+</section>"""
+
+
 def preview_html(course: Course, facilities: list[dict], base_url: str,
-                 kakao_javascript_key: str = "") -> str:
+                 kakao_javascript_key: str = "", page: str = "info") -> str:
+    """One generator, three pages.
+
+    The shell -- head, styles, map, tab bar, scripts -- is identical on all
+    three so a course keeps one identity as the runner moves between them.
+    Only the sections under the map change. The script block is shared too:
+    every feature already guards on its own DOM nodes, and one script that
+    finds nothing to bind is far safer than three that drift apart.
+    """
+    if page not in COURSE_PAGES:
+        raise ValueError(f"unknown course page: {page}")
     facilities = [f for f in facilities if f["type"] in PREVIEW_FACILITY_TYPES]
     p = course.params
     cid = encode_course_id(p)
@@ -331,8 +489,8 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
     km_markers = json.dumps(_km_markers(detailed))
     dir_markers = json.dumps(_direction_markers(detailed))
     profile = _elevation_profile(course)
-    profile_svg = _profile_svg(profile)
-    course_facts = _course_fact_html(course, facilities, detailed)
+    facts = course_facts(course, facilities)
+    facility_rows = _facility_rows(facilities, course)
     markers = json.dumps([
         {"lat": f["lat"], "lon": f["lon"], "type": f["type"],
          "name": html.escape(f.get("name") or LABELS_KO[f["type"]]),
@@ -341,15 +499,10 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
     ])
     shape_view_label = "동물 실루엣" if shape else "코스 라인"
     where = html.escape(p.location_name)
-    where_html = f'<p class="course-where">{where} 출발·도착</p>' if where else ""
-    # Name the empty categories too: "편의점·화장실" with only restrooms listed
-    # reads as if the convenience-store lookup silently failed.
-    facility_tally = " · ".join(
-        f"{LABELS_KO[t]} {sum(1 for f in facilities if f['type'] == t)}곳"
-        for t in sorted(PREVIEW_FACILITY_TYPES)
+    where_html = (
+        f'<p class="course-where"><span aria-hidden="true">📍</span> '
+        f"{where} 출발·도착</p>" if where else ""
     )
-    if len(facilities) > FACILITY_CHIP_LIMIT:
-        facility_tally += f" · 가까운 {FACILITY_CHIP_LIMIT}곳 표시"
     edit_enabled = os.environ.get("RUNART_ROUTE_EDIT", "1") == "1"
     # Surfaced as a toast when editing starts. Saving an edited animal course
     # drops the silhouette, so this expectation has to reach sighted users --
@@ -366,14 +519,82 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
     elev_range = _elevation_range(profile)
     elev_text = (f"{elev_range[0]}~{elev_range[1]}<i>m</i>" if elev_range else "정보 없음")
     initial_effort = effort(course.length_km, DEFAULT_PACE_S)
-    # Quick jumps to each named band, at the slowest pace that still belongs
-    # to it, so tapping a chip lands on a round, recognisable number.
-    pace_chips = "".join(
-        f'<button type="button" class="pace-chip" data-pace="{floor_s or 240}">{name}</button>'
-        for floor_s, name, _ in PACE_TIERS
+    # The track runs fast-to-slow left-to-right; nothing on screen said so,
+    # and nothing marked the value the page opens at.
+    default_pace_label = effort(course.length_km, DEFAULT_PACE_S)["pace_label"]
+    identity = f"""<div class="card course-summary">
+ <div class="course-head"><h1 id="courseTitle">{title}</h1><div class="course-badges" id="courseBadges">{badge_html}</div></div>
+ {where_html}
+ <div class="headline-stats">
+  <div class="lead"><b id="mLength">{course.length_km:.1f}<i>km</i></b><span>거리</span></div>
+  <div><b><span id="mDuration">{initial_effort["duration_min"]}</span><i>분</i></b><span>예상 시간</span></div>
+  <div><b id="mAscent">{course.ascent_m:.0f}<i>m</i></b><span>누적 오르막</span></div>
+ </div>
+</div>"""
+    effort_card = f"""<div class="card course-summary">
+ <div class="course-head"><h1 id="courseTitle">{title}</h1><div class="course-badges" id="courseBadges">{badge_html}</div></div>
+ {where_html}
+ <div class="headline-stats">
+  <div class="lead"><b id="mLength">{course.length_km:.1f}<i>km</i></b><span>거리</span></div>
+  <div><b><span id="mDuration">{initial_effort["duration_min"]}</span><i>분</i></b><span>예상 시간</span></div>
+  <div><b id="mAscent">{course.ascent_m:.0f}<i>m</i></b><span>누적 오르막</span></div>
+ </div>
+ <div class="pace-picker">
+  <div class="pace-head">
+   <span class="pace-caption">내 페이스</span>
+   <span class="pace-read"><b id="paceValue">{initial_effort["pace_label"]}</b><i>/km</i></span>
+   <span class="pace-tier" id="paceTier">{initial_effort["tier"]}</span>
+  </div>
+  <input id="paceRange" class="pace-range" type="range" min="{PACE_MODEL["fastest_s"]}"
+   max="{PACE_MODEL["slowest_s"]}" step="{PACE_MODEL["step_s"]}" value="{DEFAULT_PACE_S}"
+   aria-label="1km당 목표 페이스"
+   aria-valuetext="{initial_effort["pace_label"]} 퍼 킬로미터, {initial_effort["tier"]}">
+  <div class="pace-scale" aria-hidden="true">
+   <span>느리게</span><span class="pace-default">기본 {default_pace_label}</span><span>빠르게</span>
+  </div>
+ </div>
+ <dl class="course-metrics">
+  <div><dt class="metric-label">걸음 수</dt><dd class="metric-value" id="mSteps">{initial_effort["steps"]:,}<i>걸음</i></dd></div>
+  <div><dt class="metric-label">칼로리</dt><dd class="metric-value" id="mKcal">{initial_effort["kcal"]}<i>kcal</i></dd></div>
+  <div><dt class="metric-label">고도 범위</dt><dd class="metric-value" id="mElev">{elev_text}</dd></div>
+ </dl>
+ <p class="metric-note-inline">걸음·칼로리는 성인 {PACE_MODEL["weight_kg"]:.0f}kg 기준 추정치예요.</p>
+ <p class="metric-note-inline">달리기를 시작하면 위치 권한을 물어보고, 지도가 내 위치를 따라 움직여요.</p>
+</div>"""
+    editor_card = f"""<div class="card course-summary">
+ <div class="course-head"><h1 id="courseTitle">{title}</h1><div class="course-badges" id="courseBadges">{badge_html}</div></div>
+ {where_html}
+ <div class="headline-stats">
+  <div class="lead"><b id="mLength">{course.length_km:.1f}<i>km</i></b><span>거리</span></div>
+  <div><b><span id="mDuration">{initial_effort["duration_min"]}</span><i>분</i></b><span>예상 시간</span></div>
+  <div><b id="mAscent">{course.ascent_m:.0f}<i>m</i></b><span>누적 오르막</span></div>
+ </div>
+ <ol class="steps edit-steps">
+  <li>구간 선택을 누르고 바꾸고 싶은 코스 선을 탭하세요.</li>
+  <li>새로 지날 길을 지도 위에 그리면 보행로로 붙습니다.</li>
+  <li>저장을 누르면 수정한 코스가 새 링크로 만들어져요.</li>
+ </ol>
+ <p class="metric-note-inline" id="editNoticeText">{edit_notice or "거리와 아래 정보는 수정하는 즉시 다시 계산돼요."}</p>
+</div>"""
+    character_panel = _character_panel_html(facts)
+    facility_panel = _facility_panel_html(facts, facility_rows)
+    howto_panel = _howto_panel_html(base_url, cid)
+    tab_bar = _tab_bar_html(base_url, cid, page)
+    run_float = (
+        '<div class="run-float"><button class="run-start" id="runCta" type="button">'
+        '<span aria-hidden="true">▶</span>달리기 시작</button></div>'
+        if page == "run" else ""
     )
+    edit_chrome = _edit_chrome_html() if page == "edit" and edit_enabled else ""
+    page_sections = {
+        "info": identity + character_panel + facility_panel + howto_panel,
+        "run": effort_card + howto_panel,
+        "edit": editor_card,
+    }[page]
     pace_model = script_json(PACE_MODEL)
     initial_summary = script_json(course_edit_summary(course))
+    base_url_json = script_json(base_url)
+    page_json = script_json(page)
     kakao_key = html.escape(kakao_javascript_key, quote=True)
     map_sdk = (
         f'<script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={kakao_key}'
@@ -417,7 +638,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .map-error strong{{font-size:16px;color:#142018}}
  .map-error button{{min-height:44px;padding:0 18px;border:1px solid #c3cec6;border-radius:12px;
       background:#fff;color:#142018;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer}}
- .run-locate{{position:absolute;z-index:520;left:50%;bottom:16px;transform:translateX(-50%);
+ .run-locate{{position:absolute;z-index:520;right:14px;bottom:72px;
       display:inline-flex;align-items:center;justify-content:center;width:60px;height:60px;padding:0;border:0;
       border-radius:50%;background:#142018;color:#fff;box-shadow:0 7px 24px rgba(10,28,19,.28);
       cursor:pointer}}
@@ -442,13 +663,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  h1{{margin:0;font-size:26px;line-height:1.28;letter-spacing:-.035em;word-break:keep-all}}
  h2,h3{{margin:0 0 12px;font-size:17px;letter-spacing:-.02em}}
  .stat{{color:#3d473f;line-height:1.65;font-size:15px}}
- /* Distance is a fact about the course; time is a consequence of the pace
-    the runner picks. They sit on one line so the causal pair reads together. */
- .effort-line{{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:2px 0 14px}}
- .effort-distance{{font-size:34px;font-weight:800;color:#0a7d43;letter-spacing:-.04em;line-height:1}}
- .effort-duration{{font-size:34px;font-weight:800;color:#142018;letter-spacing:-.04em;line-height:1}}
- .effort-line i{{font-style:normal;font-size:17px;font-weight:700;margin-left:2px;color:#55605a}}
- .pace-picker{{border:1px solid #e1e7dd;background:#f7faf5;border-radius:14px;padding:13px 14px 11px;margin-bottom:14px}}
+ .pace-picker{{border:0;border-top:1px solid #eef1ed;background:none;padding:16px 0 4px;margin:0 0 4px}}
  .pace-head{{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}}
  .pace-caption{{font-size:13px;font-weight:700;color:#55605a}}
  .pace-read{{margin-left:auto;font-size:20px;font-weight:800;color:#142018;letter-spacing:-.02em}}
@@ -468,27 +683,23 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .pace-range::-moz-range-thumb{{width:28px;height:28px;border-radius:50%;background:#fff;
       border:3px solid #0a7d43;box-shadow:0 2px 8px rgba(10,28,19,.24);cursor:grab}}
  .pace-range:active::-webkit-slider-thumb{{cursor:grabbing;transform:scale(.94)}}
- .pace-chips{{display:flex;gap:6px;margin-top:2px}}
- .pace-chip{{flex:1;min-height:34px;border:1px solid #dce3d8;border-radius:9px;background:#fff;
-      color:#44514a;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;padding:0}}
- .pace-chip[aria-pressed="true"]{{background:#142018;border-color:#142018;color:#fff}}
- .pace-feel{{margin:9px 0 0;font-size:12px;color:#55605a;line-height:1.4;word-break:keep-all}}
- .metric-value i{{font-style:normal;font-size:14px;font-weight:700;color:#55605a;margin-left:2px}}
+ .metric-value i{{font-style:normal;font-size:13px;font-weight:700;color:#8a958d;margin-left:2px}}
  /* Secondary actions must not compete with the two primary CTAs above them. */
  .btn.ghost{{background:#f2f6f0;color:#2b3630;border:1px solid #dce3d8;font-weight:700}}
  .actions.secondary-actions{{grid-template-columns:repeat(3,1fr);margin-top:8px}}
  .actions.secondary-actions .btn{{min-height:44px;padding:0 6px;font-size:13px}}
- .metric-note-inline{{margin:8px 0 0;font-size:12px;color:#55605a}}
- .course-metrics{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:14px 0}}
- .course-metrics>div{{min-width:0;padding:12px;border:1px solid #e1e7dd;background:#f7faf5;border-radius:12px}}
+ .metric-note-inline{{margin:14px 0 0;font-size:12px;line-height:1.55;color:#8a958d}}
+ .course-metrics{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;
+      margin:18px 0 0;padding-top:16px;border-top:1px solid #eef1ed}}
+ .course-metrics>div{{min-width:0}}
  /* dt/dd carry a 40px UA margin-inline-start that squeezes the value out of the cell. */
  .course-metrics dt,.course-metrics dd{{margin:0}}
- .metric-value{{display:block;font-size:21px;font-weight:800;color:#142018;white-space:nowrap}}
- .metric-label{{display:block;font-size:13px;color:#55605a;margin-top:3px;word-break:keep-all}}
+ .metric-label{{display:block;font-size:12px;color:#8a958d;letter-spacing:.01em;word-break:keep-all}}
+ .metric-value{{display:block;margin-top:5px;font-size:20px;font-weight:800;color:#142018;
+      letter-spacing:-.035em;white-space:nowrap;font-variant-numeric:tabular-nums}}
  .metric-note{{display:block;font-size:12px;font-weight:700;color:#17613e;margin-top:2px}}
  .course-where{{margin:-6px 0 12px;font-size:15px;font-weight:700;color:#44514a;word-break:keep-all}}
  .tag{{padding:6px 9px;border-radius:999px;background:#edf5f0;color:#17613e;font-size:13px;font-weight:700;word-break:keep-all}}
- .supporting-copy{{font-size:13px;line-height:1.45;color:#55605a;margin:0}}
  .score{{font-size:1.35em;font-weight:800;color:#0a7d43}}
  .legend{{font-size:13px;color:#55605a;margin:10px 0 0}}
  .btn{{display:inline-flex;align-items:center;justify-content:center;min-height:48px;margin:6px 8px 0 0;padding:0 16px;border-radius:12px;
@@ -504,14 +715,12 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .metric-top{{display:flex;justify-content:space-between;gap:12px;font-size:13px;color:#445048;margin-bottom:5px}}
  .bar{{height:8px;background:#e8ede6;border-radius:999px;overflow:hidden}}
  .bar i{{display:block;height:100%;background:#2da85f;border-radius:999px}}
- .facts{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}}
- .fact{{border:1px solid #e1e7dd;background:#f7faf5;border-radius:12px;padding:12px;min-width:0}}
- .fact b{{display:block;font-size:18px;color:#142018;margin-bottom:3px;word-break:keep-all}}
- .fact span{{font-size:13px;color:#55605a}}
- .hint{{font-size:13px;color:#55605a;margin:10px 0 0}}
+ .facts{{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:2px}}
+ .fact{{min-width:0}}
+ .fact b{{display:block;font-size:20px;font-weight:800;color:#142018;letter-spacing:-.035em;
+      line-height:1.1;word-break:keep-all;font-variant-numeric:tabular-nums}}
+ .fact span{{display:block;margin-top:5px;font-size:12px;color:#8a958d;letter-spacing:.01em}}
  .steps{{margin:8px 0 0;padding-left:20px;color:#3d473f;line-height:1.65;font-size:14px}}
- .facility-list{{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}}
- .chip{{border:1px solid #dce3d8;background:#f7faf5;border-radius:999px;padding:7px 10px;font-size:13px;color:#344238}}
  /* Route decorations are labels, not controls: a drag that happens to start on
     a km bubble or a direction arrow must still pan the map. */
  .km-marker,.dir-marker,.start-marker,.finish-marker{{pointer-events:none}}
@@ -542,7 +751,6 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
       overflow:hidden;text-overflow:ellipsis}}
  .poi-pop span{{font-size:13px;color:#5c675e;line-height:1.4;word-break:keep-all}}
  .sr-only{{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}}
- #editRoute{{position:absolute;z-index:540;left:14px;top:14px;min-height:46px;border:0;border-radius:12px;padding:0 14px;background:#fff;color:#142018;font-family:inherit;font-size:13px;font-weight:700;box-shadow:0 4px 18px rgba(0,0,0,.12)}}
  .edit-tools{{position:absolute;z-index:950;left:10px;top:10px;display:none;gap:6px}}
  .edit-tool-circle{{position:relative;display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;min-height:40px!important;padding:0!important;border:0;border-radius:50%!important;background:#fff!important;color:#142018!important;box-shadow:0 2px 8px rgba(10,28,19,.18)!important;cursor:pointer}}
  /* 44x44 tap target without growing the 40px button: the icons stay small by
@@ -554,8 +762,6 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  /* Extra room before the confirming action so a mis-tap does not discard work. */
  .edit-tool-circle.save{{margin-left:8px;background:#087b59!important;color:#fff!important}}
  .edit-tool-circle[aria-pressed="true"]{{background:#142018!important;color:#fff!important;outline:3px solid #8ee0bb;outline-offset:2px}}
- .edit-anchor{{width:12px;height:12px;border:3px solid #fff;border-radius:50%;background:#e0522d;
-      box-shadow:0 2px 7px rgba(0,0,0,.3);pointer-events:none}}
  /* display:none when not selecting. pointer-events:none alone was enough in
     theory, but a full-bleed touch-action:none layer over the map is exactly
     the kind of thing that eats a drag on mobile -- keep it out of the tree
@@ -584,91 +790,173 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
     On its own row under the toolbar: six 40px tools make the toolbar 278px
     wide, which collides with a top-right chip at 375px. The pill row that
     normally occupies this line is hidden while editing. */
+ /* The selection's own controls, on the map beside it. */
+ .sel-bar{{position:absolute;z-index:955;left:10px;right:10px;
+      bottom:calc(10px + env(safe-area-inset-bottom));display:flex;align-items:center;gap:8px;
+      padding:9px 10px;border-radius:14px;background:rgba(255,255,255,.98);
+      box-shadow:0 8px 26px rgba(10,28,19,.22)}}
+ .sel-bar[hidden]{{display:none}}
+ .sel-count{{flex:1;min-width:0;padding-left:4px;font-size:12.5px;font-weight:700;color:#55605a;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+ .sel-bar button{{flex-shrink:0;min-height:42px;padding:0 14px;border:0;border-radius:11px;
+      font-family:inherit;font-size:13.5px;font-weight:800;letter-spacing:-.02em;cursor:pointer}}
+ .sel-ghost{{background:#f2f6f0;color:#44514a}}
+ .sel-primary{{background:#0a7d43;color:#fff}}
+ .sel-bar button:disabled{{opacity:.5;cursor:not-allowed}}
+ /* A 12px dot is a label; a 28px target is a handle you can actually grab. */
+ .edit-anchor{{display:block;width:28px;height:28px;border-radius:50%;
+      border:4px solid #e0522d;background:#fff;box-sizing:border-box;
+      box-shadow:0 2px 10px rgba(0,0,0,.28);cursor:grab;touch-action:none}}
+ .edit-anchor:focus-visible{{outline:3px solid #8ee0bb;outline-offset:2px}}
+ body.handle-drag .edit-anchor{{cursor:grabbing}}
+ body.handle-drag{{touch-action:none}}
  .edit-distance{{position:absolute;z-index:950;right:10px;top:58px;display:none;align-items:center;
       min-height:40px;padding:0 13px;border-radius:999px;background:rgba(255,255,255,.96);
       color:#142018;font-size:14px;font-weight:800;box-shadow:0 2px 8px rgba(10,28,19,.18)}}
  body.editing .edit-distance{{display:flex}}
  .edit-tools[aria-busy="true"] .edit-tool-circle{{opacity:.45}}
  body.editing .edit-tools{{display:flex}}
- body.editing .run-locate,body.editing .view-toggle,body.editing #editRoute{{display:none!important}}
+ body.editing .run-locate,body.editing .view-toggle{{display:none!important}}
  body.editing.tool-active .facility-marker{{pointer-events:none;opacity:.2}}
  body.editing.tool-active .edit-overlay{{pointer-events:auto}}
- footer{{color:#55605a;font-size:13px;padding:8px 20px 28px;text-align:center;line-height:1.6}}
+ /* Distance, time and climb decide whether the run fits the day, so they
+    share one row instead of being split across the page. */
+ /* Runna, adidas and AllTrails all set run figures straight on the surface.
+    A border around every number turns a page into a spreadsheet, and the
+    borders were doing work that column alignment already does. */
+ .headline-stats{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;
+      margin:16px 0 20px;padding:0}}
+ .headline-stats>div{{min-width:0}}
+ .headline-stats b{{display:block;font-size:30px;font-weight:800;letter-spacing:-.045em;
+      color:#142018;line-height:1.05;white-space:nowrap;font-variant-numeric:tabular-nums}}
+ .headline-stats .lead b{{color:#0a7d43}}
+ .headline-stats i{{font-style:normal;font-size:14px;font-weight:700;color:#8a958d;margin-left:2px;
+      letter-spacing:0}}
+ .headline-stats>div>span{{display:block;margin-top:6px;font-size:12px;color:#8a958d;
+      letter-spacing:.01em;word-break:keep-all}}
+ .trait-chips{{display:flex;flex-wrap:wrap;gap:6px}}
+ .trait{{display:inline-flex;align-items:center;gap:5px;padding:7px 11px;border-radius:999px;
+      background:#edf5f0;color:#17613e;font-size:13px;font-weight:700;word-break:keep-all}}
+ .trait i{{font-style:normal;font-size:13px}}
+ /* komoot tints its route alerts and skips the outline: with a fill already
+    separating the group, the border is a second boundary doing the same job. */
+ .note-box{{border:0;border-radius:14px;padding:14px 16px;margin-top:14px}}
+ .note-box b{{display:block;font-size:13.5px;font-weight:800;letter-spacing:-.01em;margin-bottom:7px}}
+ .note-box ul{{margin:0;padding-left:16px;font-size:14px;line-height:1.7;color:#3d473f;
+      word-break:keep-all;letter-spacing:-.005em}}
+ .note-box li+li{{margin-top:3px}}
+ .note-box.good{{background:#eef7f1}}
+ .note-box.good b{{color:#17613e}}
+ .note-box.care{{background:#fdf6ec}}
+ .note-box.care b{{color:#8a5a12}}
+ .facility-rows{{list-style:none;margin:6px 0 0;padding:0}}
+ .facility-row{{display:flex;align-items:center;gap:10px;padding:11px 2px;border-top:1px solid #eef1ed}}
+ .facility-row:first-child{{border-top:0}}
+ .facility-km{{flex:0 0 54px;font-size:13px;font-weight:800;color:#0a7d43}}
+ .facility-icon{{font-size:15px;line-height:1}}
+ .facility-name{{flex:1;min-width:0;font-size:14px;color:#213028;overflow:hidden;
+      text-overflow:ellipsis;white-space:nowrap}}
+ .facility-kind{{flex-shrink:0;font-size:12px;color:#55605a}}
+ .facility-empty{{margin:10px 0 0;font-size:13px;line-height:1.5;color:#55605a}}
+ /* Starting the run is a choice between two tools, not a wall of steps. */
+ .action-row{{display:flex;align-items:center;gap:12px;padding:15px 16px;
+      min-height:44px;text-decoration:none;color:inherit;cursor:pointer}}
+ .action-row{{margin-top:8px;border:0;border-radius:14px;background:#f5f8f4}}
+ .action-icon{{display:inline-flex;align-items:center;justify-content:center;flex:0 0 38px;height:38px;
+      border-radius:11px;background:#fff;font-size:17px;line-height:1}}
+ .action-text{{flex:1;min-width:0}}
+ .action-text b{{display:block;font-size:15px;letter-spacing:-.02em;color:#142018}}
+ .action-text>span{{display:block;margin-top:2px;font-size:12.5px;line-height:1.45;color:#55605a;word-break:keep-all}}
+ .action-guide{{display:block;padding:15px 16px 14px;cursor:default;background:#f5f8f4}}
+ .action-head{{display:flex;align-items:center;gap:12px}}
+ .action-guide .steps{{margin:10px 0 0;padding-left:19px;font-size:13.5px;line-height:1.7}}
+ .tip-box{{margin-top:16px;padding-top:14px;border-top:1px solid #eef1ed;background:none}}
+ .tip-box b{{display:block;font-size:12.5px;font-weight:800;color:#55605a;margin-bottom:5px}}
+ .tip-box p{{margin:0;font-size:13px;line-height:1.65;color:#6b766f;word-break:keep-all}}
+ #howto{{scroll-margin-top:12px}}
+ /* Fast/slow is a property of the track, not of the chips under it. */
+ .pace-scale{{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+      margin:-2px 0 8px;font-size:11px;color:#7c887f}}
+ .pace-default{{color:#17613e;font-weight:700}}
+ .facility-row.anchor{{color:#55605a}}
+ .facility-row.anchor .facility-name{{font-weight:700;color:#344238}}
+ .facility-row.anchor .facility-km{{color:#344238}}
+ /* The bar carries the two numbers the decision rests on, so a runner who has
+    scrolled past the summary never has to scroll back to act. */
+ /* Kakao cannot rotate its map, so north stays put and the cone turns. */
+ .user-heading{{position:absolute;left:50%;top:50%;width:0;height:0;
+      margin:-30px 0 0 -13px;border-left:13px solid transparent;
+      border-right:13px solid transparent;border-bottom:26px solid rgba(229,50,46,.55);
+      transform-origin:50% 100%;pointer-events:none;filter:drop-shadow(0 1px 2px rgba(0,0,0,.25))}}
+ .user-heading[hidden]{{display:none}}
+ .run-float{{position:fixed;z-index:890;left:16px;right:16px;
+      bottom:calc(84px + env(safe-area-inset-bottom));pointer-events:none}}
+ .run-start{{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;
+      min-height:56px;border:0;border-radius:16px;background:#0a7d43;color:#fff;
+      font-family:inherit;font-size:16px;font-weight:800;letter-spacing:-.025em;
+      cursor:pointer;pointer-events:auto;box-shadow:0 10px 28px rgba(10,60,35,.32)}}
+ .run-start.running{{background:#c0392b}}
+ .run-start:focus-visible{{outline:3px solid #8ee0bb;outline-offset:3px}}
+ .run-start:disabled{{background:#9aa69e;cursor:not-allowed}}
+ .run-start span{{font-size:13px;line-height:1}}
+ .edit-steps{{margin:18px 0 0;padding-left:19px;font-size:13.5px;line-height:1.7;color:#3d473f}}
+ /* One persistent bar on every page, with the run given the extra weight
+    Strava gives Record. */
+ .tab-bar{{position:fixed;z-index:900;left:0;right:0;bottom:0;display:flex;
+      padding:7px 10px calc(7px + env(safe-area-inset-bottom));gap:6px;
+      background:rgba(255,255,255,.97);border-top:1px solid #e2e7df;
+      box-shadow:0 -6px 22px rgba(20,45,30,.09);backdrop-filter:saturate(1.6) blur(8px)}}
+ .tab{{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;
+      justify-content:center;gap:3px;min-height:52px;border-radius:13px;
+      color:#8a958d;text-decoration:none;font-size:11.5px;font-weight:700;
+      letter-spacing:-.01em}}
+ .tab-icon{{font-size:17px;line-height:1}}
+ .tab.current{{color:#0a7d43;background:#eef7f1}}
+ .tab.primary.current{{color:#fff;background:#0a7d43}}
+ /* Nothing competes with the map once the runner is moving. */
+ body.running .wrap,body.running footer{{display:none}}
+ body.running .run-float{{bottom:calc(20px + env(safe-area-inset-bottom))}}
+ body.running #map{{height:calc(100svh - 132px);min-height:0}}
+ /* Whether the runner is on the course is the reason to run it here, so it
+    is painted over the map rather than announced to screen readers alone. */
+ .map-wrap{{position:relative}}
+ .run-hud{{position:absolute;z-index:540;left:14px;right:14px;bottom:14px;display:flex;
+      align-items:center;gap:9px;padding:11px 14px;border-radius:13px;
+      background:rgba(20,32,24,.92);color:#fff;font-size:13.5px;font-weight:700;
+      letter-spacing:-.01em;box-shadow:0 8px 26px rgba(0,0,0,.28)}}
+ .run-hud[hidden]{{display:none}}
+ .run-dot{{flex-shrink:0;width:9px;height:9px;border-radius:50%;background:#8ee0bb}}
+ .run-hud[data-tone="warn"]{{background:rgba(140,52,40,.94)}}
+ .run-hud[data-tone="warn"] .run-dot{{background:#ffc9a8}}
+ .run-hud[data-tone="live"] .run-dot{{animation:runpulse 1.8s ease-in-out infinite}}
+ @keyframes runpulse{{50%{{opacity:.25}}}}
+ footer{{color:#55605a;font-size:13px;padding:8px 20px 96px;text-align:center;line-height:1.6}}
+ body.page-run footer{{padding-bottom:172px}}
  footer a{{display:inline-block;padding:8px 4px;color:inherit}}
- @media (max-width:760px){{.brand{{height:48px;padding:0 16px}} .facts{{grid-template-columns:repeat(2,1fr)}}
+ @media (max-width:760px){{.brand{{height:48px;padding:0 16px}}
+      .facts{{gap:6px}}.fact{{padding:11px 8px}}.fact b{{font-size:17px}}.fact span{{font-size:12px}}
       #map{{height:clamp(280px,42svh,380px);min-height:0}}
-      .view-toggle{{right:10px;top:10px}}#editRoute{{left:10px;top:10px}}
-      .run-locate{{position:fixed;bottom:calc(14px + env(safe-area-inset-bottom));width:58px;height:58px}}
+      .view-toggle{{right:10px;top:10px}}
+      .run-locate{{bottom:76px;width:54px;height:54px}}
       .course-head{{gap:8px}}.badge{{width:28px;height:28px;font-size:15px}}
       .wrap{{display:block;padding:0 16px 96px}}.card,.panel{{padding:18px;margin-bottom:12px;border-radius:16px}}h1{{font-size:22px;line-height:1.25;word-break:keep-all}}
       .actions{{grid-template-columns:1fr 1fr}}.actions .btn{{padding:0 8px;text-align:center}}
-      footer{{padding-bottom:96px}}.course-metrics{{grid-template-columns:repeat(2,minmax(0,1fr))}}.edit-bar{{left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));}}
-      .metric-value{{font-size:20px;line-height:1.2;font-variant-numeric:tabular-nums;white-space:nowrap}}.metric-label{{font-size:13px;line-height:1.35}}.supporting-copy{{font-size:13px;line-height:1.45;word-break:normal;line-break:strict}}
+      footer{{padding-bottom:96px}}.course-metrics{{gap:6px}}.edit-bar{{left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));}}
+      .metric-value{{font-size:19px;line-height:1.2;font-variant-numeric:tabular-nums;white-space:nowrap}}.metric-label{{font-size:12px;line-height:1.35}}
       footer{{padding-bottom:96px}}}}
  @media (orientation:landscape) and (max-width:900px){{#map{{height:280px}}.wrap{{padding-bottom:72px}}}}
  @media(prefers-reduced-motion:reduce){{*{{scroll-behavior:auto!important;animation-duration:.001ms!important;transition-duration:.001ms!important}}}}
-</style></head><body>
+</style></head><body class="page-{page}">
 <header class="brand"><strong>러니웨어<span class="brand-tagline">: 어디서든 러닝 코스 짜기!</span></strong></header>
-<div id="map"><button id="runStart" class="run-locate" type="button"
- aria-label="내 위치 추적 시작" title="내 위치 추적 시작"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="16" cy="4" r="2"/><path d="m14.5 7-3 4 3.2 2.2 2.1-3.1 3.2 2M11.5 11 7 13.5M14.7 13.2 10 21M14.7 13.2 20 19"/></svg><span class="sr-only">내 위치 추적 시작</span></button><span id="runStatus" class="sr-only" role="status" aria-live="polite"></span><div class="view-toggle" aria-label="지도 보기 전환">
+<div class="map-wrap"><div id="map"><button id="runStart" class="run-locate" type="button"
+ aria-label="내 위치 추적 시작" title="내 위치 추적 시작"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="16" cy="4" r="2"/><path d="m14.5 7-3 4 3.2 2.2 2.1-3.1 3.2 2M11.5 11 7 13.5M14.7 13.2 10 21M14.7 13.2 20 19"/></svg><span class="sr-only">내 위치 추적 시작</span></button><div class="view-toggle" aria-label="지도 보기 전환">
  <button id="shapeView" type="button">{shape_view_label}</button>
  <button id="guideView" type="button" class="active">러닝 안내</button>
- </div>{'<button id="editRoute" type="button">코스 편집</button>' if edit_enabled else ''}<svg id="editOverlay" class="edit-overlay" aria-hidden="true"></svg><div class="edit-tools" role="toolbar" aria-label="코스 편집 도구"><button id="panTool" class="edit-tool-circle" type="button" aria-label="지도 이동" title="지도 이동" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/><path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/></svg></button><button id="segmentTool" class="edit-tool-circle" type="button" aria-label="바꿀 코스 구간 선택" title="구간 선택" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h5M14 7h5M10 7h4"/><circle cx="5" cy="7" r="2"/><circle cx="19" cy="7" r="2"/><path d="M5 17h14" stroke-dasharray="2.5 2.5"/></svg></button><button id="editUndo" class="edit-tool-circle" type="button" aria-label="마지막 수정 실행 취소" title="한 번 되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7H4V2"/><path d="M4 7c2.2-2.4 5-3.4 8-3 4.6.6 8 4.5 8 9"/></svg></button><button id="editCancel" class="edit-tool-circle" type="button" aria-label="모든 수정 초기화" title="전체 초기화"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/><path d="M10 11v5M14 11v5"/></svg></button><button id="editSave" class="edit-tool-circle save" type="button" aria-label="수정한 코스를 새 코스로 저장" title="저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></svg></button></div><div id="editDistance" class="edit-distance" aria-label="수정 중인 코스 거리"></div><div id="editToast" class="edit-toast" role="status" aria-live="polite" data-tone="info" hidden><span class="edit-toast-spin" aria-hidden="true"></span><span id="editToastText" class="edit-toast-text"></span><button id="editToastAction" class="edit-toast-action" type="button" hidden></button></div></div>
+ </div>{edit_chrome}<div class="run-hud" id="runHud" hidden><span class="run-dot" aria-hidden="true"></span><span id="runStatus" role="status" aria-live="polite"></span></div></div>
 <div class="wrap">
-<div class="card course-summary">
- <div class="course-head"><h1 id="courseTitle">{title}</h1><div class="course-badges" id="courseBadges">{badge_html}</div></div>
- {where_html}
- <div class="effort-line">
-  <span class="effort-distance" id="mLength">{course.length_km:.1f}<i>km</i></span>
-  <span class="effort-duration"><b id="mDuration">{initial_effort["duration_min"]}</b><i>분</i></span>
- </div>
- <div class="pace-picker">
-  <div class="pace-head">
-   <span class="pace-caption">내 페이스</span>
-   <span class="pace-read"><b id="paceValue">{initial_effort["pace_label"]}</b><i>/km</i></span>
-   <span class="pace-tier" id="paceTier">{initial_effort["tier"]}</span>
-  </div>
-  <input id="paceRange" class="pace-range" type="range" min="{PACE_MODEL["fastest_s"]}"
-   max="{PACE_MODEL["slowest_s"]}" step="{PACE_MODEL["step_s"]}" value="{DEFAULT_PACE_S}"
-   aria-label="1km당 목표 페이스" aria-describedby="paceFeel"
-   aria-valuetext="{initial_effort["pace_label"]} 퍼 킬로미터, {initial_effort["tier"]}">
-  <div class="pace-chips" role="group" aria-label="페이스 빠르게 고르기">{pace_chips}</div>
-  <p class="pace-feel" id="paceFeel">{initial_effort["tier_feel"]} · 아래 숫자가 이 페이스에 맞춰 바뀌어요</p>
- </div>
- <dl class="course-metrics">
-  <div><dt class="metric-label">걸음 수</dt><dd class="metric-value" id="mSteps">{initial_effort["steps"]:,}<i>걸음</i></dd></div>
-  <div><dt class="metric-label">칼로리</dt><dd class="metric-value" id="mKcal">{initial_effort["kcal"]}<i>kcal</i></dd></div>
-  <div><dt class="metric-label">고도 범위</dt><dd class="metric-value" id="mElev">{elev_text}</dd></div>
-  <div><dt class="metric-label">총 오르막</dt><dd class="metric-value" id="mAscent">{course.ascent_m:.0f}<i>m</i></dd></div>
- </dl>
- <p class="metric-note-inline">걸음·칼로리는 성인 {PACE_MODEL["weight_kg"]:.0f}kg 기준 추정치예요.</p>
- <p class="supporting-copy">실제 통행·공사 상황을 확인하고 안전하게 달려 주세요.</p>
- {profile_svg}
- <div class="actions primary-actions">
-  <a class="btn" href="{base_url}/c/{cid}.gpx">GPX 파일 받기</a>
- </div>
- <div class="actions secondary-actions">
-  <a class="btn ghost" href="{base_url}/c/{cid}/card.svg">코스 카드</a>
-  <button class="btn ghost" id="shareCourse" type="button">공유하기</button>
-  <a class="btn ghost" href="{base_url}/animals">동물 지도</a>
- </div>
+{page_sections}
 </div>
-{course_facts}
-<section class="panel"><h2>코스 주변 편의시설</h2>
- <p class="supporting-copy">코스 10m 안 · <span id="facilityTally">{facility_tally}</span></p>
- <div class="facility-list" id="facilityList">
-  {''.join(f'<span class="chip">{LABELS_KO[f["type"]]} · {f["at_km"]:g}km</span>' for f in facilities[:FACILITY_CHIP_LIMIT]) or '<span class="chip">코스 10m 반경 편의점·화장실 없음</span>'}
- </div>
-</section>
-<section class="panel"><h2>카카오맵으로 따라 달리기</h2>
- <ol class="steps">
-  <li>GPX 파일 받기를 눌러 코스를 저장합니다.</li>
-  <li>카카오맵 앱에서 우측 상단 길찾기를 누르세요.</li>
-  <li>이동수단을 자전거로 고른 뒤, 도착지 입력 화면 우측 하단의 GPX를 선택하세요.</li>
-  <li>저장한 파일을 고르고 완료한 뒤, 우측 하단 주행 시작을 누르면 안내가 시작됩니다.</li>
- </ol>
-</section>
-</div>
+{run_float}{tab_bar}
 <footer>러니웨어 · 배경 지도: Kakao Maps · 경로 데이터
 <a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors · ODbL</a> · NASA SRTM · 서울시 공공데이터<br>
 GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이용·안전</a> · <a href="/privacy">개인정보</a> · <a href="/data-licenses">데이터 출처</a></footer>
@@ -685,6 +973,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const startBtn = document.getElementById('runStart');
  const runStatus = document.getElementById('runStatus');
  const setRunButtonLabel = label => {{
+   if (!startBtn) return;   // the map-error path replaces the whole control
    startBtn.setAttribute('aria-label', label);
    startBtn.title = label;
    const hiddenLabel = startBtn.querySelector('.sr-only');
@@ -692,7 +981,8 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  }};
  const shareBtn = document.getElementById('shareCourse');
  if (shareBtn) shareBtn.addEventListener('click', () => {{
-   const url = '{base_url}/c/{cid}';
+   // Sharing an edited course used to send the original route's link.
+   const url = currentCourseUrl;
    const done = () => {{
      shareBtn.textContent = '링크가 복사됐어요!';
      setTimeout(() => shareBtn.textContent = '친구에게 공유하기', 2200);
@@ -702,7 +992,6 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
        .catch(() => window.prompt('아래 링크를 복사하세요', url));
    else window.prompt('아래 링크를 복사하세요', url);
  }});
- const editButton = document.getElementById('editRoute');
  const editCancel = document.getElementById('editCancel');
  const editSave = document.getElementById('editSave');
  const panTool = document.getElementById('panTool');
@@ -713,6 +1002,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const editToastText = document.getElementById('editToastText');
  const editToastAction = document.getElementById('editToastAction');
  const editDistance = document.getElementById('editDistance');
+ const PAGE = {page_json};
  const mapNode = document.getElementById('map');
  // Single visible + announced feedback channel. `role="status"` on the toast
  // keeps the screen-reader behaviour the sr-only bar used to provide, without
@@ -792,9 +1082,30 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    renderLocal();
  }};
  if (!window.kakao || !kakao.maps) {{
-   initLocalCourseEditor();
-   startBtn.disabled = true;
+   // The offline editor demo belongs to the editor page. Elsewhere a missing
+   // map is a missing map, and pretending otherwise put a "코스 편집" button
+   // on pages that no longer own editing.
+   if (PAGE === 'edit') initLocalCourseEditor();
+   else mapNode.innerHTML = '<div class="map-error"><strong>지도를 불러오지 못했어요</strong>'
+     + '<span>네트워크를 확인한 뒤 새로고침해 주세요.</span></div>';
+   if (startBtn) startBtn.disabled = true;
    setRunButtonLabel('지도 연결 필요');
+   // Everything that tracks a run lives inside kakao.maps.load below, so
+   // without a map the start control has nothing behind it. A dead button
+   // that gives no reason is worse than one that says why -- but only the
+   // run page has anything to explain.
+   const deadCta = document.getElementById('runCta');
+   if (deadCta) {{
+     deadCta.disabled = true;
+     deadCta.textContent = '지도 연결 필요';   // icon goes with the action
+   }}
+   const deadHud = document.getElementById('runHud');
+   if (deadHud && PAGE === 'run') {{
+     deadHud.hidden = false;
+     deadHud.dataset.tone = 'warn';
+     document.getElementById('runStatus').textContent =
+       '지도를 불러오지 못해 실시간 코스 안내를 시작할 수 없어요';
+   }}
  }} else kakao.maps.load(() => {{
  const startPos = segs.length
    ? new kakao.maps.LatLng(segs[0][0], segs[0][1])
@@ -857,7 +1168,11 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  }};
  const bounds = new kakao.maps.LatLngBounds();
  routePath.forEach(pos => bounds.extend(pos));
- if (routePath.length) map.setBounds(bounds, 42, 42, 42, 42);
+ // Named so stopping a run can restore the whole-course view it replaced.
+ const fitRoute = () => {{
+   if (routePath.length) map.setBounds(bounds, 42, 42, 42, 42);
+ }};
+ fitRoute();
  // Kakao can reset interaction flags while applying bounds. Keep the default
  // course view explicitly draggable; segment selection opts out through applyMode().
  const syncMapInteraction = () => {{
@@ -898,6 +1213,8 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  // must follow, or the page shows one route and describes another.
  const initialSummary = {initial_summary};
  // Sets the number while leaving the trailing unit <i> in place.
+ // Every course-addressed link on the page, kept in step with edits.
+ let currentCourseUrl = '{base_url}/c/{cid}';
  const setValue = (id, value, unit) => {{
    const node = document.getElementById(id);
    if (!node) return;
@@ -912,17 +1229,64 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    const node = document.getElementById(id);
    if (node && value !== undefined && value !== null) node.textContent = value;
  }};
- const setChips = (id, labels, empty, className) => {{
+ const setTraits = (id, traits) => {{
+   const host = document.getElementById(id);
+   if (!host || !traits) return;
+   host.replaceChildren();
+   for (const trait of traits) {{
+     const chip = document.createElement('span');
+     chip.className = 'trait';
+     const icon = document.createElement('i');
+     icon.setAttribute('aria-hidden', 'true');
+     icon.textContent = trait.emoji;
+     chip.append(icon, trait.label);   // textContent: never innerHTML
+     host.appendChild(chip);
+   }}
+ }};
+ // An empty box is hidden rather than left as an empty heading: a "좋은 점"
+ // header with nothing under it reads as a rendering failure.
+ const setNotes = (boxId, listId, notes) => {{
+   const box = document.getElementById(boxId);
+   const list = document.getElementById(listId);
+   if (!box || !list) return;
+   list.replaceChildren();
+   for (const note of notes || []) {{
+     const item = document.createElement('li');
+     item.textContent = note;
+     list.appendChild(item);
+   }}
+   box.hidden = !(notes && notes.length);
+ }};
+ const setFacilityRows = (id, rows) => {{
    const host = document.getElementById(id);
    if (!host) return;
    host.replaceChildren();
-   const items = labels && labels.length ? labels : (empty ? [empty] : []);
-   for (const label of items) {{
-     const chip = document.createElement('span');
-     chip.className = className;
-     chip.textContent = label;      // textContent: facility names are external data
-     host.appendChild(chip);
+   if (!rows || !rows.length) return;
+   if (rows.every(row => row.anchor)) {{
+     const empty = document.createElement('p');
+     empty.className = 'facility-empty';
+     empty.textContent = '코스 10m 안에 편의점·화장실이 없어요. 출발 전에 준비해 주세요.';
+     host.appendChild(empty);
    }}
+   const list = document.createElement('ul');
+   list.className = 'facility-rows';
+   for (const row of rows) {{
+     const item = document.createElement('li');
+     item.className = row.anchor ? 'facility-row anchor' : 'facility-row';
+     for (const [cls, value, hidden] of [
+       ['facility-km', row.at_km, false], ['facility-icon', row.emoji, true],
+       ['facility-name', row.name, false], ['facility-kind', row.kind, false],
+     ]) {{
+       if (!value) continue;
+       const cell = document.createElement('span');
+       cell.className = cls;
+       if (hidden) cell.setAttribute('aria-hidden', 'true');
+       cell.textContent = value;   // facility names are external data
+       item.appendChild(cell);
+     }}
+     list.appendChild(item);
+   }}
+   host.appendChild(list);
  }};
  // Pace model constants come from src/runart/pace.py so the browser and the
  // server cannot drift into two different answers for the same course.
@@ -932,8 +1296,6 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const paceRange = document.getElementById('paceRange');
  const paceValueEl = document.getElementById('paceValue');
  const paceTierEl = document.getElementById('paceTier');
- const paceFeelEl = document.getElementById('paceFeel');
- const paceChips = [...document.querySelectorAll('.pace-chip')];
  const fmtPace = s => Math.floor(s / 60) + "'" + String(s % 60).padStart(2, '0') + '"';
  const paceTierOf = s => PACE.tiers.find(t => s >= t.min_s) || PACE.tiers[PACE.tiers.length - 1];
  const speedKmh = s => 3600 / s;
@@ -954,13 +1316,12 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    setText('mDuration', e.minutes);
    setText('mSteps', e.steps.toLocaleString('ko-KR'));
    setText('mKcal', e.kcal);
+   // The summary table repeats the headline numbers; a stale copy there is
+   // the one a runner screenshots.
    if (paceValueEl) paceValueEl.textContent = fmtPace(paceSeconds);
    if (paceTierEl) paceTierEl.textContent = tier.name;
-   if (paceFeelEl) paceFeelEl.textContent = tier.feel + ' · 아래 숫자가 이 페이스에 맞춰 바뀌어요';
    if (paceRange) paceRange.setAttribute('aria-valuetext',
      fmtPace(paceSeconds) + ' 퍼 킬로미터, ' + tier.name);
-   for (const chip of paceChips)
-     chip.setAttribute('aria-pressed', String(paceTierOf(Number(chip.dataset.pace)).name === tier.name));
  }};
  const setPace = seconds => {{
    paceSeconds = Math.min(PACE.slowest_s, Math.max(PACE.fastest_s,
@@ -969,14 +1330,32 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    renderEffort();
  }};
  if (paceRange) paceRange.addEventListener('input', ev => setPace(Number(ev.target.value)));
- for (const chip of paceChips)
-   chip.addEventListener('click', () => setPace(Number(chip.dataset.pace)));
  renderEffort();
+ // Every link that names a course id has to follow the edit; a stale one
+ // hands over a different route than the page is describing.
+ const setCourseLinks = courseId => {{
+   const gpx = document.getElementById('gpxLink');
+   const card = document.getElementById('cardLink');
+   if (!courseId) {{
+     if (gpx) gpx.removeAttribute('href');
+     if (card) card.removeAttribute('href');
+     return;
+   }}
+   currentCourseUrl = {base_url_json} + '/c/' + encodeURIComponent(courseId);
+   if (gpx) gpx.href = currentCourseUrl + '.gpx';
+   if (card) card.href = currentCourseUrl + '/card.svg';
+   // An edited course is fully described by its id, so the other two tabs can
+   // carry the edit across without saving first. Leaving them on the original
+   // id is how a runner edits a route and then reads about the old one.
+   for (const tab of document.querySelectorAll('.tab[data-page]'))
+     tab.href = currentCourseUrl + tab.dataset.page;
+ }};
  let currentSummary = initialSummary;
  const applySummary = summary => {{
    if (!summary) return;
    currentSummary = summary;
    setText('courseTitle', summary.title);
+   setCourseLinks(summary.course_id);
    // Value and unit are separate nodes; textContent would eat the <i>.
    setValue('mLength', summary.length_km.toFixed(1), 'km');
    setValue('mAscent', String(Math.round(summary.ascent_m)), 'm');
@@ -989,8 +1368,10 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    setText('factSignals', summary.signals + '개');
    setText('factStores', (summary.facility_counts.convenience_store || 0) + '개');
    setText('factRestrooms', (summary.facility_counts.restroom || 0) + '개');
-   setText('facilityTally', summary.facility_tally);
-   setChips('facilityList', summary.facility_chips, '코스 10m 반경 편의점·화장실 없음', 'chip');
+   setFacilityRows('facilityList', summary.facility_rows);
+   setTraits('courseTraits', summary.traits);
+   setNotes('courseGoodBox', 'courseGood', summary.highlights);
+   setNotes('courseCareBox', 'courseCare', summary.cautions);
    const badges = document.getElementById('courseBadges');
    if (badges && summary.badges) {{
      badges.replaceChildren();
@@ -1020,6 +1401,74 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const snapshot = () => ({{nodes:editNodes.map(point=>[...point]),km:editLengthKm,summary:currentSummary}});
  const restore = state => {{editNodes=state.nodes.map(point=>[...point]);selectedRange=null;setEditDistance(state.km);applySummary(state.summary);renderDraft();}};
  const pointPath = points => points.map(([,lat,lon])=>new kakao.maps.LatLng(lat,lon));
+ const selBar=document.getElementById('selBar');
+ const selCount=document.getElementById('selCount');
+ const selClear=document.getElementById('selClear');
+ const selReroute=document.getElementById('selReroute');
+ // A selection is a thing you act on, so its actions are controls next to it
+ // rather than a link inside a status message that also reports errors.
+ const syncSelectionBar = () => {{
+   if(!selBar)return;
+   selBar.hidden=!selectedRange;
+   if(!selectedRange)return;
+   const span=selectedRange[1]-selectedRange[0];
+   if(selCount)selCount.textContent='선택한 구간 '+span+'개';
+   if(selClear)selClear.disabled=editBusy;
+   if(selReroute)selReroute.disabled=editBusy;
+ }};
+ // One tapped edge is rarely the stretch a runner means; dragging either end
+ // along the route grows the selection the way Fi shapes a zone.
+ const nearestNodeIndex = point => {{
+   let best={{index:0,d:Infinity}};
+   for(let index=0;index<editNodes.length;index++){{
+     const screen=screenPoint(editNodes[index]);
+     const d=Math.hypot(point.x-screen.x,point.y-screen.y);
+     if(d<best.d)best={{index,d}};
+   }}
+   return best.index;
+ }};
+ const mapPoint = event => {{
+   const rect=mapNode.getBoundingClientRect();
+   return {{x:event.clientX-rect.left,y:event.clientY-rect.top}};
+ }};
+ let dragEnd=null;
+ const onHandleMove = event => {{
+   if(dragEnd===null)return;
+   const index=nearestNodeIndex(mapPoint(event));
+   const other=selectedRange[dragEnd?0:1];
+   const lo=Math.min(index,other),hi=Math.max(index,other);
+   if(lo===hi)return;                       // never collapse to a single node
+   selectedRange=[lo,hi];
+   dragEnd=index<=other?0:1;
+   renderDraft();
+ }};
+ const onHandleUp = event => {{
+   if(dragEnd===null)return;
+   dragEnd=null;
+   document.body.classList.remove('handle-drag');
+   syncMapInteraction();
+   window.removeEventListener('pointermove',onHandleMove);
+   window.removeEventListener('pointerup',onHandleUp);
+   window.removeEventListener('pointercancel',onHandleUp);
+ }};
+ const onHandleDown = event => {{
+   if(editBusy||!selectedRange)return;
+   dragEnd=Number(event.currentTarget.dataset.end)||0;
+   document.body.classList.add('handle-drag');
+   map.setDraggable(false);
+   event.preventDefault();
+   event.stopPropagation();
+   window.addEventListener('pointermove',onHandleMove);
+   window.addEventListener('pointerup',onHandleUp);
+   window.addEventListener('pointercancel',onHandleUp);
+ }};
+ const attachHandles = () => {{
+   for(const handle of mapNode.querySelectorAll('.edit-anchor')){{
+     if(handle.dataset.bound)continue;
+     handle.dataset.bound='1';
+     handle.addEventListener('pointerdown',onHandleDown);
+   }}
+ }};
  const renderDraft = () => {{
    draftLines.forEach(line=>line.setMap(null));draftLines=[];
    if (editing) {{
@@ -1028,12 +1477,15 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
        const selected=editNodes.slice(selectedRange[0],selectedRange[1]+1);
        draftLines.push(new kakao.maps.Polyline({{map,path:pointPath(selected),strokeColor:'#fff',strokeWeight:13,strokeOpacity:.96,strokeStyle:'solid'}}));
        draftLines.push(new kakao.maps.Polyline({{map,path:pointPath(selected),strokeColor:'#e0522d',strokeWeight:8,strokeOpacity:1,strokeStyle:'solid'}}));
-       for(const endpoint of [selected[0],selected[selected.length-1]]){{
-         const marker=new kakao.maps.CustomOverlay({{map,position:new kakao.maps.LatLng(endpoint[1],endpoint[2]),content:'<span class="edit-anchor" aria-hidden="true"></span>',xAnchor:.5,yAnchor:.5,zIndex:8}});
+       const ends=[selected[0],selected[selected.length-1]];
+       ends.forEach((endpoint,end)=>{{
+         const marker=new kakao.maps.CustomOverlay({{map,position:new kakao.maps.LatLng(endpoint[1],endpoint[2]),content:'<span class="edit-anchor" data-end="'+end+'" role="button" tabindex="0" aria-label="'+(end?'선택 끝점':'선택 시작점')+' 드래그해 구간 넓히기"></span>',xAnchor:.5,yAnchor:.5,zIndex:8}});
          draftLines.push(marker);
-       }}
+       }});
      }}
    }}
+   syncSelectionBar();
+   attachHandles();
    if(editUndo)editUndo.disabled=editBusy||!undoStack.length;
    if(editSave)editSave.disabled=editBusy;
  }};
@@ -1111,9 +1563,13 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    const hit=nearestSegment(point);
    if(hit.d>28){{releaseTool();setEditStatus('코스 선 가까이를 탭해 주세요.','error',{{label:'닫기',run:()=>{{}}}});return;}}
    selectedRange=[hit.index,hit.index+1];renderDraft();releaseTool();
-   setEditStatus('선택한 구간을 다른 보행로로 바꿀까요?','info',{{label:'다른 길로',persist:true,run:replaceSelected}});
+   setEditStatus('끝점을 끌어 구간을 넓힌 뒤 아래 버튼을 눌러 주세요.','info');
  }};
- if(editEnabled&&editButton)editButton.addEventListener('click',()=>setEditing(true));
+ if(selReroute)selReroute.addEventListener('click',replaceSelected);
+ if(selClear)selClear.addEventListener('click',()=>{{
+   if(editBusy)return;
+   selectedRange=null;renderDraft();setEditStatus('선택을 지웠어요.','info');
+ }});
  if(panTool)panTool.addEventListener('click',()=>setMode('pan'));
  if(segmentTool)segmentTool.addEventListener('click',()=>setMode('segment'));
  if(editOverlay){{
@@ -1191,6 +1647,8 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      setEditBusy(false);
    }}
  }});
+ // No entry button any more -- arriving on this page IS the intent.
+ if (PAGE === 'edit' && editEnabled) setEditing(true);
  const geocoder = (kakao.maps.services && kakao.maps.services.Geocoder)
    ? new kakao.maps.services.Geocoder() : null;
  let openPop = null;
@@ -1317,7 +1775,44 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    }}
    return best;
  }};
- const setStatus = text => runStatus.textContent = text;
+ const runHud = document.getElementById('runHud');
+ // The off-course distance is the reason to run the course on this page at
+ // all; it used to live in an sr-only node where nobody could see it.
+ const setStatus = (text, tone) => {{
+   runStatus.textContent = text;
+   if (!runHud) return;
+   runHud.hidden = !text;
+   runHud.dataset.tone = tone || 'info';
+ }};
+ // Kakao's JS SDK exposes no bearing/rotation API, so the map cannot turn
+ // under the runner. North therefore stays fixed on screen -- as asked -- and
+ // the heading rides on the marker as a cone, the way Google Maps and Apple
+ // Maps show it on a north-up map.
+ let heading = null;
+ const applyHeading = () => {{
+   const cone = document.querySelector('.user-heading');
+   if (!cone) return;
+   cone.hidden = heading === null;
+   if (heading !== null) cone.style.transform = `rotate(${{heading}}deg)`;
+ }};
+ const onOrientation = event => {{
+   const deg = typeof event.webkitCompassHeading === 'number'
+     ? event.webkitCompassHeading                       // iOS: already true north
+     : (event.absolute && typeof event.alpha === 'number' ? 360 - event.alpha : null);
+   if (deg === null || Number.isNaN(deg)) return;
+   heading = Math.round(deg);
+   applyHeading();
+ }};
+ const watchHeading = () => {{
+   // iOS 13+ gates the sensor behind a user gesture; this runs inside the tap.
+   const gate = window.DeviceOrientationEvent
+     && DeviceOrientationEvent.requestPermission;
+   const listen = () => window.addEventListener('deviceorientation', onOrientation, true);
+   if (gate) DeviceOrientationEvent.requestPermission().then(state => {{
+     if (state === 'granted') listen();
+   }}).catch(() => {{}});
+   else if (window.DeviceOrientationEvent) listen();
+ }};
  const updatePosition = pos => {{
    const lat = pos.coords.latitude;
    const lon = pos.coords.longitude;
@@ -1325,7 +1820,10 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    const off = Math.round(nearestRouteM(lat, lon));
    const posLatLng = new kakao.maps.LatLng(lat, lon);
    if (!userMarker) {{
-     userMarker = addOverlay(posLatLng, '<div class="user-dot" title="현재 위치"></div>', guideLayers);
+     userMarker = addOverlay(posLatLng,
+       '<div class="user-dot" title="현재 위치">'
+       + '<span class="user-heading" hidden aria-hidden="true"></span></div>',
+       guideLayers);
      accuracyCircle = new kakao.maps.Circle({{
        center:posLatLng,radius:acc,strokeWeight:1,strokeColor:'#e5322e',
        strokeOpacity:.8,fillColor:'#e5322e',fillOpacity:.06
@@ -1338,47 +1836,86 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    accuracyCircle.setRadius(acc);
   }}
    map.setCenter(posLatLng);
-   const guide = off > 80 ? `코스에서 약 ${{off}}m 벗어남` : `코스 위를 달리는 중 · 오차 ${{acc}}m`;
-   setStatus(guide);
+   applyHeading();
+   const away = off > 80;
+   setStatus(away ? `코스에서 약 ${{off}}m 벗어났어요`
+                  : `코스 위를 달리는 중 · 오차 ${{acc}}m`, away ? 'warn' : 'live');
  }};
  const locationError = err => {{
    const msg = err.code === 1 ? '브라우저 설정에서 위치 권한을 허용해 주세요'
      : err.code === 2 ? 'GPS 신호가 약해 위치를 찾지 못했어요'
      : '위치 확인 시간이 초과됐어요';
-   setStatus(msg);
-   startBtn.classList.remove('on');
+   setStatus(msg, 'warn');
+   if (startBtn) startBtn.classList.remove('on');
    setRunButtonLabel('내 위치 다시 시도');
+   setCta('다시 시도', false);
    watchId = null;
  }};
- startBtn.addEventListener('click', () => {{
+ const runCta = document.getElementById('runCta');
+ // Street level: about one block across, so the next turn is legible.
+ const RUN_FOLLOW_LEVEL = 3;
+ const runIcon = () => {{
+   const icon = document.createElement('span');
+   icon.setAttribute('aria-hidden', 'true');
+   icon.textContent = '▶';
+   return icon;
+ }};
+ const setCta = (label, running) => {{
+   if (!runCta) return;
+   runCta.replaceChildren(runIcon(), document.createTextNode(label));
+   runCta.classList.toggle('running', !!running);
+ }};
+ const stopRun = () => {{
+   navigator.geolocation.clearWatch(watchId);
+   watchId = null;
+   if (startBtn) startBtn.classList.remove('on');
+   setRunButtonLabel('내 위치 추적 시작');
+   setCta('달리기 시작', false);
+   document.body.classList.remove('running');
+   window.removeEventListener('deviceorientation', onOrientation, true);
+   fitRoute();
+   setStatus('GPS 안내 중지', 'info');
+ }};
+ // One entry point for both the bar and the map control: two copies of this
+ // is how the button on the map ends up meaning something else.
+ const startRun = () => {{
    if (!window.isSecureContext) {{
-     setStatus('위치 기능은 HTTPS에서만 사용할 수 있어요');
+     setStatus('위치 기능은 HTTPS 연결에서만 쓸 수 있어요', 'warn');
      return;
    }}
    if (!navigator.geolocation) {{
-     setStatus('이 브라우저는 위치 기능을 지원하지 않아요');
+     setStatus('이 브라우저는 위치 기능을 지원하지 않아요', 'warn');
      return;
    }}
    if (watchId !== null) {{
-     navigator.geolocation.clearWatch(watchId);
-     watchId = null;
-     startBtn.classList.remove('on');
-     setRunButtonLabel('내 위치 추적 시작');
-     setStatus('GPS 안내 중지');
+     stopRun();
      return;
    }}
-   setStatus('GPS 위치 확인 중');
+   // Bring the map into view first: permission is being asked for something
+   // the runner cannot see if the summary is still filling the screen.
+   mapNode.scrollIntoView({{block:'start'}});
+   setStatus('GPS 위치를 확인하는 중이에요', 'info');
    setMapMode('guide');
-   startBtn.classList.add('on');
+   // A whole-course view is for choosing a course; running one needs the next
+   // corner. Strava, Runna and AllTrails all close in the moment you start.
+   map.setLevel(RUN_FOLLOW_LEVEL);
+   document.body.classList.add('running');
+   watchHeading();
+   if (startBtn) startBtn.classList.add('on');
    setRunButtonLabel('위치 추적 중지');
+   setCta('달리기 중지', true);
    watchId = navigator.geolocation.watchPosition(updatePosition, locationError, {{
      enableHighAccuracy:true, maximumAge:3000, timeout:12000
    }});
- }});
+ }};
+ if (startBtn) startBtn.addEventListener('click', startRun);
+ if (runCta) runCta.addEventListener('click', startRun);
  if (!window.isSecureContext || !navigator.geolocation) {{
-   startBtn.disabled = true;
+   if (startBtn) startBtn.disabled = true;
    setRunButtonLabel('위치 추적 사용 불가');
-   setStatus(!window.isSecureContext ? 'HTTPS 연결에서 위치 기능을 사용할 수 있어요' : '이 브라우저는 위치 기능을 지원하지 않아요');
+   if (runCta) runCta.disabled = true;
+   setCta('위치 추적 사용 불가', false);
+   setStatus(!window.isSecureContext ? 'HTTPS 연결에서 위치 기능을 사용할 수 있어요' : '이 브라우저는 위치 기능을 지원하지 않아요', 'warn');
  }}
  }});
 </script></body></html>"""

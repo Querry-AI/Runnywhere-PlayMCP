@@ -1652,9 +1652,44 @@ async def preview(request: Request) -> Response:
         name = (params.location_name or "Runnywhere") + f" {course.length_km:.1f}km"
         return Response(to_gpx(name, route_points(course)), media_type="application/gpx+xml",
                         headers={"Content-Disposition": f'attachment; filename="runnywhere-{cid[:12]}.gpx"'})
-    facs = facilities_along(route_points(course), ["convenience_store", "restroom"], limit=80)
+    return _course_page(course, "info")
+
+
+def _course_page(course: Course, page: str) -> Response:
+    """One course, rendered for one of its three pages.
+
+    Only the info page reads facilities; the run and editor pages show neither
+    the list nor the counts, and the lookup is pure work for their budget.
+    """
+    facs = (
+        facilities_along(route_points(course), ["convenience_store", "restroom"],
+                         limit=80)
+        if page == "info" else []
+    )
     return HTMLResponse(preview_html(
-        course, facs, BASE_URL, kakao_javascript_key=KAKAO_JAVASCRIPT_KEY))
+        course, facs, BASE_URL,
+        kakao_javascript_key=KAKAO_JAVASCRIPT_KEY, page=page))
+
+
+def _course_subpage(request: Request, page: str) -> Response:
+    try:
+        params = decode_course_id(request.path_params["course_id"])
+        course = _get_course(params, timeout_s=GENERAL_RESPONSE_BUDGET_S)
+    except Exception:
+        return PlainTextResponse("잘못된 코스 링크입니다.", status_code=404)
+    return _course_page(course, page)
+
+
+@mcp.custom_route("/c/{course_id}/run", methods=["GET"])
+async def course_run_page(request: Request) -> Response:
+    """Running the course: effort figures, then live location on the map."""
+    return _course_subpage(request, "run")
+
+
+@mcp.custom_route("/c/{course_id}/editor", methods=["GET"])
+async def course_editor_page(request: Request) -> Response:
+    """Redrawing the course. /edit is the POST API this page calls."""
+    return _course_subpage(request, "edit")
 
 
 @mcp.custom_route("/s/{token}", methods=["GET"])

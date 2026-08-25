@@ -77,13 +77,19 @@ def _lead(result) -> str:
 
 
 ANIMAL_RUNS = ("댕댕런", "야옹런", "깡총런", "고래런")
+# The card opens with a "추천 코스" heading; course names start after it.
+CARD_HEADING = "추천 코스"
+
+
+def _course_titles(payload) -> list[str]:
+    return [value for value in _values(payload, "Title") if value != CARD_HEADING]
 
 
 def test_case1_exact_course_here_also_offers_another_animal_and_a_plain_course():
     result = server.create_seoul_running_course(course_type="dog", location="강남역")
     payload = _card(result)
     labels = _labels(payload)
-    titles = _values(payload, "Title")
+    titles = _course_titles(payload)
 
     assert result.structuredContent["result_code"] == "course_ready"
     assert result.isError is False
@@ -124,7 +130,7 @@ def test_case3_no_animal_within_two_km_leads_with_the_plain_course_here():
     payload = _card(result)
     lead = _lead(result)
     labels = _labels(payload)
-    titles = _values(payload, "Title")
+    titles = _course_titles(payload)
 
     assert "도봉산역" in lead
     assert "1~2km" in lead
