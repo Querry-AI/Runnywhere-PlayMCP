@@ -217,7 +217,6 @@ def test_mobile_preview_uses_compact_summary_and_accessible_edit_controls():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example", page="edit")
     assert "edit-steps" in page
-    assert '내 위치 추적 시작' in page
     assert 'aria-label="수정한 코스를 새 코스로 저장"' in page
     assert 'aria-live="polite"' in page
     assert 'AbortController' in page and '3500' in page
@@ -232,7 +231,7 @@ def test_mobile_preview_uses_compact_summary_and_accessible_edit_controls():
     assert '.edit-tools{position:absolute;z-index:950;left:10px;top:10px' in page
     assert 'width:40px;height:40px' in page
     assert 'edit-overlay' in page
-    assert 'body.editing .run-locate' in page
+    assert 'body.editing .view-toggle' in page
     assert 'body.editing.tool-active .facility-marker' in page
     assert "const syncMapInteraction = () =>" in page
     assert "map.setDraggable(!selecting)" in page
@@ -568,15 +567,16 @@ def test_editor_page_needs_no_entry_control_on_the_map():
     assert 'class="map-hud"' not in page
 
 
-def test_map_uses_one_round_runner_button_without_visible_metric_or_gps_boxes():
+def test_map_carries_no_controls_beyond_the_view_switch():
+    """Editing, starting a run and switching views were all pinned to the
+    map at once. Only the view switch belongs to the map itself now."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
-    assert 'id="runStart" class="run-locate"' in page
-    assert '.run-locate{position:absolute' in page
-    assert 'border-radius:50%' in page
-    assert '<svg viewBox="0 0 24 24" aria-hidden="true">' in page
-    assert 'aria-label="내 위치 추적 시작"' in page
+    assert 'class="run-locate"' not in page
+    assert 'id="runStart"' not in page
+    assert 'id="editRoute"' not in page
+    assert 'class="view-toggle"' in page
     assert 'class="map-hud"' not in page
     assert 'class="pill"' not in page
     assert 'class="run-status"' not in page

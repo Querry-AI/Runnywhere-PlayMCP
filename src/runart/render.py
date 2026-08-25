@@ -638,20 +638,10 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .map-error strong{{font-size:16px;color:#142018}}
  .map-error button{{min-height:44px;padding:0 18px;border:1px solid #c3cec6;border-radius:12px;
       background:#fff;color:#142018;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer}}
- .run-locate{{position:absolute;z-index:520;right:14px;bottom:72px;
-      display:inline-flex;align-items:center;justify-content:center;width:60px;height:60px;padding:0;border:0;
-      border-radius:50%;background:#142018;color:#fff;box-shadow:0 7px 24px rgba(10,28,19,.28);
-      cursor:pointer}}
- .run-locate svg{{width:29px;height:29px;fill:none;stroke:currentColor;stroke-width:2;
-      stroke-linecap:round;stroke-linejoin:round;pointer-events:none}}
- .run-locate:focus-visible{{outline:3px solid #8ee0bb;outline-offset:3px}}
- .run-locate:disabled{{background:#727b75;cursor:not-allowed}}
- .run-locate.on{{background:#0a7d43}}
  .view-toggle{{position:absolute;z-index:530;right:14px;top:14px;display:flex;background:rgba(255,255,255,.96);
       border:1px solid rgba(20,35,25,.1);border-radius:12px;box-shadow:0 4px 18px rgba(0,0,0,.1);overflow:hidden}}
  .view-toggle button{{min-height:48px;border:0;background:transparent;color:#4b5a50;padding:0 13px;font-size:13px;font-weight:800;font-family:inherit}}
  .view-toggle button.active{{background:#142018;color:#fff}}
- body.shape-only .run-locate{{display:none}}
  .wrap{{padding:22px;max-width:1040px;margin:0 auto;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}}
  .card,.panel{{background:#fff;border:1px solid #dfe7e1;border-radius:18px;padding:22px;margin:0;box-shadow:0 12px 34px rgba(20,45,30,.045)}}
  .course-summary{{grid-column:1/-1}}
@@ -821,7 +811,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  body.editing .edit-distance{{display:flex}}
  .edit-tools[aria-busy="true"] .edit-tool-circle{{opacity:.45}}
  body.editing .edit-tools{{display:flex}}
- body.editing .run-locate,body.editing .view-toggle{{display:none!important}}
+ body.editing .view-toggle{{display:none!important}}
  body.editing.tool-active .facility-marker{{pointer-events:none;opacity:.2}}
  body.editing.tool-active .edit-overlay{{pointer-events:auto}}
  /* Distance, time and climb decide whether the run fits the day, so they
@@ -942,7 +932,6 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
       .facts{{gap:6px}}.fact{{padding:11px 8px}}.fact b{{font-size:17px}}.fact span{{font-size:12px}}
       #map{{height:clamp(280px,42svh,380px);min-height:0}}
       .view-toggle{{right:10px;top:10px}}
-      .run-locate{{bottom:76px;width:54px;height:54px}}
       .course-head{{gap:8px}}.badge{{width:28px;height:28px;font-size:15px}}
       .wrap{{display:block;padding:0 16px 96px}}.card,.panel{{padding:18px;margin-bottom:12px;border-radius:16px}}h1{{font-size:22px;line-height:1.25;word-break:keep-all}}
       .actions{{grid-template-columns:1fr 1fr}}.actions .btn{{padding:0 8px;text-align:center}}
@@ -953,8 +942,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  @media(prefers-reduced-motion:reduce){{*{{scroll-behavior:auto!important;animation-duration:.001ms!important;transition-duration:.001ms!important}}}}
 </style></head><body class="page-{page}">
 <header class="brand"><strong>러니웨어<span class="brand-tagline">: 어디서든 러닝 코스 짜기!</span></strong></header>
-<div class="map-wrap"><div id="map"><button id="runStart" class="run-locate" type="button"
- aria-label="내 위치 추적 시작" title="내 위치 추적 시작"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="16" cy="4" r="2"/><path d="m14.5 7-3 4 3.2 2.2 2.1-3.1 3.2 2M11.5 11 7 13.5M14.7 13.2 10 21M14.7 13.2 20 19"/></svg><span class="sr-only">내 위치 추적 시작</span></button><div class="view-toggle" aria-label="지도 보기 전환">
+<div class="map-wrap"><div id="map"><div class="view-toggle" aria-label="지도 보기 전환">
  <button id="shapeView" type="button">{shape_view_label}</button>
  <button id="guideView" type="button" class="active">러닝 안내</button>
  </div>{edit_chrome}<div class="run-hud" id="runHud" hidden><span class="run-dot" aria-hidden="true"></span><span id="runStatus" role="status" aria-live="polite"></span></div></div>
@@ -975,15 +963,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const editNotice = {json.dumps(edit_notice, ensure_ascii=False)};
  const initialLengthKm = {course.length_km:.2f};
  const editEndpoint = '{base_url}/c/{cid}/edit';
- const startBtn = document.getElementById('runStart');
  const runStatus = document.getElementById('runStatus');
- const setRunButtonLabel = label => {{
-   if (!startBtn) return;   // the map-error path replaces the whole control
-   startBtn.setAttribute('aria-label', label);
-   startBtn.title = label;
-   const hiddenLabel = startBtn.querySelector('.sr-only');
-   if (hiddenLabel) hiddenLabel.textContent = label;
- }};
  const shareBtn = document.getElementById('shareCourse');
  if (shareBtn) shareBtn.addEventListener('click', () => {{
    // Sharing an edited course used to send the original route's link.
@@ -1100,8 +1080,6 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    if (PAGE === 'edit') initLocalCourseEditor();
    else mapNode.innerHTML = '<div class="map-error"><strong>지도를 불러오지 못했어요</strong>'
      + '<span>네트워크를 확인한 뒤 새로고침해 주세요.</span></div>';
-   if (startBtn) startBtn.disabled = true;
-   setRunButtonLabel('지도 연결 필요');
    // Everything that tracks a run lives inside kakao.maps.load below, so
    // without a map the start control has nothing behind it. A dead button
    // that gives no reason is worse than one that says why -- but only the
@@ -1931,8 +1909,6 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      : err.code === 2 ? 'GPS 신호가 약해 위치를 찾지 못했어요'
      : '위치 확인 시간이 초과됐어요';
    setStatus(msg, 'warn');
-   if (startBtn) startBtn.classList.remove('on');
-   setRunButtonLabel('내 위치 다시 시도');
    setCta('다시 시도', false);
    watchId = null;
  }};
@@ -1953,8 +1929,6 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const stopRun = () => {{
    navigator.geolocation.clearWatch(watchId);
    watchId = null;
-   if (startBtn) startBtn.classList.remove('on');
-   setRunButtonLabel('내 위치 추적 시작');
    setCta('달리기 시작', false);
    document.body.classList.remove('running');
    window.removeEventListener('deviceorientation', onOrientation, true);
@@ -1986,18 +1960,13 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    map.setLevel(RUN_FOLLOW_LEVEL);
    document.body.classList.add('running');
    watchHeading();
-   if (startBtn) startBtn.classList.add('on');
-   setRunButtonLabel('위치 추적 중지');
    setCta('달리기 중지', true);
    watchId = navigator.geolocation.watchPosition(updatePosition, locationError, {{
      enableHighAccuracy:true, maximumAge:3000, timeout:12000
    }});
  }};
- if (startBtn) startBtn.addEventListener('click', startRun);
  if (runCta) runCta.addEventListener('click', startRun);
  if (!window.isSecureContext || !navigator.geolocation) {{
-   if (startBtn) startBtn.disabled = true;
-   setRunButtonLabel('위치 추적 사용 불가');
    if (runCta) runCta.disabled = true;
    setCta('위치 추적 사용 불가', false);
    setStatus(!window.isSecureContext ? 'HTTPS 연결에서 위치 기능을 사용할 수 있어요' : '이 브라우저는 위치 기능을 지원하지 않아요', 'warn');

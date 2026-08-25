@@ -155,10 +155,10 @@ def test_run_page_start_control_drives_the_tracking_handler():
 
     assert 'class="run-start"' in page
     assert 'id="runCta"' in page
-    # It drives the same tracking handler the map control uses.
+    # It is the only way in: the map no longer carries a duplicate control.
     assert "const startRun = () =>" in page
     assert "runCta.addEventListener('click', startRun)" in page
-    assert "startBtn.addEventListener('click', startRun)" in page
+    assert 'class="run-locate"' not in page
     assert 'href="#howto"' not in page
 
 

@@ -132,8 +132,10 @@ def test_preview_uses_kakao_maps_without_leaflet():
     assert "basemaps.cartocdn.com" not in page
     assert "© OpenStreetMap contributors" in page
     assert "PretendardVariable.woff2" in page
-    assert 'class="run-locate"' in page
-    assert 'aria-label="내 위치 추적 시작"' in page
+    # Starting a run is the run page's own control; the map keeps no
+    # duplicate of it.
+    assert 'class="run-locate"' not in page
+    assert 'class="run-start"' in page
     assert "prefers-reduced-motion" in page
     assert "동물 실루엣" not in page  # plain courses use the neutral label
     assert "코스 라인" in page
