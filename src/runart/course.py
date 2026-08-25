@@ -18,7 +18,7 @@ from . import graph as graphmod
 from .facilities import facility_requirement_score
 from .geo import haversine_m, to_latlon, to_xy
 from .models import CourseParams, CourseWaypoint
-from .rfs import route_rfs_summary, routing_weight
+from .rfs import GATED_WEIGHT_FACTOR, route_rfs_summary, routing_weight
 
 DISTANCE_TOLERANCE = 0.05  # ±5% (PRD §7.2)
 N_WAYPOINTS = 4
@@ -414,12 +414,24 @@ def snap_drawn_segment(params: CourseParams, path: list[int], from_index: int,
     stops = [path[from_index], *drawn_nodes, path[to_index]]
     weight = easy_route_weight(routing_weight(params.night_mode, params.include_hills))
     replacement: list[int] = []
-    for a, b in zip(stops, stops[1:]):
+    # A waypoint can land on a node that no walkable way reaches -- a courtyard
+    # inside a building complex, say. Skipping it and carrying on to the next
+    # one costs a little of the drawn shape; failing the whole edit costs the
+    # runner everything they drew.
+    cursor = stops[0]
+    unreachable = 0
+    for stop in stops[1:]:
         try:
-            segment = _route(g, weight, a, b)
-        except (nx.NetworkXNoPath, nx.NodeNotFound) as exc:
-            raise CourseError("그린 선을 잇는 보행로를 찾지 못했어요. 가까운 길을 따라 다시 그려 주세요.") from exc
+            segment = _route(g, weight, cursor, stop)
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            if stop is stops[-1]:
+                raise CourseError(
+                    "그린 선의 끝을 기존 코스로 잇는 보행로를 찾지 못했어요. "
+                    "지운 구간의 양 끝 가까이에서 시작하고 끝내 주세요.")
+            unreachable += 1
+            continue
         replacement.extend(segment if not replacement else segment[1:])
+        cursor = stop
     if not stroke_is_doubled(stroke):
         replacement = drop_backtracking(
             replacement, _detour_nodes(g, drawn_nodes, path[from_index], path[to_index]))
@@ -646,6 +658,7 @@ def easy_route_weight(base_weight: str):
     def _weight(_u, _v, attrs):
         if not edge_is_runnable(attrs):
             return None
+        gated = GATED_WEIGHT_FACTOR if attrs.get("gated") else 1.0
         highway = highway_class(attrs)
         factor = HIGHWAY_COST_FACTOR.get(highway, 1.06)
         sidewalk = float(attrs.get("sidewalk_score", 0.5))
@@ -653,7 +666,8 @@ def easy_route_weight(base_weight: str):
             factor *= 0.90
         elif sidewalk < 0.55:
             factor *= 1.12
-        return attrs.get(base_weight, attrs["length"]) * factor + FOLLOW_EDGE_PENALTY_M
+        return (attrs.get(base_weight, attrs["length"]) * factor * gated
+                + FOLLOW_EDGE_PENALTY_M)
     return _weight
 
 

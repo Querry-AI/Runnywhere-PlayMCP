@@ -146,12 +146,71 @@ def weight_attr(night_mode: bool, include_hills: bool) -> str:
     return f"w_{'n' if night_mode else 'd'}{'h' if include_hills else 'f'}"
 
 
+# Ticketed palace grounds, closed overnight. OSM maps their internal paths in
+# detail -- 경복궁 alone contributes 168 unnamed footway/steps edges -- so a
+# route could be sent through a place that charges admission and locks its
+# gates, and Kakao's basemap draws none of it, leaving the line over grass.
+# Boxes are deliberately tight around the walled grounds.
+GATED_GROUNDS = (
+    ("경복궁", 37.5738, 37.5860, 126.9740, 126.9805),
+    ("창덕궁", 37.5765, 37.5845, 126.9885, 126.9955),
+    ("창경궁", 37.5760, 37.5820, 126.9925, 126.9985),
+    ("덕수궁", 37.5640, 37.5680, 126.9730, 126.9775),
+    ("종묘", 37.5715, 37.5765, 126.9910, 126.9970),
+)
+
+
+def _inside_gated(lat: float, lon: float) -> bool:
+    return any(lo_lat <= lat <= hi_lat and lo_lon <= lon <= hi_lon
+               for _, lo_lat, hi_lat, lo_lon, hi_lon in GATED_GROUNDS)
+
+
+# The walled grounds are a footway network. Anything else inside a box is a
+# public street the box happens to clip, and a coarse box must never take one:
+# an unnamed residential road by 덕수궁 broke a bundled preset the first time.
+# highway=pedestrian is a public plaza or mall by definition -- 광화문광장 sits
+# against 경복궁's south wall -- so it stays out of this set.
+GATED_HIGHWAYS = frozenset({"footway", "path", "steps"})
+
+
+def mark_gated_edges(g) -> int:
+    """Flag paths that lie wholly inside ticketed, gated grounds.
+
+    Named roads are left alone: 삼청로 runs along a palace wall and is a public
+    street. What is flagged is the unnamed footway network inside the walls.
+    """
+    flagged = 0
+    for u, v, attrs in g.edges(data=True):
+        if attrs.get("name"):
+            continue
+        highway = attrs.get("highway")
+        if isinstance(highway, (list, tuple)):
+            highway = highway[0] if highway else ""
+        if str(highway or "") not in GATED_HIGHWAYS:
+            continue
+        a, b = g.nodes[u], g.nodes[v]
+        if _inside_gated(a["lat"], a["lon"]) and _inside_gated(b["lat"], b["lon"]):
+            attrs["gated"] = True
+            flagged += 1
+    return flagged
+
+
+# Generation routes on the precomputed string weights, which cannot call a
+# filter, so gated grounds are priced out instead of removed. Left traversable
+# rather than deleted: a start point inside the walls must still find its way
+# out rather than fail to generate at all.
+GATED_WEIGHT_FACTOR = 60.0
+
+
 def precompute_weights(g) -> None:
     """Bake all four routing-weight variants into edge attributes (startup)."""
+    mark_gated_edges(g)
     for _, _, attrs in g.edges(data=True):
+        penalty = GATED_WEIGHT_FACTOR if attrs.get("gated") else 1.0
         for night in (False, True):
             for hills in (False, True):
-                attrs[weight_attr(night, hills)] = weight_value(attrs, night, hills)
+                attrs[weight_attr(night, hills)] = (
+                    weight_value(attrs, night, hills) * penalty)
 
 
 def routing_weight(night_mode: bool, include_hills: bool) -> str:

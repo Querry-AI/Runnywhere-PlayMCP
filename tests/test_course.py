@@ -162,3 +162,55 @@ def test_generation_prefers_a_real_circuit_over_walking_out_and_back():
         lat=37.5497, lon=127.0815, location_name="어린이대공원", distance_km=5.0))
 
     assert retrace_share(g, course.path) < 0.25
+
+
+def test_ticketed_palace_grounds_are_not_run_through():
+    """OSM maps 경복궁's internal paths in detail -- 168 unnamed footway and
+    steps edges -- so a route could be sent through grounds that charge
+    admission and lock their gates overnight, over a part of Kakao's basemap
+    that draws no path at all."""
+    from runart import graph as graphmod
+    from runart.course import easy_route_weight, routing_weight
+    from runart.geo import haversine_m
+    from runart.rfs import GATED_GROUNDS, _inside_gated
+
+    g = graphmod.get_graph()
+    inside = {n for n, d in g.nodes(data=True)
+              if haversine_m(37.5796, 126.9770, d["lat"], d["lon"]) <= 220}
+    palace_edges = [a for u, v, a in g.edges(data=True)
+                    if u in inside and v in inside]
+
+    assert palace_edges, "expected the palace footway network in the graph"
+    # Routing refuses them; edge_is_runnable still validates bundled presets.
+    # Priced out rather than removed: a runner standing inside the walls must
+    # still be able to route out instead of failing to generate at all.
+    weight = easy_route_weight(routing_weight(False, False))
+    gated = [a for a in palace_edges if a.get("gated")]
+    open_edge = next(a for _, _, a in g.edges(data=True)
+                     if not a.get("gated") and a.get("name")
+                     and abs(float(a["length"]) - float(gated[0]["length"])) < 5)
+    assert gated
+    assert weight(0, 0, gated[0]) > weight(0, 0, open_edge) * 10
+    # A named public street beside a palace wall stays runnable.
+    assert _inside_gated(37.5796, 126.9770)
+    assert not _inside_gated(37.5796, 127.0100)   # well east of every box
+    assert len(GATED_GROUNDS) >= 4
+
+
+def test_the_exclusion_is_small_enough_to_leave_the_city_intact():
+    """Excluding by area is only defensible if it stays surgical."""
+    from runart import graph as graphmod
+
+    g = graphmod.get_graph()
+    gated = sum(float(a.get("length", 0.0))
+                for _, _, a in g.edges(data=True) if a.get("gated"))
+    total = sum(float(a.get("length", 0.0)) for _, _, a in g.edges(data=True))
+
+    assert gated / total < 0.01          # well under one percent of the network
+    for _, _, a in g.edges(data=True):
+        if a.get("gated"):
+            assert not a.get("name")     # never a named public street
+            highway = a.get("highway")
+            if isinstance(highway, (list, tuple)):
+                highway = highway[0] if highway else ""
+            assert str(highway) in {"footway", "path", "steps"}
