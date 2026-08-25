@@ -901,3 +901,23 @@ def test_only_waypoints_far_off_the_line_count_as_a_detour():
     assert DETOUR_WAYPOINT_MIN_M >= 100
     # A node the route already passes through is never a detour.
     assert on_the_line not in _detour_nodes(g, [on_the_line], start, end)
+
+
+def test_a_replacement_that_cannot_differ_says_why():
+    """Some stretches are the only walkable link between two parts of the
+    city -- an unnamed 660m hillside footway by 개운산 is a cut edge in the
+    graph -- so erasing one and drawing over it returns the same line.
+    Saying nothing made the editor look broken."""
+    from runart.server import _unchanged_note
+
+    same = [1, 2, 3, 4]
+    assert _unchanged_note(same, list(same))
+    assert "유일한 길" in _unchanged_note(same, list(same))
+    assert _unchanged_note(same, [1, 5, 4]) == ""
+
+
+def test_the_editor_surfaces_that_note_instead_of_claiming_success():
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
+
+    assert "if(payload.note)setEditStatus(payload.note,'error'" in page

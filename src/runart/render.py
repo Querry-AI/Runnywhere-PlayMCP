@@ -1611,7 +1611,8 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      undoStack.push(before);if(undoStack.length>40)undoStack.shift();redoStack=[];
      editNodes=payload.path.map(point=>[...point]);selectedRange=null;gapRange=null;
      setEditDistance(payload.length_km);applySummary(payload.summary);
-     setEditStatus('새 길로 이었어요 · '+editLengthKm.toFixed(2)+'km','success');
+     if(payload.note)setEditStatus(payload.note,'error',{{label:'닫기',run:()=>{{}}}});
+     else setEditStatus('새 길로 이었어요 · '+editLengthKm.toFixed(2)+'km','success');
    }}catch(error){{
      setEditStatus(error.name==='AbortError'?'길을 맞추는 시간이 초과됐어요. 조금 짧게 그려 주세요.':(error.message||'그린 길을 잇지 못했어요.'),'error',{{label:'닫기',run:()=>{{}}}});
    }}finally{{penStroke=[];renderPen();setEditBusy(false);renderDraft();releaseTool();}}

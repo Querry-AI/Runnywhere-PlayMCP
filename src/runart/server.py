@@ -1619,6 +1619,15 @@ async def course_route_json(request: Request) -> Response:
 STROKE_MAX_POINTS = 600
 
 
+def _unchanged_note(before: list[int], after: list[int]) -> str:
+    """Explain a replacement that came back identical to what it replaced."""
+    if before != after:
+        return ""
+    return ("지운 구간을 대신할 다른 보행로가 없어 같은 길로 이어졌어요. "
+            "이 구간은 두 지역을 잇는 유일한 길이라, 다른 곳을 지우거나 "
+            "더 넓은 범위를 지운 뒤 다시 그려 주세요.")
+
+
 class _CourseEditPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: str
@@ -1720,6 +1729,12 @@ async def edit_course_route(request: Request) -> Response:
             "path": [[node, round(g.nodes[node]["lat"], 6), round(g.nodes[node]["lon"], 6)]
                      for node in course.path],
             "length_km": round(course.length_km, 2),
+            # Some stretches are the only walkable link between two parts of
+            # the city -- an unnamed 660m hillside footway by 개운산 is a cut
+            # edge in the graph -- so erasing one and asking for a replacement
+            # returns the same line. Saying nothing made the editor look
+            # broken; naming it lets the runner move on.
+            "note": _unchanged_note(payload.path, course.path),
             # The detail panels below the map describe *this* course, so they
             # have to follow the edit rather than keep describing the original.
             # Measured cost of the extra work: ~25ms, well inside the budget.
