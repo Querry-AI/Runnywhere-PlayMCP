@@ -420,7 +420,8 @@ def snap_drawn_segment(params: CourseParams, path: list[int], from_index: int,
         except (nx.NetworkXNoPath, nx.NodeNotFound) as exc:
             raise CourseError("그린 선을 잇는 보행로를 찾지 못했어요. 가까운 길을 따라 다시 그려 주세요.") from exc
         replacement.extend(segment if not replacement else segment[1:])
-    replacement = drop_backtracking(replacement)
+    if not stroke_is_doubled(stroke):
+        replacement = drop_backtracking(replacement)
     edited_path = path[:from_index] + replacement + path[to_index + 1:]
     return course_from_path(params, edited_path)
 
@@ -441,6 +442,12 @@ STROKE_WAYPOINT_MAX = 8
 # How far a drawn waypoint may sit from a walkable way before it is ignored.
 # A finger is not a surveyor and a phone's GPS-free tap has real slop.
 STROKE_SNAP_MAX_M = 220.0
+# How close two non-adjacent parts of one stroke must come before the line
+# counts as deliberately drawn over itself.
+DOUBLED_STROKE_M = 35.0
+# ...and how much drawn line must separate them, so a slowly drawn straight
+# line full of near-identical samples does not read as a double pass.
+DOUBLED_STROKE_MIN_GAP_M = 120.0
 
 
 def _perpendicular_m(point, start, end) -> float:
@@ -492,6 +499,34 @@ def stroke_waypoints(stroke) -> list[tuple[float, float]]:
         return spaced
     step = math.ceil(len(spaced) / STROKE_WAYPOINT_MAX)
     return spaced[::step]
+
+
+def stroke_is_doubled(stroke) -> bool:
+    """Did the drawn line deliberately go over its own ground twice?
+
+    Drawing one line down a street asks for a route along it; drawing down the
+    same street twice asks for an out-and-back on it. Backtrack removal must
+    not quietly undo the second intent, so it is skipped when the stroke
+    itself revisits a place it has already been.
+    """
+    points = [(point.lat, point.lon) for point in stroke]
+    if len(points) < 4:
+        return False
+    step = max(1, len(points) // 80)
+    sampled = points[::step]
+    # Separation has to be measured along the stroke, not by sample count: a
+    # slowly drawn straight line puts many samples within metres of each other
+    # and would otherwise read as doubled.
+    walked = [0.0]
+    for a, b in zip(sampled, sampled[1:]):
+        walked.append(walked[-1] + haversine_m(a[0], a[1], b[0], b[1]))
+    for i, a in enumerate(sampled):
+        for j in range(i + 1, len(sampled)):
+            if walked[j] - walked[i] < DOUBLED_STROKE_MIN_GAP_M:
+                continue
+            if haversine_m(a[0], a[1], sampled[j][0], sampled[j][1]) <= DOUBLED_STROKE_M:
+                return True
+    return False
 
 
 def drop_backtracking(nodes: list[int]) -> list[int]:

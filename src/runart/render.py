@@ -550,7 +550,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
    aria-label="1km당 목표 페이스"
    aria-valuetext="{initial_effort["pace_label"]} 퍼 킬로미터, {initial_effort["tier"]}">
   <div class="pace-scale" aria-hidden="true">
-   <span>느리게</span><span class="pace-default">기본 {default_pace_label}</span><span>빠르게</span>
+   <span>빠르게</span><span class="pace-default">기본 {default_pace_label}</span><span>느리게</span>
   </div>
  </div>
  <dl class="course-metrics">
@@ -559,7 +559,6 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
   <div><dt class="metric-label">고도 범위</dt><dd class="metric-value" id="mElev">{elev_text}</dd></div>
  </dl>
  <p class="metric-note-inline">걸음·칼로리는 성인 {PACE_MODEL["weight_kg"]:.0f}kg 기준 추정치예요.</p>
- <p class="metric-note-inline">달리기를 시작하면 위치 권한을 물어보고, 지도가 내 위치를 따라 움직여요.</p>
 </div>"""
     editor_card = f"""<div class="card course-summary">
  <div class="course-head"><h1 id="courseTitle">{title}</h1><div class="course-badges" id="courseBadges">{badge_html}</div></div>
@@ -647,6 +646,9 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .wrap{{padding:22px;max-width:1040px;margin:0 auto;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}}
  .card,.panel{{background:#fff;border:1px solid #dfe7e1;border-radius:18px;padding:22px;margin:0;box-shadow:0 12px 34px rgba(20,45,30,.045)}}
  .course-summary{{grid-column:1/-1}}
+ /* The run page reads top to bottom: its panels are the same column as the
+    effort card above them, not a second column beside it. */
+ body.page-run .panel{{grid-column:1/-1}}
  /* Title and badges share a baseline row; badges never push the name to wrap. */
  .course-head{{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px}}
  .course-badges{{display:flex;flex-shrink:0;gap:4px;padding-top:2px}}
@@ -727,15 +729,16 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
       font-size:12px;font-weight:800;box-shadow:0 3px 12px rgba(0,0,0,.28);white-space:nowrap}}
  .user-dot{{width:18px;height:18px;background:#e5322e;border:3px solid #fff;border-radius:999px;
       box-shadow:0 0 0 8px rgba(229,50,46,.18),0 2px 10px rgba(0,0,0,.25)}}
- .facility-marker{{position:relative;width:12px;height:12px;border:2px solid #fff;border-radius:999px;
+ .facility-marker{{position:relative;display:flex;align-items:center;justify-content:center;
+      width:26px;height:26px;font-size:14px;line-height:1;border:2px solid #fff;border-radius:999px;
       box-shadow:0 2px 8px rgba(0,0,0,.24);cursor:pointer}}
  /* A 12px dot is unhittable with a finger. Widen the tap area to 44px on touch
     only -- on a mouse the dot is already precise, and enlarging it there would
     swallow map drags that start near a marker. */
  @media (pointer:coarse){{.facility-marker::before{{content:"";position:absolute;top:-16px;right:-16px;
       bottom:-16px;left:-16px;border-radius:50%}}}}
- .facility-marker.convenience_store{{background:#2563eb}}
- .facility-marker.restroom{{background:#0a9d4f}}
+ .facility-marker.convenience_store{{background:#eaf1ff}}
+ .facility-marker.restroom{{background:#e6f7ee}}
  .poi-pop{{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:#fff;
       border:1px solid rgba(20,35,25,.14);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.18);
       padding:8px 10px;min-width:150px;max-width:220px;z-index:900;text-align:left;pointer-events:none}}
@@ -1196,7 +1199,15 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  let editBusy = false;
  let editLengthKm = initialLengthKm;
  syncMapInteraction();
- const setEditStatus = (text, tone, action) => showEditToast(text, tone, action);
+ // The toast used to appear on every sweep and every stroke, so a wide bar
+ // sat across the map for the whole edit. Progress is already visible in the
+ // route itself and the live distance; only what a runner cannot see -- a
+ // failure, or work in flight -- earns the interruption.
+ const TOAST_TONES = new Set(['error', 'busy']);
+ const setEditStatus = (text, tone, action) => {{
+   if (!TOAST_TONES.has(tone) && !action) {{ hideEditToast(); return; }}
+   showEditToast(text, tone, action);
+ }};
  const setEditDistance = km => {{
    if (typeof km === 'number' && isFinite(km)) editLengthKm = km;
    if (editDistance) editDistance.textContent = editLengthKm.toFixed(2) + 'km';
@@ -1454,7 +1465,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
        // The erased stretch is drawn as an open break so the route reads as
        // needing the pencil rather than as merely highlighted.
        const gap=editNodes.slice(gapRange[0],gapRange[1]+1);
-       draftLines.push(new kakao.maps.Polyline({{map,path:pointPath(gap),strokeColor:'#c0392b',strokeWeight:6,strokeOpacity:.55,strokeStyle:'shortdash'}}));
+       draftLines.push(new kakao.maps.Polyline({{map,path:pointPath(gap),strokeColor:'#e5322e',strokeWeight:12,strokeOpacity:.34,strokeStyle:'solid'}}));
        for(const endpoint of [gap[0],gap[gap.length-1]]){{
          draftLines.push(new kakao.maps.CustomOverlay({{map,position:new kakao.maps.LatLng(endpoint[1],endpoint[2]),content:'<span class="gap-end" aria-hidden="true"></span>',xAnchor:.5,yAnchor:.5,zIndex:7}}));
        }}
@@ -1744,6 +1755,9 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const addFacility = m => {{
    const el = document.createElement('div');
    el.className = 'facility-marker ' + m.type;
+   // The same glyph the facility list uses, so a marker on the map and a row
+   // in the list are recognisably the same thing.
+   el.textContent = m.type === 'restroom' ? '🚻' : '🏪';
    el.title = m.label;
    el.tabIndex = 0;
    el.setAttribute('role','button');

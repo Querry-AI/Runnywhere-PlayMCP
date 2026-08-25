@@ -245,3 +245,39 @@ def test_pencil_thins_its_stroke_before_sending_it():
 
     assert "const STROKE_MAX=240" in edit
     assert "penStroke.filter" in edit
+
+
+def test_facilities_are_marked_on_the_run_map_too():
+    """A runner following the course wants to see the next convenience store
+    at least as much as one reading about it."""
+    from runart.facilities import facilities_along
+    from runart.render import route_points
+
+    course = _course()
+    facilities = facilities_along(route_points(course),
+                                  ["convenience_store", "restroom"], limit=80)
+    run = preview_html(course, facilities, "https://runnywhere.example", page="run")
+
+    assert "facility-marker" in run
+    if facilities:
+        assert facilities[0]["name"] in run
+    # The reading panel still belongs to 코스 정보 only.
+    assert "러닝 중 편의시설" not in run
+
+
+def test_facility_markers_use_the_same_glyphs_as_the_list():
+    """A blue dot and a 🏪 row were the same thing wearing two costumes."""
+    info = _page(_course(), "info")
+
+    assert "'\\u{1F6BB}'" in info or "🚻" in info
+    assert "🏪" in info
+
+
+def test_the_edit_toast_only_speaks_up_for_failures_and_waiting():
+    """It appeared on every sweep and every stroke, so a wide bar sat across
+    the map for the whole edit. The route and the live distance already show
+    progress; only what a runner cannot see earns the interruption."""
+    edit = _page(_course(), "edit")
+
+    assert "const TOAST_TONES = new Set(['error', 'busy'])" in edit
+    assert "if (!TOAST_TONES.has(tone) && !action) { hideEditToast(); return; }" in edit

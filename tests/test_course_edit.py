@@ -752,3 +752,60 @@ def test_each_edit_failure_names_its_own_cause():
     assert len(set(messages)) == len(messages)   # each cause reads differently
     assert "서울 밖" in causes["서울 밖"]["error"]
     assert "700개" in causes["점 과다"]["error"]
+
+
+def test_a_line_drawn_over_itself_keeps_the_out_and_back():
+    """One line down a street asks for a route along it; the same street drawn
+    twice asks for an out-and-back on it, and backtrack removal must not
+    quietly undo the second intent."""
+    from runart.course import drop_backtracking, stroke_is_doubled
+
+    from runart.models import CourseWaypoint
+
+    straight = [CourseWaypoint(lat=37.5665 + i * 0.0001, lon=126.9780)
+                for i in range(20)]
+    there_and_back = straight + list(reversed(straight))
+
+    assert not stroke_is_doubled(straight)
+    assert stroke_is_doubled(there_and_back)
+    # The spur remover itself is unchanged; it is simply not applied.
+    assert drop_backtracking([1, 2, 3, 2, 1, 4]) == [1, 4]
+
+
+def test_drawing_a_spur_twice_keeps_the_out_and_back_in_the_route():
+    """The two intents have to produce different routes: one pass down a
+    street is a route along it, two passes are an out-and-back on it."""
+    from runart import graph as graphmod
+    from runart.course import snap_drawn_segment
+    from runart.models import CourseWaypoint
+
+    def between(p, q, n):
+        return [CourseWaypoint(lat=p[0] + (q[0] - p[0]) * i / (n - 1),
+                               lon=p[1] + (q[1] - p[1]) * i / (n - 1))
+                for i in range(n)]
+
+    g = graphmod.get_graph()
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    a, b = 8, 28
+    start = (g.nodes[course.path[a]]["lat"], g.nodes[course.path[a]]["lon"])
+    end = (g.nodes[course.path[b]]["lat"], g.nodes[course.path[b]]["lon"])
+    aside = (start[0] + 0.0022, start[1])
+
+    once = snap_drawn_segment(course.params, course.path, a, b,
+                              between(start, end, 40))
+    twice = snap_drawn_segment(
+        course.params, course.path, a, b,
+        between(start, aside, 20) + between(aside, start, 20)
+        + between(start, end, 30))
+
+    def replacement(edited):
+        tail = len(course.path) - b - 1
+        return edited.path[a:len(edited.path) - tail]
+
+    once_repl, twice_repl = replacement(once), replacement(twice)
+
+    # One pass: the router is free to follow the road and nothing repeats.
+    assert len(set(once_repl)) == len(once_repl)
+    # Two passes: the out-and-back the runner drew is still in the route.
+    assert len(twice_repl) - len(set(twice_repl)) > 1
+    assert twice.length_km > once.length_km

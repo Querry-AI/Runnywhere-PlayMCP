@@ -1728,10 +1728,12 @@ def _course_page(course: Course, page: str) -> Response:
     Only the info page reads facilities; the run and editor pages show neither
     the list nor the counts, and the lookup is pure work for their budget.
     """
+    # The editor has no use for them, but a runner following the course wants
+    # to see the next convenience store as much as a runner reading about it.
     facs = (
         facilities_along(route_points(course), ["convenience_store", "restroom"],
                          limit=80)
-        if page == "info" else []
+        if page in ("info", "run") else []
     )
     return HTMLResponse(preview_html(
         course, facs, BASE_URL,
