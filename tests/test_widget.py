@@ -75,32 +75,37 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
 
     card = payload["widget"]
     assert card["size"] == "md" and card["padding"] == "sm"
-    # The card leads with a heading so the runner knows what the list is.
+    # The card leads with a one-line heading so the runner knows what it is.
     header = card["children"][0]
-    assert header["type"] == "Col"
-    assert header["children"][0]["value"] == "추천 코스"
+    assert header["type"] == "Title" and header["value"] == "추천 코스"
     row = card["children"][1]
     assert row["type"] == "Row" and row["align"] == "center"
-    image, overview = row["children"]
+    # Three columns, as in any listing: picture, facts, action.
+    image, overview, action = row["children"]
+    assert action["type"] == "Button" and "block" not in action
     assert image == {
         "type": "Image",
         "src": f"https://runnywhere.example/c/{course_id}/thumb.svg",
         "alt": "강남역 🐶 댕댕런 실제 지도 코스",
-        "width": 116,
-        "height": 116,
+        "width": 88,
+        "height": 88,
         "fit": "contain",
         "radius": "lg",
         "frame": True,
     }
     assert overview["type"] == "Col"
     assert [child["type"] for child in overview["children"]] == [
-        "Title", "Caption", "Text", "Caption", "Button",
+        "Caption", "Title", "Caption", "Caption", "Text",
     ]
-    assert overview["children"][0]["value"] == "🐶 댕댕런"
-    assert overview["children"][1]["value"] == "강남역 출발·도착"
-    # Distance pairs with time, not ascent: time is what a runner plans around.
-    assert overview["children"][2]["value"] == "9.0km · 약 63분"
+    assert overview["children"][0]["value"] == "동물 코스"
+    assert overview["children"][1]["value"] == "🐶 댕댕런"
+    where = overview["children"][2]["value"]
+    assert "강남역" in where and "오르막" in where
+    # The two meta lines must not repeat each other.
+    assert overview["children"][3]["value"] != where
     assert "평지 위주" in overview["children"][3]["value"]
+    # Distance pairs with time, not ascent: time is what a runner plans around.
+    assert overview["children"][4]["value"] == "9.0km · 약 63분"
     buttons = _components(card, "Button")
     assert [button["label"] for button in buttons] == ["코스 보기"]
     target = buttons[0]["onClickAction"]["payload"]["target"]
@@ -367,13 +372,9 @@ def test_course_widget_offers_every_alternative_as_a_full_matching_card():
                for child in _components(children, "Text"))
     course_titles = [value for value in titles if value != "추천 코스"]
     assert "야옹런" in course_titles[1]
-    starts = [caption for caption in captions if caption.endswith("출발·도착")]
-    assert starts == [
-        "낙성대(강감찬)역 출발·도착",
-        "봉천역 출발·도착",
-        "서울대입구역 출발·도착",
-    ]
-    assert all(image["width"] == image["height"] == 116 for image in images)
+    starts = [caption.split(" 출발")[0] for caption in captions if " 출발" in caption]
+    assert starts == ["낙성대(강감찬)역", "봉천역", "서울대입구역"]
+    assert all(image["width"] == image["height"] == 88 for image in images)
     targets = [button["onClickAction"]["payload"]["target"]["url"]
                for button in buttons]
     assert targets[1] == f"https://runnywhere.example/c/{other_id}"
@@ -402,7 +403,7 @@ def test_widget_primary_link_decodes_to_the_same_detail_start_and_course():
 
     assert linked_id == course_id
     assert decode_course_id(linked_id).canonical() == course.params.canonical()
-    assert any(child.get("value") == "경복궁역 출발·도착"
+    assert any("경복궁역 출발" in child.get("value", "")
                for child in _components(payload["widget"], "Caption"))
 
 
@@ -429,7 +430,7 @@ def test_course_card_reads_like_a_recommendation_not_a_data_dump():
 
     # Heading, then identity, start, effort, character -- in that order.
     assert "추천 코스" in joined
-    assert "성수역 출발·도착" in joined
+    assert "성수역 출발" in joined
     assert "약 63분" in joined
     # Character chips carry the words, not bare emoji.
     assert "평지 위주" in joined or "오르막 포함" in joined or "완만한 경사" in joined
@@ -474,3 +475,37 @@ def test_card_chips_prefer_what_separates_one_course_from_another():
         facility_counts={"convenience_store": 0, "restroom": 0},
     )
     assert [t["label"] for t in _card_traits(plain)] == ["평지 위주", "공원·강변 위주"]
+
+
+def test_card_rows_read_as_a_listing_not_a_stack_of_paragraphs():
+    """Thumbnail, facts, action -- three columns, the way a travel or commerce
+    listing is laid out. With the action inside the text column every row was
+    taller than its content and the right edge came out ragged."""
+    from runart.courseplan import CourseChoice
+
+    primary = _course(location_name="성수역")
+    primary_id = encode_course_id(primary.params)
+    other = _course(location_name="뚝섬역", shape=None)
+    other.params = other.params.model_copy(update={"distance_km": 6.0})
+    other.length_m = 6_000.0
+    other_id = encode_course_id(other.params)
+
+    payload = json.loads(build_course_widget(
+        primary, primary_id, "https://runnywhere.example",
+        alternatives=(CourseChoice(other, other_id, "standard", 0.0),)))
+    rows = _components(payload["widget"], "Row")
+
+    for row in rows:
+        kinds = [child["type"] for child in row["children"]]
+        assert kinds == ["Image", "Col", "Button"]
+        column = row["children"][1]
+        # Category, name, where, character, then the number that decides it.
+        assert [child["type"] for child in column["children"]] == [
+            "Caption", "Title", "Caption", "Caption", "Text",
+        ]
+        assert all(child.get("maxLines") == 1 for child in column["children"])
+
+    categories = [row["children"][1]["children"][0]["value"] for row in rows]
+    assert categories == ["동물 코스", "일반 코스"]
+    # Headings are one line each; the explanatory captions are gone.
+    assert "요청 조건에 가장 잘 맞는" not in json.dumps(payload, ensure_ascii=False)

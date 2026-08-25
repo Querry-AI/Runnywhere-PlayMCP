@@ -114,10 +114,9 @@ def test_case2_nearby_course_names_the_real_start_and_still_offers_three():
     # The model must not be able to claim the requested start as the departure.
     assert "서울대입구역" in lead
     start_text = next(
-        value for value in _values(payload, "Caption")
-        if value.endswith(" 출발·도착")
+        value for value in _values(payload, "Caption") if " 출발" in value
     )
-    actual_start = start_text.removesuffix(" 출발·도착")
+    actual_start = start_text.split(" 출발")[0]
     assert actual_start != "서울대입구역"
     assert actual_start in lead
     assert "고래" in lead

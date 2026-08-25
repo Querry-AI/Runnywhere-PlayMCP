@@ -11,7 +11,7 @@ import urllib.parse
 
 from .course import Course
 from .courseplan import CourseChoice
-from .insights import CourseFacts, course_facts
+from .insights import CourseFacts, course_facts, is_loop
 from .naming import RUN_NAMES_KO, TRACK_EMOJI, short_place
 from .pace import DEFAULT_PACE_S, effort
 from .shapes import SHAPES
@@ -231,42 +231,54 @@ def _character_line(facts: CourseFacts) -> str:
     return _plain_text(" · ".join(parts), 120)
 
 
-def _section_heading(title: str, caption: str, *, lead: bool) -> dict:
-    """A titled group so the runner reads a recommendation, not a list."""
-    heading = (
+def _section_heading(title: str, *, lead: bool) -> dict:
+    """One line naming the group.
+
+    The explanatory caption under each heading said what the rows below it
+    already showed, and two lines of chrome per group is what made a
+    three-course card scroll.
+    """
+    return (
         {"type": "Title", "value": _plain_text(title, 40), "size": "md",
          "maxLines": 1}
         if lead else
         {"type": "Text", "value": _plain_text(title, 40), "size": "sm",
          "weight": "semibold", "maxLines": 1}
     )
-    return {
-        "type": "Col",
-        "gap": "xs",
-        "children": [
-            heading,
-            {"type": "Caption", "value": _plain_text(caption, 80),
-             "size": "sm", "maxLines": 2},
-        ],
-    }
+
+
+def _category(course: Course) -> str:
+    """The kind of run, the way a listing names the kind of product."""
+    return "동물 코스" if course.params.shape else "일반 코스"
+
+
+def _where_line(course: Course) -> str:
+    """Where it starts and how far it climbs.
+
+    The two meta lines have to say different things: the grade and the
+    surface belong to the character line below, so this one carries the
+    facts that line cannot -- the start and the climb.
+    """
+    location = _plain_text(course.params.location_name or "지정한 출발점", 60)
+    start = f"{location} 출발·도착" if is_loop(course) else f"{location} 출발"
+    return _plain_text(f"{start} · 오르막 {course.ascent_m:.0f}m", 120)
 
 
 def _course_card_row(course: Course, course_id: str, origin: str) -> dict:
-    """One complete, reusable course card row.
+    """One course as a listing row: thumbnail, facts, action.
 
-    Primary and alternative recommendations intentionally share this exact
-    structure.  A smaller alternative button made the other valid courses
-    read like filters rather than equally inspectable recommendations.
+    Three columns, like every travel or commerce listing: the picture on the
+    left, a dense stack of dot-separated facts in the middle, and the action
+    on the right where the thumb reaches it. The action used to sit inside
+    the text column, which pushed every row taller than its content and left
+    a ragged right edge down the card.
     """
     preview_url = f"{origin}/c/{course_id}"
     title = _widget_title(course)
     location = _plain_text(course.params.location_name or "지정한 출발점", 120)
-    metrics = _effort_line(course)
-    character = _character_line(course_facts(course))
+    facts = course_facts(course)
     button = _button("코스 보기", preview_url)
-    button.update({
-        "style": "primary", "variant": "solid", "size": "sm", "block": True,
-    })
+    button.update({"style": "primary", "variant": "solid", "size": "sm"})
     return {
         "type": "Row",
         "gap": "md",
@@ -276,8 +288,8 @@ def _course_card_row(course: Course, course_id: str, origin: str) -> dict:
                 "type": "Image",
                 "src": f"{preview_url}/thumb.svg",
                 "alt": _plain_text(f"{location} {title} 실제 지도 코스", 120),
-                "width": 116,
-                "height": 116,
+                "width": 88,
+                "height": 88,
                 "fit": "contain",
                 "radius": "lg",
                 "frame": True,
@@ -287,22 +299,26 @@ def _course_card_row(course: Course, course_id: str, origin: str) -> dict:
                 "gap": "xs",
                 "flex": 1,
                 "children": [
+                    {
+                        "type": "Caption", "value": _category(course),
+                        "size": "sm", "maxLines": 1,
+                    },
                     {"type": "Title", "value": title, "size": "md", "maxLines": 1},
                     {
-                        "type": "Caption", "value": f"{location} 출발·도착",
+                        "type": "Caption", "value": _where_line(course),
                         "size": "sm", "maxLines": 1,
                     },
                     {
-                        "type": "Text", "value": metrics, "size": "sm",
-                        "weight": "semibold", "maxLines": 1,
-                    },
-                    {
-                        "type": "Caption", "value": character,
+                        "type": "Caption", "value": _character_line(facts),
                         "size": "sm", "maxLines": 1,
                     },
-                    button,
+                    {
+                        "type": "Text", "value": _effort_line(course), "size": "md",
+                        "weight": "bold", "maxLines": 1,
+                    },
                 ],
             },
+            button,
         ],
     }
 
@@ -333,14 +349,12 @@ def build_course_widget(
     # Without a heading the cards read as an undifferentiated list and the
     # runner cannot tell which one answered their request.
     children: list[dict] = [
-        _section_heading("추천 코스", "요청 조건에 가장 잘 맞는 코스예요.", lead=True),
+        _section_heading("추천 코스", lead=True),
         _course_card_row(course, course_id, origin),
     ]
     if alternatives:
         children.append({"type": "Divider", "spacing": "xs"})
-        children.append(_section_heading(
-            "다른 코스도 있어요", "조건에 맞는 다른 코스도 비교해 보세요.", lead=False
-        ))
+        children.append(_section_heading("다른 코스도 있어요", lead=False))
         for index, choice in enumerate(alternatives):
             if index:
                 children.append({"type": "Divider", "spacing": "xs"})
