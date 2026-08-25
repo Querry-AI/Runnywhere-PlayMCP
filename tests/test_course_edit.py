@@ -220,13 +220,12 @@ def test_mobile_preview_uses_compact_summary_and_accessible_edit_controls():
     assert 'aria-label="수정한 코스를 새 코스로 저장"' in page
     assert 'aria-live="polite"' in page
     assert 'AbortController' in page and '3500' in page
-    assert "action:'reroute'" in page
     assert "action:'save'" in page
     assert 'id="eraserTool"' in page and 'id="penTool"' in page
     assert 'id="drawTool"' not in page
     assert 'id="eraseTool"' not in page
     assert 'id="editUndo"' in page
-    assert 'id="editRedo"' not in page
+    assert 'id="editRedo"' in page      # stepping back is reversible too
     assert 'class="edit-tool-circle"' in page
     assert '.edit-tools{position:absolute;z-index:950;left:10px;top:10px' in page
     assert 'width:40px;height:40px' in page
@@ -401,8 +400,8 @@ def test_editor_erases_a_swept_range_and_draws_its_replacement():
     assert "const nearestSegment = point" in page
     assert "const eraseAt" in page
     # The prompt became a hint and the action became a button beside it.
-    assert "지웠어요. 연필로 새 길을 긋거나 자동으로 잇기를 누르세요." in page
-    assert 'id="selReroute"' in page
+    assert "지울 구간을 골랐어요. 지우기를 누르세요." in page
+    assert 'id="selErase"' in page
     assert "strokeColor:'#e0522d'" in page
     assert 'class="edit-anchor" data-end=' in page
     # The pencil is back, but the stroke is thinned and snapped server-side.
@@ -637,3 +636,57 @@ def test_preview_keeps_a_local_course_editor_available_without_map_sdk():
     assert 'id="localEditRoute"' in page
     assert 'id="localSegment"' in page
     assert 'id="localEditSave"' in page
+
+
+def _straight_stroke(graph, path, a, b, n=40):
+    from runart.models import CourseWaypoint
+
+    pa, pb = graph.nodes[path[a]], graph.nodes[path[b]]
+    return [CourseWaypoint(lat=pa["lat"] + (pb["lat"] - pa["lat"]) * i / (n - 1),
+                           lon=pa["lon"] + (pb["lon"] - pa["lon"]) * i / (n - 1))
+            for i in range(n)]
+
+
+def test_a_straight_stroke_does_not_produce_a_zigzag():
+    """Forcing the route through ~18 independently snapped stroke samples made
+    neighbouring samples land on different ways, so the path detoured out and
+    back to touch each one: a 489m straight line came back 1,515m long."""
+    from runart import graph as graphmod
+    from runart.course import snap_drawn_segment
+    from runart.geo import haversine_m
+
+    g = graphmod.get_graph()
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    a, b = 8, 28
+    edited = snap_drawn_segment(course.params, course.path, a, b,
+                                _straight_stroke(g, course.path, a, b))
+    tail = len(course.path) - b - 1
+    replacement = edited.path[a:len(edited.path) - tail]
+
+    pa, pb = g.nodes[course.path[a]], g.nodes[course.path[b]]
+    direct = haversine_m(pa["lat"], pa["lon"], pb["lat"], pb["lon"])
+    walked = sum(
+        haversine_m(g.nodes[u]["lat"], g.nodes[u]["lon"],
+                    g.nodes[v]["lat"], g.nodes[v]["lon"])
+        for u, v in zip(replacement, replacement[1:])
+    )
+
+    # No node is visited twice: an out-and-back spur is exactly a repeat.
+    assert len(set(replacement)) == len(replacement)
+    # Streets are not straight lines, but 2x the crow-flight distance is a
+    # detour, not a road.
+    assert walked <= direct * 2.0, f"{walked:.0f}m for a {direct:.0f}m line"
+
+
+def test_drawn_replacement_stays_on_walkable_ways():
+    from runart import graph as graphmod
+    from runart.course import edge_is_runnable, snap_drawn_segment
+
+    g = graphmod.get_graph()
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    a, b = 8, 28
+    edited = snap_drawn_segment(course.params, course.path, a, b,
+                                _straight_stroke(g, course.path, a, b))
+
+    assert all(edge_is_runnable(g.edges[u, v])
+               for u, v in zip(edited.path, edited.path[1:]))

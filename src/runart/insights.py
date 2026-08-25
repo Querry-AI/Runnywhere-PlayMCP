@@ -13,7 +13,7 @@ in the routing layers may import it back.
 from dataclasses import dataclass
 
 from . import graph as graphmod
-from .course import Course
+from .course import Course, retrace_share
 from .facilities import facilities_along
 from .geo import haversine_m
 from .infrastructure import pedestrian_signals_crossed
@@ -51,6 +51,10 @@ COMPONENT_BANDS = {
 }
 # Cumulative gain per km above which "오르막 포함" deserves a caveat sentence.
 CLIMB_NOTE_GAIN_PER_KM = 15.0
+# Where the walkable network is a tree rather than a mesh -- most parks -- the
+# only loop of the right length doubles back. Generation now prefers real
+# circuits, but when none exists the runner should hear it before setting off.
+RETRACE_NOTE_MIN = 0.25
 
 # A caution is only worth a position when the weak part is actually a part.
 # Below this length it is noise a runner passes in under two minutes; above
@@ -246,6 +250,10 @@ def course_cautions(course: Course, counts: dict[str, int],
     if _verdict(comps, "sidewalk") == "poor":
         notes.append("보도가 좁거나 없는 구간이 섞여 있어요."
                      + _at_stretch(course, "sidewalk"))
+    if course.path:
+        retraced = retrace_share(graphmod.get_graph(), course.path)
+        if retraced >= RETRACE_NOTE_MIN:
+            notes.append(f"같은 길을 {retraced:.0%} 되돌아오는 코스예요.")
     if not counts["restroom"]:
         notes.append("코스 10m 안에 화장실이 없어요. 미리 들러 주세요.")
     if not counts["convenience_store"]:

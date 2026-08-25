@@ -147,3 +147,18 @@ def test_preview_explains_missing_kakao_javascript_key():
     assert "dapi.kakao.com/v2/maps/sdk.js" not in page
     assert "지도를 불러오지 못했어요" in page
     assert "KAKAO_JAVASCRIPT_KEY" not in page
+
+
+def test_generation_prefers_a_real_circuit_over_walking_out_and_back():
+    """A 4.6km park loop that was 92% the same path out and back scored as
+    well as a genuine circuit, because nothing in the ranking saw the overlap."""
+    from runart.course import RETRACE_PENALTY, retrace_share
+    from runart import graph as graphmod
+
+    g = graphmod.get_graph()
+    assert RETRACE_PENALTY > 0
+    # 어린이대공원: a tree-shaped footpath network next to a street grid.
+    course = generate_course(CourseParams(
+        lat=37.5497, lon=127.0815, location_name="어린이대공원", distance_km=5.0))
+
+    assert retrace_share(g, course.path) < 0.25

@@ -383,10 +383,9 @@ def snap_drawn_segment(params: CourseParams, path: list[int], from_index: int,
         raise CourseError("한 번에 그린 선이 너무 길어요. 4km보다 짧게 나눠 그려 주세요.")
 
     g = graphmod.get_graph()
-    step = max(1, math.ceil(len(stroke) / 18))
     drawn_nodes = []
-    for point in stroke[1:-1:step]:
-        node, snap_m = graphmod.nearest_node(point.lat, point.lon)
+    for point in stroke_waypoints(stroke):
+        node, snap_m = graphmod.nearest_node(point[0], point[1])
         if node is None or snap_m > 120:
             raise CourseError("그린 선이 걸을 수 있는 길에서 너무 멀어요. 지도에 보이는 길을 따라 그려 주세요.")
         if not drawn_nodes or drawn_nodes[-1] != node:
@@ -401,8 +400,117 @@ def snap_drawn_segment(params: CourseParams, path: list[int], from_index: int,
         except (nx.NetworkXNoPath, nx.NodeNotFound) as exc:
             raise CourseError("그린 선을 잇는 보행로를 찾지 못했어요. 가까운 길을 따라 다시 그려 주세요.") from exc
         replacement.extend(segment if not replacement else segment[1:])
+    replacement = drop_backtracking(replacement)
     edited_path = path[:from_index] + replacement + path[to_index + 1:]
     return course_from_path(params, edited_path)
+
+
+# A drawn line says where to go, not which junction to touch. Waypoints closer
+# together than this add no shape a runner can see, but each one is a hard
+# constraint the router must satisfy -- and two neighbouring samples that snap
+# to different ways force a detour out to one and back.
+# Walking the same path out and back is a valid loop and a joyless run. The
+# penalty is scaled to the RFS range so a fully retraced loop loses to almost
+# any real circuit, while a short shared spur stays acceptable.
+RETRACE_PENALTY = 120.0
+RETRACE_ACCEPTABLE = 0.25
+STROKE_WAYPOINT_MIN_M = 90.0
+# Perpendicular deviation below which a drawn line counts as straight.
+STROKE_SIMPLIFY_TOLERANCE_M = 22.0
+STROKE_WAYPOINT_MAX = 8
+
+
+def _perpendicular_m(point, start, end) -> float:
+    """Distance from ``point`` to the segment ``start``-``end``, in metres."""
+    px, py = to_xy(point[0], point[1], start[0], start[1])
+    ax, ay = 0.0, 0.0
+    bx, by = to_xy(end[0], end[1], start[0], start[1])
+    dx, dy = bx - ax, by - ay
+    span = dx * dx + dy * dy
+    if span == 0.0:
+        return math.hypot(px, py)
+    t = max(0.0, min(1.0, (px * dx + py * dy) / span))
+    return math.hypot(px - dx * t, py - dy * t)
+
+
+def _simplify(points: list[tuple[float, float]], tolerance_m: float) -> list[tuple[float, float]]:
+    """Ramer-Douglas-Peucker over lat/lon points, keeping both ends."""
+    if len(points) < 3:
+        return list(points)
+    worst, index = 0.0, 0
+    for i in range(1, len(points) - 1):
+        d = _perpendicular_m(points[i], points[0], points[-1])
+        if d > worst:
+            worst, index = d, i
+    if worst <= tolerance_m:
+        return [points[0], points[-1]]
+    left = _simplify(points[: index + 1], tolerance_m)
+    right = _simplify(points[index:], tolerance_m)
+    return left[:-1] + right
+
+
+def stroke_waypoints(stroke) -> list[tuple[float, float]]:
+    """The few points a drawn line actually asks the route to pass through.
+
+    Sampling the raw stroke at a fixed stride treated every wobble as an
+    instruction: a straight 489m line came back as a 1,515m path that doubled
+    back nine times. Simplifying first means a straight line contributes no
+    intermediate waypoints at all, and the router is free to follow the road.
+    """
+    points = [(point.lat, point.lon) for point in stroke]
+    simplified = _simplify(points, STROKE_SIMPLIFY_TOLERANCE_M)[1:-1]
+    spaced: list[tuple[float, float]] = []
+    for point in simplified:
+        if spaced and haversine_m(spaced[-1][0], spaced[-1][1],
+                                  point[0], point[1]) < STROKE_WAYPOINT_MIN_M:
+            continue
+        spaced.append(point)
+    if len(spaced) <= STROKE_WAYPOINT_MAX:
+        return spaced
+    step = math.ceil(len(spaced) / STROKE_WAYPOINT_MAX)
+    return spaced[::step]
+
+
+def drop_backtracking(nodes: list[int]) -> list[int]:
+    """Cut every excursion that returns to a node the route already visited.
+
+    A repeated node *is* an out-and-back spur: whatever happens between the
+    two visits leaves and comes back to the same place, so removing it leaves
+    a shorter walk over the same graph edges.
+    """
+    trimmed: list[int] = []
+    seen: dict[int, int] = {}
+    for node in nodes:
+        if node in seen:
+            del trimmed[seen[node] + 1:]
+            for gone in list(seen):
+                if seen[gone] > seen[node]:
+                    del seen[gone]
+            continue
+        seen[node] = len(trimmed)
+        trimmed.append(node)
+    return trimmed
+
+
+def retrace_share(graph, path: list[int]) -> float:
+    """Fraction of the loop's length walked more than once.
+
+    A park's footpath network is often a tree rather than a mesh, so the
+    cheapest way to reach a target distance is to go out and come back along
+    the same path. That is a valid loop and a joyless run, and the ranking had
+    no way to tell it apart from a real circuit.
+    """
+    seen: set[frozenset] = set()
+    total = repeated = 0.0
+    for u, v in zip(path, path[1:]):
+        length = float(graph.edges[u, v].get("length", 0.0))
+        total += length
+        key = frozenset((u, v))
+        if key in seen:
+            repeated += length
+        else:
+            seen.add(key)
+    return repeated / total if total else 0.0
 
 
 def easy_route_weight(base_weight: str):
@@ -510,6 +618,7 @@ def generate_course(params: CourseParams) -> Course:
     best: Course | None = None
     best_key: tuple | None = None
     best_err = math.inf
+    best_retrace = 1.0
     n_in_tol = 0
     deadline = time.perf_counter() + 0.8  # anytime cutoff (PRD §7.1)
     for bearing in BEARINGS:
@@ -517,8 +626,11 @@ def generate_course(params: CourseParams) -> Course:
             break
         # Early exit: a good in-tolerance loop is enough; exhaustive bearing
         # search buys little quality for a lot of latency.
-        if n_in_tol >= 2 or (best is not None and best_err <= DISTANCE_TOLERANCE
-                             and best.rfs["score"] >= 55):
+        # Stopping early on a loop that doubles back over itself is how a
+        # 92%-retraced park course got shipped: keep looking for a real circuit.
+        if (n_in_tol >= 2 or (best is not None and best_err <= DISTANCE_TOLERANCE
+                              and best.rfs["score"] >= 55)) \
+                and best_retrace <= RETRACE_ACCEPTABLE:
             break
         path = _loop_via_circle(g, weight, start_node, target_m, bearing)
         if not path or len(path) < 3:
@@ -534,10 +646,12 @@ def generate_course(params: CourseParams) -> Course:
         # rewards low cumulative ascent. A hidden followability penalty keeps
         # the selected course from becoming a maze of tiny bends.
         ascent_per_km = ascent / (length / 1000.0) if length else 0.0
+        retraced = retrace_share(g, path)
         quality = (
             -summary["score"]
             + (0.0 if params.include_hills else 2.0 * ascent_per_km)
             + followability_penalty(points, length)
+            + RETRACE_PENALTY * retraced
         )
         missing_facilities = fac_total - fac_hits
         key = (
@@ -556,6 +670,7 @@ def generate_course(params: CourseParams) -> Course:
             )
             best_key = key
             best_err = err
+            best_retrace = retraced
     if best is None:
         raise CourseError(
             "이 위치에서는 순환 코스를 만들지 못했어요. "

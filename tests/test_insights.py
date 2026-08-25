@@ -178,3 +178,20 @@ def _uniform(_edges):
         path=[], points=[], length_m=2000.0, ascent_m=5.0,
         rfs={"components": {"lighting": 0.2}},
     )
+
+
+def test_a_course_that_doubles_back_says_so():
+    """Park footpaths are often a tree, so the only loop of the right length
+    walks out and back. Generation prefers real circuits; when none exists the
+    runner hears it rather than discovering it at the turnaround."""
+    from runart.course import retrace_share
+    from runart import graph as graphmod
+
+    course = _course()
+    retraced = retrace_share(graphmod.get_graph(), course.path)
+    cautions = course_facts(course).cautions
+
+    if retraced >= 0.25:
+        assert any("되돌아오는" in note for note in cautions)
+    else:
+        assert not any("되돌아오는" in note for note in cautions)

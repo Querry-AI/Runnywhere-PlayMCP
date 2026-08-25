@@ -135,16 +135,19 @@ def test_tabs_carry_an_unsaved_edit_to_the_other_pages():
     assert "tab.href = currentCourseUrl + tab.dataset.page" in edit
 
 
-def test_selection_actions_are_buttons_not_a_link_inside_a_message():
-    """Zillow gives drawing its own Clear button and Uber Eats a trash control;
-    an action tucked into a status toast is a message, not a control."""
+def test_erasing_is_one_button_and_the_pencil_reconnects():
+    """Zillow gives drawing its own Clear button; an action tucked into a
+    status toast is a message, not a control. And one gesture deserves one
+    button: undo already lives in the toolbar and reconnecting is the pencil."""
     edit = _page(_course(), "edit")
 
-    assert 'id="selBar"' in edit
-    assert 'id="selReroute"' in edit and 'id="selClear"' in edit
-    assert "자동으로 잇기" in edit and "되돌리기" in edit
-    # The toast goes back to reporting, with no action riding on it.
-    assert "{label:'다른 길로',persist:true,run:replaceSelected}" not in edit
+    assert 'id="selErase"' in edit and "지우기</button>" in edit
+    assert 'id="selBar"' not in edit
+    assert "const replaceSelected" not in edit
+    # Erasing opens a gap the pencil is sent to close.
+    assert "gapRange=[...selectedRange]" in edit
+    assert "setMode('pen')" in edit
+    assert "if(gapRange)return [...gapRange]" in edit
 
 
 def test_selection_ends_are_draggable_handles_that_grow_the_selection():
@@ -199,3 +202,33 @@ def test_editor_offers_an_eraser_and_a_pencil_not_one_select_tool():
     assert "penStroke" in edit
     assert "action:'snap'" in edit
     assert "coordsFromContainerPoint" in edit
+
+
+def test_editor_can_step_forward_again_after_stepping_back():
+    """Undo without redo makes a wrong undo as costly as a wrong edit."""
+    edit = _page(_course(), "edit")
+
+    assert 'id="editRedo"' in edit
+    assert "redoStack" in edit
+    assert "redoStack.push(snapshot())" in edit
+    assert "restore(redoStack.pop())" in edit
+    # A fresh edit invalidates the forward history, as in every editor.
+    assert "undoStack.shift();redoStack=[]" in edit
+
+
+def test_map_keeps_touch_gestures_instead_of_scrolling_the_page():
+    """A swipe that starts on the map has to pan the map; letting the page
+    scroll out from under it is what made dragging feel broken on a phone."""
+    for page in COURSE_PAGES:
+        markup = _page(_course(), page)
+        assert "#map{position:relative" in markup
+        assert "touch-action:none}" in markup.split("#map{position:relative")[1][:200]
+
+
+def test_tools_take_the_map_out_of_drag_while_they_are_active():
+    """The mode name changed and this check was left asking for the old one,
+    so the map stayed draggable and swallowed every erase and pen stroke."""
+    edit = _page(_course(), "edit")
+
+    assert "editMode === 'erase' || editMode === 'pen'" in edit
+    assert "editMode === 'segment'" not in edit
