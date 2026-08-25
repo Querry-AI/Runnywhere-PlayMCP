@@ -37,8 +37,9 @@ shown on the linked source page.
 - 서울시 경사도 (OA-22241), source file/data updated 2025-03-20
   (used in the 2026-07-11 build):
   https://data.seoul.go.kr/dataList/OA-22241/F/1/datasetView.do
-- 서울시 가로등 위치 정보 (OA-22205), bundled build input named
-  `서울특별시_가로등 위치 정보_20221108.csv`, accessed 2026-07-09:
+- 서울시 가로등 위치 정보 (OA-22205), 2025 data snapshot supplied under
+  the legacy filename `서울특별시_가로등 위치 정보_20221108.csv`, accessed
+  2026-07-09:
   https://data.seoul.go.kr/dataList/OA-22205/F/1/datasetView.do
 - 서울시 보행자 신호등 분포도 현황 (OA-22356), source file updated
   2026-02-13:

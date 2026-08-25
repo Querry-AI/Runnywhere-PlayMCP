@@ -122,6 +122,33 @@ def test_kakao_subway_hit_snaps_to_offline_station(monkeypatch):
         37.5931105, 127.0167884, "성신여대입구역")
 
 
+def test_kakao_search_cache_expires_and_refreshes(monkeypatch):
+    geocode._SEARCH_CACHE.clear()
+    monkeypatch.setenv("KAKAO_REST_API_KEY", "test-key")
+    monkeypatch.setattr(geocode, "_SEARCH_CACHE_TTL_S", 10.0)
+    now = [100.0]
+    monkeypatch.setattr(geocode.time, "monotonic", lambda: now[0])
+    calls = []
+
+    def kakao_hit(*args, **kwargs):
+        calls.append((args, kwargs))
+        return [{
+            "y": "37.5665", "x": "126.9780",
+            "place_name": "서울시청", "category_group_code": "",
+        }]
+
+    monkeypatch.setattr(geocode, "_kakao_get", kakao_hit)
+    expected = (37.5665, 126.978, "서울시청")
+    assert geocode._keyword_search("서울시청") == expected
+    now[0] = 109.9
+    assert geocode._keyword_search("서울시청") == expected
+    assert len(calls) == 1
+
+    now[0] = 110.0
+    assert geocode._keyword_search("서울시청") == expected
+    assert len(calls) == 2
+
+
 def test_all_289_seoul_metro_rows_are_bundled():
     assert len(SEOUL_METRO_STATIONS) == 289
     assert len(_STATION_LOOKUP) > 289

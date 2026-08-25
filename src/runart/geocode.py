@@ -2,7 +2,7 @@
 
 Order: ① direct coordinates ② offline gazetteer of Seoul running spots
 (no network, keeps avg latency low) ③ Kakao Local keyword/address search when
-`KAKAO_REST_API_KEY` is set (1s timeout, LRU-cached) ④ actionable guidance.
+`KAKAO_REST_API_KEY` is set (1s timeout, short TTL cache) ④ actionable guidance.
 
 The API key never appears in logs, responses, or errors (PRD §8).
 """
@@ -13,6 +13,7 @@ import math
 import os
 import re
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -191,10 +192,17 @@ def _in_seoul(lat: float, lon: float) -> bool:
     return lat_lo <= lat <= lat_hi and lon_lo <= lon <= lon_hi
 
 
-# Success-only caches. functools.lru_cache would also cache a None produced
-# by one transient timeout, permanently killing that query until restart.
-_SEARCH_CACHE: dict[tuple[str, str], tuple[float, float, str]] = {}
+# Success-only cache. A short TTL keeps Kakao results fresh and bounds how long
+# a raw user query remains in process memory. A lock is required because MCP
+# requests can resolve locations concurrently in worker threads.
+_SearchHit = tuple[float, float, str]
+_SearchCacheEntry = tuple[float, _SearchHit]
+_SEARCH_CACHE: dict[tuple[str, str], _SearchCacheEntry] = {}
 _SEARCH_CACHE_MAX = 2048
+_SEARCH_CACHE_TTL_S = max(
+    0.0, float(os.environ.get("RUNART_KAKAO_CACHE_TTL_S", "600"))
+)
+_SEARCH_CACHE_LOCK = threading.RLock()
 
 
 def _deadline_after(timeout_s: float | None) -> float | None:
@@ -207,14 +215,26 @@ def _remaining(deadline: float | None) -> float | None:
     return max(0.0, deadline - time.monotonic())
 
 
-def _cache_get(kind: str, query: str):
-    return _SEARCH_CACHE.get((kind, query))
+def _cache_get(kind: str, query: str) -> _SearchHit | None:
+    key = (kind, query)
+    with _SEARCH_CACHE_LOCK:
+        entry = _SEARCH_CACHE.get(key)
+        if entry is None:
+            return None
+        expires_at, hit = entry
+        if expires_at <= time.monotonic():
+            _SEARCH_CACHE.pop(key, None)
+            return None
+        return hit
 
 
-def _cache_ok(kind: str, query: str, hit: tuple[float, float, str]) -> None:
-    if len(_SEARCH_CACHE) >= _SEARCH_CACHE_MAX:
-        _SEARCH_CACHE.clear()
-    _SEARCH_CACHE[(kind, query)] = hit
+def _cache_ok(kind: str, query: str, hit: _SearchHit) -> None:
+    key = (kind, query)
+    expires_at = time.monotonic() + _SEARCH_CACHE_TTL_S
+    with _SEARCH_CACHE_LOCK:
+        if key not in _SEARCH_CACHE and len(_SEARCH_CACHE) >= _SEARCH_CACHE_MAX:
+            _SEARCH_CACHE.clear()
+        _SEARCH_CACHE[key] = (expires_at, hit)
 
 
 def _kakao_get(url: str, params: dict,
