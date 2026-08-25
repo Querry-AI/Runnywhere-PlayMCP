@@ -1,5 +1,7 @@
 """Tool-level tests: call the underlying functions the MCP tools wrap."""
 
+import concurrent.futures
+import threading
 import time
 
 from runart import geocode, server
@@ -36,6 +38,41 @@ def test_cold_detail_link_restores_the_verified_preset(monkeypatch):
     monkeypatch.setattr(server, "_offload", must_not_regenerate)
     assert server._get_course(params) is preset
     assert server._course_cache[encode_course_id(params)] is preset
+
+
+def test_concurrent_identical_course_requests_share_one_generation(monkeypatch):
+    params = CourseParams(
+        lat=37.5665, lon=126.9780, location_name="시청", distance_km=7)
+    course = Course(
+        params=params, path=[1, 2, 1],
+        points=[(params.lat, params.lon), (37.567, 126.979),
+                (params.lat, params.lon)],
+        length_m=7000, ascent_m=10, rfs={"score": 80},
+    )
+    entered = threading.Event()
+    release = threading.Event()
+    calls = 0
+    monkeypatch.setattr(server, "_course_cache", {})
+    monkeypatch.setattr(server, "_course_inflight", {})
+    monkeypatch.setattr(server, "get_animal_preset", lambda _: None)
+
+    def fake_offload(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        entered.set()
+        assert release.wait(timeout=1)
+        return course
+
+    monkeypatch.setattr(server, "_offload", fake_offload)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(server._get_course, params)
+        assert entered.wait(timeout=1)
+        second = pool.submit(server._get_course, params)
+        time.sleep(0.01)
+        release.set()
+        assert first.result(timeout=1) is course
+        assert second.result(timeout=1) is course
+    assert calls == 1
 
 
 def test_generate_running_course_defaults_to_5km_with_note():
@@ -597,7 +634,7 @@ def test_mcp_concurrency_limit_fails_fast_and_recovers():
         await send({"type": "http.response.body", "body": b"ok"})
 
     middleware = server._TokenBucketMiddleware(
-        inner, rps=100, max_concurrent_mcp=1)
+        inner, rps=100, max_concurrent_mcp=1, max_queued_mcp=0)
 
     async def request(client):
         messages = []
@@ -617,6 +654,102 @@ def test_mcp_concurrency_limit_fails_fast_and_recovers():
         release.set()
         assert await first == 200
         assert await request("203.0.113.4") == 200
+
+    asyncio.run(scenario())
+
+
+def test_mcp_concurrency_limit_queues_a_short_burst():
+    import asyncio
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    call_count = 0
+
+    async def inner(scope, receive, send):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            entered.set()
+            await release.wait()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    middleware = server._TokenBucketMiddleware(
+        inner, rps=100, max_concurrent_mcp=1, max_queued_mcp=1,
+        mcp_queue_timeout_s=0.2)
+
+    async def request(client):
+        messages = []
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            messages.append(message)
+
+        await middleware({"type": "http", "path": "/mcp",
+                          "client": (client, 1), "headers": []},
+                         receive, send)
+        return messages[0]
+
+    async def scenario():
+        first = asyncio.create_task(request("203.0.113.5"))
+        await entered.wait()
+        second = asyncio.create_task(request("203.0.113.6"))
+        await asyncio.sleep(0)
+        release.set()
+        assert (await first)["status"] == 200
+        assert (await second)["status"] == 200
+
+    asyncio.run(scenario())
+    assert call_count == 2
+
+
+def test_mcp_queue_timeout_is_bounded_and_retryable():
+    import asyncio
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def inner(scope, receive, send):
+        entered.set()
+        await release.wait()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    middleware = server._TokenBucketMiddleware(
+        inner, rps=100, max_concurrent_mcp=1, max_queued_mcp=1,
+        mcp_queue_timeout_s=0.01)
+
+    async def request(client):
+        messages = []
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            messages.append(message)
+
+        await middleware({"type": "http", "path": "/mcp",
+                          "client": (client, 1), "headers": []},
+                         receive, send)
+        return messages[0]
+
+    async def scenario():
+        first = asyncio.create_task(request("203.0.113.7"))
+        await entered.wait()
+        queued = asyncio.create_task(request("203.0.113.8"))
+        while middleware._queued_mcp < 1:
+            await asyncio.sleep(0)
+        overflow = await request("203.0.113.9")
+        assert overflow["status"] == 429
+        assert (b"retry-after", b"1") in overflow["headers"]
+        timed_out = await queued
+        assert timed_out["status"] == 429
+        assert (b"retry-after", b"1") in timed_out["headers"]
+        release.set()
+        assert (await first)["status"] == 200
+        assert (await request("203.0.113.8"))["status"] == 200
 
     asyncio.run(scenario())
 

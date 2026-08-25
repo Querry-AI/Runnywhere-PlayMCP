@@ -120,6 +120,7 @@ _RO = dict(readOnlyHint=True, destructiveHint=False, idempotentHint=True)
 # (stateless). Failures are deterministic too, so they are cached as well:
 # re-asking for an impossible shape answers instantly instead of re-searching.
 _course_cache: dict[str, "Course | CourseError"] = {}
+_course_inflight: dict[str, concurrent.futures.Future] = {}
 _CACHE_MAX = 512
 _animal_recommendation_cache: dict[tuple, Course] = {}
 _CACHE_LOCK = threading.RLock()
@@ -608,32 +609,55 @@ def _get_course(params: CourseParams, timeout_s: float | None = None) -> Course:
     cid = encode_course_id(params)
     with _CACHE_LOCK:
         hit = _course_cache.get(cid)
-    if isinstance(hit, Course):
-        return hit
-    if isinstance(hit, CourseError):
-        raise hit
-    # Course ids encode parameters, not the routed node path.  After a process
-    # restart a detail URL therefore has no hot-cache entry.  Restore the same
-    # build-verified station preset used by the recommendation instead of
-    # generating a different route for the same URL.
-    preset = get_animal_preset(params)
-    if isinstance(preset, Course):
-        _cache_put(cid, preset)
-        return preset
+        if isinstance(hit, Course):
+            return hit
+        if isinstance(hit, CourseError):
+            raise hit
+        pending = _course_inflight.get(cid)
+        leader = pending is None
+        if leader:
+            pending = concurrent.futures.Future()
+            _course_inflight[cid] = pending
+
+    if not leader:
+        try:
+            return pending.result(timeout=timeout_s)
+        except concurrent.futures.TimeoutError as exc:
+            raise _GenerationTimeout from exc
+
     try:
-        course = _offload(
-            generate_shape_course if params.shape else generate_course, params,
-            timeout_s=timeout_s)
-    except CourseError as e:
-        if params.shape in SHAPES and timeout_s is None:
-            recovered = _offload(find_min_clean_course, params)
-            if recovered is not None:
-                _cache_put(cid, recovered)
-                return recovered
-        _cache_put(cid, e)
+        # Course ids encode parameters, not the routed node path. After a
+        # process restart a detail URL therefore has no hot-cache entry.
+        # Restore the build-verified station preset before generating.
+        preset = get_animal_preset(params)
+        if isinstance(preset, Course):
+            course = preset
+        else:
+            try:
+                course = _offload(
+                    generate_shape_course if params.shape else generate_course,
+                    params, timeout_s=timeout_s)
+            except CourseError as exc:
+                if params.shape in SHAPES and timeout_s is None:
+                    recovered = _offload(find_min_clean_course, params)
+                    if recovered is not None:
+                        course = recovered
+                    else:
+                        raise
+                else:
+                    raise
+        _cache_put(cid, course)
+        pending.set_result(course)
+        return course
+    except BaseException as exc:
+        if isinstance(exc, CourseError):
+            _cache_put(cid, exc)
+        pending.set_exception(exc)
         raise
-    _cache_put(cid, course)
-    return course
+    finally:
+        with _CACHE_LOCK:
+            if _course_inflight.get(cid) is pending:
+                _course_inflight.pop(cid, None)
 
 
 def _cache_put(cid: str, value) -> None:
@@ -1756,24 +1780,61 @@ async def shape_relay_page(request: Request) -> Response:
 
 class _TokenBucketMiddleware:
     """Per-client token bucket: RATE_LIMIT_RPS steady, 2x burst. In-process by
-    design — PlayMCP in KC fronts a single container for this contest."""
+    design. MCP admission uses a bounded, short-lived queue so a normal traffic
+    burst waits for capacity instead of failing merely because several users
+    clicked at the same moment."""
 
     def __init__(self, app, rps: float = 20.0,
                  max_body_bytes: int = 65_536,
-                 max_concurrent_mcp: int = 16,
+                 max_concurrent_mcp: int = 10,
+                 max_queued_mcp: int = 32,
+                 mcp_queue_timeout_s: float = 1.0,
                  max_concurrent_route_edits: int = ROUTE_EDIT_MAX_CONCURRENT,
                  trust_proxy_hops: int = 0):
         self.app = app
         self.rps = rps
         self.burst = rps * 2
         self.max_body_bytes = max_body_bytes
-        self.max_concurrent_mcp = max_concurrent_mcp
+        self.max_concurrent_mcp = max(1, max_concurrent_mcp)
+        self.max_queued_mcp = max(0, max_queued_mcp)
+        self.mcp_queue_timeout_s = max(0.01, mcp_queue_timeout_s)
         self.max_concurrent_route_edits = max_concurrent_route_edits
         self.trust_proxy_hops = max(0, trust_proxy_hops)
         self.buckets: dict[str, tuple[float, float]] = {}
         self._active_mcp = 0
+        self._queued_mcp = 0
         self._active_route_edits = 0
         self._active_lock = asyncio.Lock()
+        self._mcp_slots = asyncio.Semaphore(self.max_concurrent_mcp)
+
+    async def _admit_mcp(self) -> tuple[bool, float, str]:
+        """Acquire a bounded MCP slot, returning admission and wait metadata."""
+        started = time.monotonic()
+        async with self._active_lock:
+            capacity = self.max_concurrent_mcp + self.max_queued_mcp
+            if self._active_mcp + self._queued_mcp >= capacity:
+                return False, 0.0, "queue_full"
+            self._queued_mcp += 1
+        try:
+            await asyncio.wait_for(
+                self._mcp_slots.acquire(), timeout=self.mcp_queue_timeout_s)
+        except TimeoutError:
+            async with self._active_lock:
+                self._queued_mcp -= 1
+            return False, time.monotonic() - started, "queue_timeout"
+        except BaseException:
+            async with self._active_lock:
+                self._queued_mcp -= 1
+            raise
+        async with self._active_lock:
+            self._queued_mcp -= 1
+            self._active_mcp += 1
+        return True, time.monotonic() - started, "admitted"
+
+    async def _release_mcp(self) -> None:
+        async with self._active_lock:
+            self._active_mcp -= 1
+        self._mcp_slots.release()
 
     def _client_key(self, scope) -> str:
         """Bucket key. Behind a load balancer the TCP peer is the balancer, so
@@ -1874,20 +1935,34 @@ class _TokenBucketMiddleware:
         admitted_mcp = False
         admitted_edit = False
         is_edit = scope.get("method") == "POST" and path.startswith("/c/") and path.endswith("/edit")
-        if path == "/mcp" or is_edit:
+        if path == "/mcp":
+            admitted_mcp, waited_s, reason = await self._admit_mcp()
+            if not admitted_mcp:
+                log.warning(
+                    "mcp_admission outcome=rejected reason=%s wait_ms=%d active=%d queued=%d",
+                    reason, round(waited_s * 1000), self._active_mcp,
+                    self._queued_mcp,
+                )
+                from starlette.responses import PlainTextResponse as _P
+                return await _P(
+                    "server busy; retry shortly",
+                    status_code=429,
+                    headers={"Retry-After": "1", "Cache-Control": "no-store"},
+                )(scope, receive, send_with_security_headers)
+            if waited_s >= 0.01:
+                log.info(
+                    "mcp_admission outcome=admitted wait_ms=%d active=%d queued=%d",
+                    round(waited_s * 1000), self._active_mcp,
+                    self._queued_mcp,
+                )
+        elif is_edit:
             async with self._active_lock:
-                active = self._active_route_edits if is_edit else self._active_mcp
-                limit = self.max_concurrent_route_edits if is_edit else self.max_concurrent_mcp
-                if active >= limit:
+                if self._active_route_edits >= self.max_concurrent_route_edits:
                     from starlette.responses import PlainTextResponse as _P
                     return await _P("server busy", status_code=429)(
                         scope, receive, send_with_security_headers)
-                if is_edit:
-                    self._active_route_edits += 1
-                    admitted_edit = True
-                else:
-                    self._active_mcp += 1
-                    admitted_mcp = True
+                self._active_route_edits += 1
+                admitted_edit = True
         try:
             return await self.app(scope, limited_receive,
                                   send_with_security_headers)
@@ -1897,8 +1972,7 @@ class _TokenBucketMiddleware:
                 scope, original_receive, send_with_security_headers)
         finally:
             if admitted_mcp:
-                async with self._active_lock:
-                    self._active_mcp -= 1
+                await self._release_mcp()
             if admitted_edit:
                 async with self._active_lock:
                     self._active_route_edits -= 1
@@ -1978,7 +2052,9 @@ def create_app():
         rps=float(os.environ.get("RATE_LIMIT_RPS", "20")),
         trust_proxy_hops=int(os.environ.get("RUNART_TRUST_PROXY_HOPS", "0")),
         max_body_bytes=int(os.environ.get("RUNART_MAX_BODY_BYTES", "65536")),
-        max_concurrent_mcp=int(os.environ.get("RUNART_MAX_CONCURRENT_MCP", "4")),
+        max_concurrent_mcp=int(os.environ.get("RUNART_MAX_CONCURRENT_MCP", "10")),
+        max_queued_mcp=int(os.environ.get("RUNART_MAX_QUEUED_MCP", "32")),
+        mcp_queue_timeout_s=float(os.environ.get("RUNART_MCP_QUEUE_TIMEOUT_S", "1.0")),
     )
 
 

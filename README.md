@@ -23,7 +23,14 @@ RUNART_LOADTEST_REPORT=artifacts/playmcp-loadtest.json python scripts/loadtest.p
 주소 검색, 재시도, 코스 생성을 포함한 MCP Tool 전체 응답에는 2.85초 상한을
 적용하며, 내부 코스 생성과 외부 지오코딩도 더 짧은 같은 데드라인을 공유한다.
 
-환경변수: `HOST`(로컬 기본 127.0.0.1, 컨테이너 0.0.0.0) · `PORT`(기본 8000) · `RUNART_BASE_URL`(미리보기 링크 도메인) · `RUNART_RELEASE_SHA`(배포 Git SHA, Docker 빌드 인자와 연동) · `KAKAO_JAVASCRIPT_KEY`(카카오맵 Web API, 필수) · `KAKAO_REST_API_KEY`(지오코딩, 선택) · `RUNART_KAKAO_CACHE_TTL_S`(Kakao Local 성공 응답과 원문 검색어의 메모리 캐시 유효시간, 기본 600초) · `RUNART_TOKEN_SECRET`(32자 이상 도감·릴레이 토큰 서명키, 운영 환경 필수) · `RUNART_LEGAL_CONTACT`(정책 문의 이메일, 공개 배포 시 필수) · `WEB_CONCURRENCY`(웹 워커 수, 기본 1) · `RUNART_POOL_WORKERS`(코스 탐색 프로세스 수, 기본 2) · `RATE_LIMIT_RPS`(IP당, 기본 20) · `RUNART_MAX_BODY_BYTES`(MCP 요청 본문, 기본 65,536) · `RUNART_MAX_CONCURRENT_MCP`(동시 MCP HTTP 요청, 기본 4) · `RUNART_KAKAO_WIDGETS`(Kakao Tools 코스 카드, 기본 1; 문제 시 0으로 Markdown 폴백) · `RUNART_ROUTE_EDIT`(코스 편집, 기본 1) · `RUNART_MAX_CONCURRENT_ROUTE_EDITS`(동시 편집 재계산, 기본 1) · `RUNART_ETL_LOCAL_ONLY=1`(기존 OSM 속성은 보존하고 로컬 경사도/신호등/가로등만 재반영)
+환경변수: `HOST`(로컬 기본 127.0.0.1, 컨테이너 0.0.0.0) · `PORT`(기본 8000) · `RUNART_BASE_URL`(미리보기 링크 도메인) · `RUNART_RELEASE_SHA`(배포 Git SHA, Docker 빌드 인자와 연동) · `KAKAO_JAVASCRIPT_KEY`(카카오맵 Web API, 필수) · `KAKAO_REST_API_KEY`(지오코딩, 선택) · `RUNART_KAKAO_CACHE_TTL_S`(Kakao Local 성공 응답과 원문 검색어의 메모리 캐시 유효시간, 기본 600초) · `RUNART_TOKEN_SECRET`(32자 이상 도감·릴레이 토큰 서명키, 운영 환경 필수) · `RUNART_LEGAL_CONTACT`(정책 문의 이메일, 공개 배포 시 필수) · `WEB_CONCURRENCY`(웹 워커 수, 기본 1) · `RUNART_POOL_WORKERS`(코스 탐색 프로세스 수, 기본 2) · `RATE_LIMIT_RPS`(IP당, 기본 20) · `RUNART_MAX_BODY_BYTES`(MCP 요청 본문, 기본 65,536) · `RUNART_MAX_CONCURRENT_MCP`(컨테이너당 동시 MCP 요청, 기본 10) · `RUNART_MAX_QUEUED_MCP`(동시 처리 한도 초과 시 대기 가능한 요청, 기본 32) · `RUNART_MCP_QUEUE_TIMEOUT_S`(대기열 최대 체류시간, 기본 1초) · `RUNART_KAKAO_WIDGETS`(Kakao Tools 코스 카드, 기본 1; 문제 시 0으로 Markdown 폴백) · `RUNART_ROUTE_EDIT`(코스 편집, 기본 1) · `RUNART_MAX_CONCURRENT_ROUTE_EDITS`(동시 편집 재계산, 기본 1) · `RUNART_ETL_LOCAL_ONLY=1`(기존 OSM 속성은 보존하고 로컬 경사도/신호등/가로등만 재반영)
+
+MCP 요청은 컨테이너당 10개를 동시에 처리하고, 순간적으로 몰린 요청은 최대
+32개까지 1초 동안 대기한다. 그래도 용량이 부족하면 `Retry-After: 1`과
+함께 HTTP 429를 반환한다. 이 값은 단일 컨테이너를 무제한 확장하는 설정이
+아니다. 공개 배포에서는 로드밸런서 뒤에 최소 2개 복제본을 두고, 실제 KC
+CPU·메모리와 429 비율을 보면서 복제본 수를 늘린다. `RUNART_TRUST_PROXY_HOPS`는
+KC가 보장하는 프록시 홉 수를 확인한 경우에만 설정한다.
 
 실그래프(`data/seoul_graph.pkl`)가 없으면 **서울 시청 일대 데모 그리드**로 구동된다(전체 파이프라인 동작 확인용). 공모전 제출 전 반드시 ETL 실행:
 
