@@ -197,22 +197,46 @@ def test_info_page_does_not_carry_the_other_apps_box():
     assert "다른 앱으로 달리기" in _page(_course(), "run")
 
 
-def test_editor_offers_an_eraser_and_a_via_tool_not_a_freehand_pencil():
-    """AllTrails splits its editor into Tap and Draw. Draw asks a finger to
-    trace a pedestrian network Kakao does not draw, which is why a stroke came
-    back as a line through a building. Tap asks for a place to go through and
-    lets the walking graph draw every metre in between."""
+def test_the_drawing_tool_pulls_the_line_instead_of_drawing_it():
+    """The drawing tool stays; its gesture changes. Freehand asked a finger to
+    trace a pedestrian network Kakao does not draw, which is how a stroke came
+    back as a line through a building. Now it is the eraser's gesture pointed
+    the other way: grab the course line and drag, and the stretch under the
+    finger is re-routed along walking paths -- longer as you pull away,
+    shorter as you pull back."""
     edit = _page(_course(), "edit")
 
-    assert 'id="eraserTool"' in edit and 'id="viaTool"' in edit
+    assert 'id="eraserTool"' in edit and 'id="drawTool"' in edit
     assert 'id="penTool"' not in edit and 'id="segmentTool"' not in edit
-    assert "지우개" in edit and "경유점" in edit
+    assert "지우개" in edit and "그리기" in edit
     # Nothing freehand survives: no stroke collection, no stroke request.
     assert "penStroke" not in edit
     assert "action:'snap'" not in edit
-    assert "const eraseAt" in edit
+    # Grab, pull, release -- the graph draws every metre in between.
+    assert "const beginDrawDrag" in edit
+    assert "const drawDragTo" in edit
+    assert "const endDrawDrag" in edit
     assert "action:'via'" in edit
+    assert "const eraseAt" in edit
     assert "coordsFromContainerPoint" in edit
+
+
+def test_a_pull_is_one_request_at_a_time_and_one_undo_step():
+    """A drag makes far more samples than the network can answer. Every stale
+    reply would fight the newest one for the same route, and an undo step per
+    sample would make one gesture take a dozen presses to take back."""
+    edit = _page(_course(), "edit")
+
+    assert "if(dragInFlight||!dragPending||!spanBase)return" in edit
+    assert "if(dragPending)flushDrawDrag()" in edit
+    assert "spanBase.pushed?null:spanBase.before" in edit
+    # The span is fixed at what the finger grabbed. Widening it with the
+    # pull made the replacement swallow more route than the detour added, so
+    # pulling harder shortened the course: 5.23km -> 3.96km over a 312m pull.
+    assert "range:spanAround(hit.index)" in edit
+    assert "const range=spanBase.range" in edit
+    # Every sample re-routes the span as it was before the drag started.
+    assert "path:spanBase.path" in edit
 
 
 def test_editor_can_step_forward_again_after_stepping_back():
@@ -241,7 +265,7 @@ def test_tools_take_the_map_out_of_drag_while_they_are_active():
     so the map stayed draggable and swallowed every erase and every tap."""
     edit = _page(_course(), "edit")
 
-    assert "editMode === 'erase' || editMode === 'via'" in edit
+    assert "editMode === 'erase' || editMode === 'draw'" in edit
     assert "editMode === 'segment'" not in edit
 
 

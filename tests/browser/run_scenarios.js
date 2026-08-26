@@ -150,9 +150,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
           new kakao.maps.LatLng(initialEditPath[i][1], initialEditPath[i][2]));
         return { x: s.x, y: s.y };
       };
-      const rect = overlay.getBoundingClientRect();
       const fire = (type, pt) => overlay.dispatchEvent(new PointerEvent(type, {
-        pointerId: 3, bubbles: true, clientX: rect.left + pt.x, clientY: rect.top + pt.y }));
+        pointerId: 3, bubbles: true,
+        clientX: overlay.getBoundingClientRect().left + pt.x,
+        clientY: overlay.getBoundingClientRect().top + pt.y }));
       document.getElementById('eraserTool').click();
       // sweep four consecutive nodes
       fire('pointerdown', at(6));
@@ -194,9 +195,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
           new kakao.maps.LatLng(initialEditPath[i][1], initialEditPath[i][2]));
         return { x: s.x, y: s.y };
       };
-      const rect = overlay.getBoundingClientRect();
       const fire = (type, pt) => overlay.dispatchEvent(new PointerEvent(type, {
-        pointerId: 4, bubbles: true, clientX: rect.left + pt.x, clientY: rect.top + pt.y }));
+        pointerId: 4, bubbles: true,
+        clientX: overlay.getBoundingClientRect().left + pt.x,
+        clientY: overlay.getBoundingClientRect().top + pt.y }));
       document.getElementById('eraserTool').click();
       fire('pointerdown', at(4));
       for (const i of [5, 6, 7]) fire('pointermove', at(i));
@@ -213,47 +215,107 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 8. tapping reshapes the span through the tapped place ----
+  // ---- 8. the drawing tool pulls the line instead of drawing it ----
   {
     const { p, errors } = await page(browser, 'harness.html');
     const out = await p.evaluate(async (SUMMARY_JSON) => {
       const overlay = document.getElementById('editOverlay');
       overlay.setPointerCapture = () => {};
       const proj = window.__map.getProjection();
-      const rect = overlay.getBoundingClientRect();
-      const s = proj.containerPointFromCoords(
-        new kakao.maps.LatLng(initialEditPath[10][1] + 0.001, initialEditPath[10][2] + 0.001));
+      const screen = (lat, lon) => {
+        const s = proj.containerPointFromCoords(new kakao.maps.LatLng(lat, lon));
+        return { x: s.x, y: s.y };
+      };
       const fire = (type, pt) => overlay.dispatchEvent(new PointerEvent(type, {
-        pointerId: 5, bubbles: true, clientX: rect.left + pt.x, clientY: rect.top + pt.y }));
-      let sent = [];
+        pointerId: 5, bubbles: true,
+        clientX: overlay.getBoundingClientRect().left + pt.x,
+        clientY: overlay.getBoundingClientRect().top + pt.y }));
+      const sent = [];
       window.fetch = async (url, opts) => {
         sent.push(JSON.parse(opts.body));
         return { ok: true, json: async () => ({
-          path: initialEditPath.map(p => [...p]),
+          path: initialEditPath.map(q => [...q]),
           geometry: initialEditGeometry.slice(),
           length_km: 5.55, note: '', summary: SUMMARY_JSON }) };
       };
-      document.getElementById('viaTool').click();
-      const pressed = document.getElementById('viaTool').getAttribute('aria-pressed');
-      // tap right on the route so a span can be derived
-      const on = proj.containerPointFromCoords(
-        new kakao.maps.LatLng(initialEditPath[10][1], initialEditPath[10][2]));
-      fire('pointerdown', on); fire('pointerup', on);
-      await new Promise(r => setTimeout(r, 150));
-      return { pressed, sent, distance: document.getElementById('editDistance').textContent,
-        toast: document.getElementById('editToastText').textContent };
+      document.getElementById('drawTool').click();
+      const pressed = document.getElementById('drawTool').getAttribute('aria-pressed');
+      const draggable = window.__map.draggable;
+
+      // grab the line, pull it away, release
+      const grab = screen(initialEditPath[10][1], initialEditPath[10][2]);
+      fire('pointerdown', grab);
+      const grabbed = sent.length;
+      for (const step of [1, 2, 3, 4]) {
+        fire('pointermove', { x: grab.x + step * 26, y: grab.y + step * 26 });
+        await new Promise(r => setTimeout(r, 30));
+      }
+      fire('pointerup', { x: grab.x + 104, y: grab.y + 104 });
+      await new Promise(r => setTimeout(r, 200));
+      return { pressed, draggable, grabbed, sent,
+        distance: document.getElementById('editDistance').textContent };
     }, SUMMARY(5.55));
-    check('via tool engages', out.pressed === 'true', out.pressed);
-    check('a tap sends a via request', out.sent.length === 1 && out.sent[0].action === 'via',
-      JSON.stringify(out.sent.map(s => s.action)));
-    check('the via request carries the tapped point',
-      out.sent[0] && out.sent[0].vias && out.sent[0].vias.length === 1,
-      JSON.stringify(out.sent[0] && out.sent[0].vias));
-    check('the via request names a real span',
-      out.sent[0] && out.sent[0].from_index < out.sent[0].to_index,
-      out.sent[0] && `${out.sent[0].from_index}..${out.sent[0].to_index}`);
-    check('the reshaped distance lands on screen', out.distance === '5.55km', out.distance + ' | ' + out.toast);
-    check('no page errors while tapping', errors.length === 0, errors.join(' | '));
+
+    check('drawing tool engages', out.pressed === 'true', out.pressed);
+    check('the map stops panning while the line is being pulled',
+      out.draggable === false, `draggable=${out.draggable}`);
+    check('grabbing alone changes nothing', out.grabbed === 0, `requests=${out.grabbed}`);
+    check('pulling re-routes on the walking graph, not freehand',
+      out.sent.length >= 2 && out.sent.every(r => r.action === 'via'),
+      JSON.stringify(out.sent.map(r => r.action)));
+    check('each pull carries one point, the finger',
+      out.sent.every(r => r.vias && r.vias.length === 1),
+      JSON.stringify(out.sent.map(r => r.vias && r.vias.length)));
+    // A span that grew with the pull let the replacement swallow more route
+    // than the detour added, so pulling harder made the course shorter.
+    check('the span stays where the finger grabbed it',
+      new Set(out.sent.map(r => `${r.from_index}..${r.to_index}`)).size === 1,
+      out.sent.map(r => `${r.from_index}..${r.to_index}`).join(' '));
+    check('every pull re-routes the original span, never a stacked one',
+      new Set(out.sent.map(r => JSON.stringify(r.path))).size === 1,
+      `distinct base paths=${new Set(out.sent.map(r => JSON.stringify(r.path))).size}`);
+    check('the pulled distance lands on screen', out.distance === '5.55km', out.distance);
+    check('no page errors while pulling', errors.length === 0, errors.join(' | '));
+    await p.close();
+  }
+
+  // ---- 8b. a whole pull is one undo step, not one per sample ----
+  {
+    const { p } = await page(browser, 'harness.html');
+    const undos = await p.evaluate(async (SUMMARY_JSON) => {
+      const overlay = document.getElementById('editOverlay');
+      overlay.setPointerCapture = () => {};
+      const proj = window.__map.getProjection();
+      const s = proj.containerPointFromCoords(
+        new kakao.maps.LatLng(initialEditPath[10][1], initialEditPath[10][2]));
+      const fire = (type, pt) => overlay.dispatchEvent(new PointerEvent(type, {
+        pointerId: 6, bubbles: true,
+        clientX: overlay.getBoundingClientRect().left + pt.x,
+        clientY: overlay.getBoundingClientRect().top + pt.y }));
+      window.fetch = async () => ({ ok: true, json: async () => ({
+        path: initialEditPath.map(q => [...q]),
+        geometry: initialEditGeometry.slice(),
+        length_km: 6.66, note: '', summary: SUMMARY_JSON }) });
+      document.getElementById('drawTool').click();
+      fire('pointerdown', { x: s.x, y: s.y });
+      for (const step of [1, 2, 3, 4, 5]) {
+        fire('pointermove', { x: s.x + step * 30, y: s.y + step * 30 });
+        await new Promise(r => setTimeout(r, 30));
+      }
+      fire('pointerup', { x: s.x + 150, y: s.y + 150 });
+      await new Promise(r => setTimeout(r, 250));
+      const pulled = document.getElementById('editDistance').textContent;
+      document.getElementById('editUndo').click();
+      await new Promise(r => setTimeout(r, 80));
+      return { pulled, afterOne: document.getElementById('editDistance').textContent,
+        original: initialLengthKm.toFixed(2) + 'km',
+        undoStillOn: document.getElementById('editUndo').disabled === false };
+    }, SUMMARY(6.66));
+    check('a pull moves the distance', undos.pulled === '6.66km', undos.pulled);
+    check('one undo takes back the whole pull',
+      undos.afterOne === undos.original, `${undos.afterOne} vs ${undos.original}`);
+    check('the pull left no extra undo steps behind',
+      undos.undoStillOn === false, `undo enabled=${undos.undoStillOn}`);
     await p.close();
   }
 
@@ -323,12 +385,13 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       const overlay = document.getElementById('editOverlay');
       overlay.setPointerCapture = () => {};
       const proj = window.__map.getProjection();
-      const rect = overlay.getBoundingClientRect();
       const on = proj.containerPointFromCoords(
         new kakao.maps.LatLng(initialEditPath[10][1], initialEditPath[10][2]));
       const fire = (t, pt) => overlay.dispatchEvent(new PointerEvent(t, {
-        pointerId: 9, bubbles: true, clientX: rect.left + pt.x, clientY: rect.top + pt.y }));
-      document.getElementById('viaTool').click();
+        pointerId: 9, bubbles: true,
+        clientX: overlay.getBoundingClientRect().left + pt.x,
+        clientY: overlay.getBoundingClientRect().top + pt.y }));
+      document.getElementById('drawTool').click();
       fire('pointerdown', on); fire('pointerup', on);
       await new Promise(r => setTimeout(r, 150));
       const edited = drawnLength();

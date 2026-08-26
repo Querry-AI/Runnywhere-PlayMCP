@@ -1754,7 +1754,12 @@ async def edit_course_route(request: Request) -> Response:
             # edge in the graph -- so erasing one and asking for a replacement
             # returns the same line. Saying nothing made the editor look
             # broken; naming it lets the runner move on.
-            "note": course.note or _unchanged_note(payload.path, course.path),
+            # An identical result means something only for the eraser: a span
+            # with no alternative. Pulling the line back to where it started
+            # returns the original path by design and needs no comment.
+            "note": course.note or (
+                _unchanged_note(payload.path, course.path)
+                if payload.action == "reroute" else ""),
             # The detail panels below the map describe *this* course, so they
             # have to follow the edit rather than keep describing the original.
             # Measured cost of the extra work: ~25ms, well inside the budget.

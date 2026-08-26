@@ -223,8 +223,11 @@ def test_mobile_preview_uses_compact_summary_and_accessible_edit_controls():
     assert 'aria-live="polite"' in page
     assert 'AbortController' in page and '3500' in page
     assert "action:'save'" in page
-    assert 'id="eraserTool"' in page and 'id="viaTool"' in page
-    assert 'id="drawTool"' not in page
+    assert 'id="eraserTool"' in page and 'id="drawTool"' in page
+    # The ids the toolbar has actually been through, so a half-done rename
+    # cannot leave a handler bound to a control that is no longer rendered.
+    assert 'id="penTool"' not in page
+    assert 'id="viaTool"' not in page
     assert 'id="eraseTool"' not in page
     assert 'id="editUndo"' in page
     assert 'id="editRedo"' in page      # stepping back is reversible too
@@ -418,8 +421,10 @@ def test_editor_erases_a_swept_range_and_draws_its_replacement():
     # walkable way rather than left as a gap only the pencil could close.
     assert "action:'reroute'" in page
     assert "const eraseSelection" in page
-    # Tapping reshapes the span through the tapped place; nothing is freehand.
+    # Pulling reshapes the span through wherever the finger is; nothing is
+    # freehand, so nothing can leave the road network.
     assert "action:'via'" in page
+    assert "const beginDrawDrag" in page
 
 
 def test_revert_is_undoable_and_separated_from_save():
