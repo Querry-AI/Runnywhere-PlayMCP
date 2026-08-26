@@ -34,8 +34,9 @@ from .animal_presets import (MISSING as PRESET_MISSING, PresetMatch,
                              find_nearby_animal_presets,
                              find_nearest_animal_preset, get_animal_preset,
                              preset_status)
-from .course import (Course, CourseError, course_from_path, generate_course,
-                     reroute_segment, snap_drawn_segment)
+from .course import (MAX_VIA_POINTS, Course, CourseError, course_from_path,
+                     generate_course, reroute_segment, route_via_points,
+                     snap_drawn_segment)
 from .courseplan import (CASE_EXACT, CASE_FAR, CASE_NEARBY, NEARBY_RADIUS_M,
                          SAME_START_M, CoursePlan, build_course_plan)
 from .facilities import LABELS_KO, facilities_along
@@ -45,11 +46,12 @@ from .gpx import to_gpx
 from .exploration import (atlas_html, create_relay, decode_relay,
                           passport_html, home_html, legal_html, record_run,
                           relay_html)
-from .models import (CourseParams, CourseWaypoint, DEFAULT_PACE_MIN_PER_KM, decode_course_id,
+from .models import (COURSE_NAME_MAX_CHARS, CourseParams, CourseWaypoint,
+                     DEFAULT_PACE_MIN_PER_KM, decode_course_id,
                      decode_shape_token, encode_course_id)
 from .render import (card_svg, course_edit_summary, course_markdown,
-                     course_thumbnail_svg, markdown_text, preview_html,
-                     route_points)
+                     course_thumbnail_svg, edit_path_geometry, edit_path_nodes,
+                     markdown_text, preview_html, route_points)
 from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
                      generate_shape_course, list_shapes)
 from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
@@ -1623,9 +1625,9 @@ def _unchanged_note(before: list[int], after: list[int]) -> str:
     """Explain a replacement that came back identical to what it replaced."""
     if before != after:
         return ""
-    return ("지운 구간을 대신할 다른 보행로가 없어 같은 길로 이어졌어요. "
-            "이 구간은 두 지역을 잇는 유일한 길이라, 다른 곳을 지우거나 "
-            "더 넓은 범위를 지운 뒤 다시 그려 주세요.")
+    return ("이 구간을 대신할 다른 보행로가 없어 같은 길로 이어졌어요. "
+            "두 지역을 잇는 유일한 길이라, 더 넓은 범위를 지우거나 "
+            "다른 곳을 경유점으로 짚어 주세요.")
 
 
 class _CourseEditPayload(BaseModel):
@@ -1634,6 +1636,12 @@ class _CourseEditPayload(BaseModel):
     path: list[int] = Field(min_length=3, max_length=1200)
     stroke: list[CourseWaypoint] = Field(
         default_factory=list, max_length=STROKE_MAX_POINTS)
+    # Points tapped on the map for the span to pass through. Bounded by the
+    # same cap route_via_points enforces, so an oversized request is refused
+    # by validation rather than after the routing work.
+    vias: list[CourseWaypoint] = Field(
+        default_factory=list, max_length=MAX_VIA_POINTS)
+    name: str = Field(default="", max_length=COURSE_NAME_MAX_CHARS)
     from_index: int | None = None
     to_index: int | None = None
 
@@ -1709,9 +1717,19 @@ async def edit_course_route(request: Request) -> Response:
                         payload.from_index, payload.to_index,
                     ), abandon_on_cancel=True,
                 )
+            elif payload.action == "via":
+                if payload.from_index is None or payload.to_index is None:
+                    return JSONResponse({"error": "바꿀 구간을 다시 선택해 주세요."}, status_code=400)
+                course = await anyio.to_thread.run_sync(
+                    functools.partial(
+                        route_via_points, edited, payload.path,
+                        payload.from_index, payload.to_index, payload.vias,
+                    ), abandon_on_cancel=True,
+                )
             elif payload.action == "save":
                 course = await anyio.to_thread.run_sync(
-                    functools.partial(course_from_path, edited, payload.path),
+                    functools.partial(course_from_path, edited, payload.path,
+                                      payload.name),
                     abandon_on_cancel=True,
                 )
             else:
@@ -1723,18 +1741,20 @@ async def edit_course_route(request: Request) -> Response:
             {"error": "대체 보행로를 찾는 데 시간이 걸렸어요. 더 짧은 구간을 선택해 주세요."},
             status_code=503,
         )
-    if payload.action in {"snap", "reroute"}:
-        g = graphmod.get_graph()
+    if payload.action in {"snap", "reroute", "via"}:
         return JSONResponse({
-            "path": [[node, round(g.nodes[node]["lat"], 6), round(g.nodes[node]["lon"], 6)]
-                     for node in course.path],
+            "path": edit_path_nodes(course.path),
+            # The editor draws the same OSM way shapes the other two pages
+            # draw. Without this it drew straight chords between graph nodes
+            # and the edited line sat visibly off the road it followed.
+            "geometry": edit_path_geometry(course.path),
             "length_km": round(course.length_km, 2),
             # Some stretches are the only walkable link between two parts of
             # the city -- an unnamed 660m hillside footway by 개운산 is a cut
             # edge in the graph -- so erasing one and asking for a replacement
             # returns the same line. Saying nothing made the editor look
             # broken; naming it lets the runner move on.
-            "note": _unchanged_note(payload.path, course.path),
+            "note": course.note or _unchanged_note(payload.path, course.path),
             # The detail panels below the map describe *this* course, so they
             # have to follow the edit rather than keep describing the original.
             # Measured cost of the extra work: ~25ms, well inside the budget.

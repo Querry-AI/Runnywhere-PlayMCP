@@ -135,19 +135,24 @@ def test_tabs_carry_an_unsaved_edit_to_the_other_pages():
     assert "tab.href = currentCourseUrl + tab.dataset.page" in edit
 
 
-def test_erasing_is_one_button_and_the_pencil_reconnects():
+def test_erasing_reconnects_the_route_by_itself():
     """Zillow gives drawing its own Clear button; an action tucked into a
-    status toast is a message, not a control. And one gesture deserves one
-    button: undo already lives in the toolbar and reconnecting is the pencil."""
+    status toast is a message, not a control.
+
+    Erasing used to leave a gap only the pencil could close, so a runner who
+    rubbed out a spur and pressed 저장 saved the route with the spur still in
+    it. The eraser now asks for the replacement itself.
+    """
     edit = _page(_course(), "edit")
 
     assert 'id="selErase"' in edit and "지우기</button>" in edit
     assert 'id="selBar"' not in edit
     assert "const replaceSelected" not in edit
-    # Erasing opens a gap the pencil is sent to close.
-    assert "gapRange=[...selectedRange]" in edit
-    assert "setMode('pen')" in edit
-    assert "if(gapRange)return [...gapRange]" in edit
+    assert "const eraseSelection" in edit
+    assert "action:'reroute'" in edit
+    assert "selErase.addEventListener('click',eraseSelection)" in edit
+    # The gap is what a *failed* reconnection leaves behind, not the happy path.
+    assert "gapRange=range;selectedRange=null;" in edit
 
 
 def test_selection_ends_drag_both_ways_through_the_drawing_overlay():
@@ -192,19 +197,21 @@ def test_info_page_does_not_carry_the_other_apps_box():
     assert "다른 앱으로 달리기" in _page(_course(), "run")
 
 
-def test_editor_offers_an_eraser_and_a_pencil_not_one_select_tool():
-    """AllTrails splits its editor into Tap and Draw; erasing what is wrong
-    and drawing what is right are different intents and need different tools."""
+def test_editor_offers_an_eraser_and_a_via_tool_not_a_freehand_pencil():
+    """AllTrails splits its editor into Tap and Draw. Draw asks a finger to
+    trace a pedestrian network Kakao does not draw, which is why a stroke came
+    back as a line through a building. Tap asks for a place to go through and
+    lets the walking graph draw every metre in between."""
     edit = _page(_course(), "edit")
 
-    assert 'id="eraserTool"' in edit and 'id="penTool"' in edit
-    assert 'id="segmentTool"' not in edit
-    assert "지우개" in edit and "연필" in edit
-    assert "되돌리기" in edit and "자동으로 잇기" in edit
-    # Eraser sweeps a range; pencil collects a stroke and snaps it to roads.
+    assert 'id="eraserTool"' in edit and 'id="viaTool"' in edit
+    assert 'id="penTool"' not in edit and 'id="segmentTool"' not in edit
+    assert "지우개" in edit and "경유점" in edit
+    # Nothing freehand survives: no stroke collection, no stroke request.
+    assert "penStroke" not in edit
+    assert "action:'snap'" not in edit
     assert "const eraseAt" in edit
-    assert "penStroke" in edit
-    assert "action:'snap'" in edit
+    assert "action:'via'" in edit
     assert "coordsFromContainerPoint" in edit
 
 
@@ -231,20 +238,50 @@ def test_map_keeps_touch_gestures_instead_of_scrolling_the_page():
 
 def test_tools_take_the_map_out_of_drag_while_they_are_active():
     """The mode name changed and this check was left asking for the old one,
-    so the map stayed draggable and swallowed every erase and pen stroke."""
+    so the map stayed draggable and swallowed every erase and every tap."""
     edit = _page(_course(), "edit")
 
-    assert "editMode === 'erase' || editMode === 'pen'" in edit
+    assert "editMode === 'erase' || editMode === 'via'" in edit
     assert "editMode === 'segment'" not in edit
 
 
-def test_pencil_thins_its_stroke_before_sending_it():
-    """A finger crossing the screen makes hundreds of points; the server used
-    to cap them at 96 and reject an ordinary line as bad input."""
+@pytest.mark.parametrize("page", COURSE_PAGES)
+def test_a_drag_that_starts_on_a_marker_still_moves_the_map(page):
+    """Kakao's panBy() animates, so one call per pointermove restarts the
+    animation every frame and the map crawls a few pixels and springs back.
+    With up to 80 facility markers on the info map, almost every drag started
+    on one of them -- which is why the info map looked frozen."""
+    markup = _page(_course(), page)
+
+    assert "map.panBy(" not in markup
+    assert "const panByPixels" in markup
+    assert "map.setCenter(projection.coordsFromContainerPoint(" in markup
+
+
+def test_the_editor_line_follows_the_same_street_shapes_the_other_pages_draw():
+    """One course must not have two lines. The editor drew straight chords
+    between graph nodes while info and run drew the real OSM way geometry, so
+    the edited route sat visibly off the road it was following -- and cut
+    corners through blocks the course never enters."""
     edit = _page(_course(), "edit")
 
-    assert "const STROKE_MAX=240" in edit
-    assert "penStroke.filter" in edit
+    assert "const initialEditGeometry" in edit
+    assert "const drawnPoints" in edit
+    assert "path:drawnPath(0,editNodes.length-1)" in edit
+    # Selection and gap highlights ride on the same geometry.
+    assert "path:drawnPath(selectedRange[0],selectedRange[1])" in edit
+    assert "path:drawnPath(gapRange[0],gapRange[1])" in edit
+
+
+def test_one_eraser_sweep_cannot_jump_to_the_far_side_of_the_loop():
+    """A closed loop passes close to itself, so a globally-nearest search
+    answered with a segment on the other side of the course and the selection
+    grew to span everything between."""
+    edit = _page(_course(), "edit")
+
+    assert "const nearestSegment = (point, lo, hi)" in edit
+    assert "const ERASE_REACH = 24" in edit
+    assert "selectedRange?selectedRange[0]-ERASE_REACH:undefined" in edit
 
 
 def test_facilities_are_marked_on_the_run_map_too():

@@ -15,7 +15,7 @@ from .geo import haversine_m, to_xy
 from .infrastructure import pedestrian_signals_crossed
 from .insights import CourseFacts, course_facts, is_loop
 from .models import encode_course_id
-from .naming import course_badges, course_title
+from .naming import course_badges, course_name_placeholder, course_title
 from .pace import DEFAULT_PACE_S, PACE_MODEL, effort
 from .rfs import edge_rfs
 from .shapes import SHAPES
@@ -99,6 +99,31 @@ def route_points(course: Course) -> list[tuple[float, float]]:
     so the drawn route stays on pedestrian roads instead of cutting straight
     chords through blocks/buildings between graph nodes."""
     return graphmod.path_points(graphmod.get_graph(), course.path)
+
+
+def edit_path_nodes(path: list) -> list:
+    """[[node_id, lat, lon], ...] -- the editor's handle on the route."""
+    g = graphmod.get_graph()
+    return [[node, round(g.nodes[node]["lat"], 6), round(g.nodes[node]["lon"], 6)]
+            for node in path]
+
+
+def edit_path_geometry(path: list) -> list:
+    """Per-edge intermediate shape points, parallel to the edges of ``path``.
+
+    The editor used to draw a straight chord between consecutive graph nodes
+    while the info and run pages drew the same route along its real OSM way
+    geometry. Two pages, one course, two different lines -- and the editor's
+    version cut corners through blocks the route never enters. ``null`` means
+    the way really is straight there, which for 58% of the network it is.
+    """
+    g = graphmod.get_graph()
+    out = []
+    for u, v in zip(path, path[1:]):
+        points = graphmod.edge_points(g, u, v)
+        middle = [[round(lat, 6), round(lon, 6)] for lat, lon in points[1:-1]]
+        out.append(middle or None)
+    return out
 
 
 def _segments_with_rfs(course: Course) -> list:
@@ -273,6 +298,27 @@ def _facility_rows(facilities: list[dict], course: Course) -> list[dict]:
     return rows
 
 
+def _badge_html(index: int, badge: dict) -> str:
+    """One course badge and the tooltip that says what it means.
+
+    A bare emoji next to the run name is a riddle -- 🏙️ and 🌳 differ only by
+    hue at 30px, and `title=` never appears on a phone. This ships the label
+    and the reason it was awarded in a popover that opens on hover, on focus
+    and on tap.
+    """
+    tip_id = f"badgeTip{index}"
+    label = html.escape(badge["label"])
+    detail = html.escape(badge.get("detail", ""))
+    return (
+        f'<span class="badge-wrap">'
+        f'<button class="badge" type="button" aria-label="{label}"'
+        f' aria-describedby="{tip_id}" aria-expanded="false">'
+        f'<span aria-hidden="true">{badge["emoji"]}</span></button>'
+        f'<span class="badge-tip" id="{tip_id}" role="tooltip">'
+        f'<b>{label}</b>{detail}</span></span>'
+    )
+
+
 def _trait_chips_html(traits) -> str:
     return "".join(
         f'<span class="trait"><i aria-hidden="true">{html.escape(t["emoji"])}</i>'
@@ -387,8 +433,13 @@ def course_edit_summary(course: Course) -> dict:
         "highlights": list(facts.highlights),
         "cautions": list(facts.cautions),
         "start_name": course.params.location_name or "지정한 출발점",
-        "badges": [{"emoji": b["emoji"], "label": b["label"]} for b in course_badges(course)],
+        "badges": [{"emoji": b["emoji"], "label": b["label"],
+                    "detail": b.get("detail", "")}
+                   for b in course_badges(course)],
         "title": course_title(course),
+        # What the rename field shows in grey. It follows the edit: a course
+        # that grew from 4.8km to 5.3km offers the 5.3km name, not a stale one.
+        "name_placeholder": course_name_placeholder(course),
     }
 
 
@@ -399,7 +450,7 @@ def _edit_chrome_html() -> str:
     "코스 편집" button pinned to the map, which is how the map came to hold an
     edit toolbar, a tracking control and a view switch at the same time.
     """
-    return """<svg id="editOverlay" class="edit-overlay" aria-hidden="true"></svg><div class="edit-tools" role="toolbar" aria-label="코스 편집 도구"><button id="panTool" class="edit-tool-circle" type="button" aria-label="지도 이동" title="지도 이동" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/><path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/></svg></button><button id="eraserTool" class="edit-tool-circle" type="button" aria-label="지우개 · 코스 선을 문질러 지우기" title="지우개" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 4 6 6-8 8H6l-3-3Z"/><path d="M9 20h11"/><path d="m10 8 6 6"/></svg></button><button id="penTool" class="edit-tool-circle" type="button" aria-label="연필 · 도로 위에 새 코스 선 그리기" title="연필" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10-10-4-4L4 16Z"/><path d="m14 6 4 4"/><path d="m16 4 4 4"/></svg></button><button id="editUndo" class="edit-tool-circle" type="button" aria-label="마지막 수정 실행 취소" title="한 번 되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7H4V2"/><path d="M4 7c2.2-2.4 5-3.4 8-3 4.6.6 8 4.5 8 9"/></svg></button><button id="editRedo" class="edit-tool-circle" type="button" aria-label="되돌린 수정 다시 실행" title="다시 실행"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7h5V2"/><path d="M20 7c-2.2-2.4-5-3.4-8-3-4.6.6-8 4.5-8 9"/></svg></button><button id="editCancel" class="edit-tool-circle" type="button" aria-label="모든 수정 초기화" title="전체 초기화"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/><path d="M10 11v5M14 11v5"/></svg></button><button id="editSave" class="edit-tool-circle save" type="button" aria-label="수정한 코스를 새 코스로 저장" title="저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></svg></button></div><div id="editDistance" class="edit-distance" aria-label="수정 중인 코스 거리"></div><button class="sel-erase" id="selErase" type="button" hidden>지우기</button><div id="editToast" class="edit-toast" role="status" aria-live="polite" data-tone="info" hidden><span class="edit-toast-spin" aria-hidden="true"></span><span id="editToastText" class="edit-toast-text"></span><button id="editToastAction" class="edit-toast-action" type="button" hidden></button></div></div>"""
+    return """<svg id="editOverlay" class="edit-overlay" aria-hidden="true"></svg><div class="edit-tools" role="toolbar" aria-label="코스 편집 도구"><button id="panTool" class="edit-tool-circle" type="button" aria-label="지도 이동" title="지도 이동" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/><path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/></svg></button><button id="eraserTool" class="edit-tool-circle" type="button" aria-label="지우개 · 코스 선을 문질러 지우기" title="지우개" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 4 6 6-8 8H6l-3-3Z"/><path d="M9 20h11"/><path d="m10 8 6 6"/></svg></button><button id="viaTool" class="edit-tool-circle" type="button" aria-label="경유점 · 지나갈 길을 탭해 코스 선 끌어오기" title="경유점" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.3 7-11a7 7 0 1 0-14 0c0 4.7 7 11 7 11Z"/><circle cx="12" cy="10" r="2.4"/></svg></button><button id="editUndo" class="edit-tool-circle" type="button" aria-label="마지막 수정 실행 취소" title="한 번 되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7H4V2"/><path d="M4 7c2.2-2.4 5-3.4 8-3 4.6.6 8 4.5 8 9"/></svg></button><button id="editRedo" class="edit-tool-circle" type="button" aria-label="되돌린 수정 다시 실행" title="다시 실행"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7h5V2"/><path d="M20 7c-2.2-2.4-5-3.4-8-3-4.6.6-8 4.5-8 9"/></svg></button><button id="editCancel" class="edit-tool-circle" type="button" aria-label="모든 수정 초기화" title="전체 초기화"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/><path d="M10 11v5M14 11v5"/></svg></button><button id="editSave" class="edit-tool-circle save" type="button" aria-label="수정한 코스를 새 코스로 저장" title="저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></svg></button></div><div id="editDistance" class="edit-distance" aria-label="수정 중인 코스 거리"></div><button class="sel-erase" id="selErase" type="button" hidden>지우기</button><div id="editToast" class="edit-toast" role="status" aria-live="polite" data-tone="info" hidden><span class="edit-toast-spin" aria-hidden="true"></span><span id="editToastText" class="edit-toast-text"></span><button id="editToastAction" class="edit-toast-action" type="button" hidden></button></div><div id="nameSheet" class="name-sheet" role="dialog" aria-modal="true" aria-labelledby="nameSheetTitle" hidden><div class="name-sheet-card"><h2 id="nameSheetTitle">코스 이름을 지어 주세요</h2><p id="nameSheetHint">비워 두면 지금 이름 그대로 저장돼요.</p><input id="nameSheetInput" class="name-sheet-input" type="text" maxlength="24" autocomplete="off" enterkeyhint="done" aria-labelledby="nameSheetTitle" aria-describedby="nameSheetHint"><div class="name-sheet-actions"><button id="nameSheetCancel" class="name-sheet-btn ghost" type="button">취소</button><button id="nameSheetSave" class="name-sheet-btn" type="button">저장</button></div></div></div></div>"""
 
 
 def _tab_bar_html(base_url: str, cid: str, page: str) -> str:
@@ -475,10 +526,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
     title = html.escape(course_title(course))
     badges = course_badges(course)
     badge_html = "".join(
-        f'<span class="badge" role="img" aria-label="{html.escape(b["label"])}"'
-        f' title="{html.escape(b["label"])}">{b["emoji"]}</span>'
-        for b in badges
-    )
+        _badge_html(index, badge) for index, badge in enumerate(badges))
     og_desc = html.escape(
         f"거리 {course.length_km:.1f}km · 누적 오르막 {course.ascent_m:.0f}m"
         f" · {p.location_name or '서울'} — 러니웨어"
@@ -498,6 +546,11 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
         for f in facilities
     ])
     shape_view_label = "동물 실루엣" if shape else "코스 라인"
+    # An animal course exists to be looked at. Opening its info page on the
+    # running-guide layer buried the one thing that makes it different, so the
+    # silhouette leads there and the guide stays one tap away. The run and
+    # editor pages still open on the guide: both are about the road ahead.
+    opens_on_shape = bool(shape) and page == "info"
     where = html.escape(p.location_name)
     where_html = (
         f'<p class="course-where"><span aria-hidden="true">📍</span> '
@@ -511,11 +564,8 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
         "원본 동물 코스는 유지되고, 저장하면 새 직접 편집한 코스가 만들어져요."
         if shape else ""
     )
-    g = graphmod.get_graph()
-    edit_path = json.dumps([
-        [node, round(g.nodes[node]["lat"], 6), round(g.nodes[node]["lon"], 6)]
-        for node in course.path
-    ])
+    edit_path = json.dumps(edit_path_nodes(course.path))
+    edit_geometry = json.dumps(edit_path_geometry(course.path))
     elev_range = _elevation_range(profile)
     elev_text = (f"{elev_range[0]}~{elev_range[1]}<i>m</i>" if elev_range else "정보 없음")
     initial_effort = effort(course.length_km, DEFAULT_PACE_S)
@@ -590,6 +640,9 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
         "run": effort_card + howto_panel,
         "edit": editor_card,
     }[page]
+    shape_view_active = ' class="active"' if opens_on_shape else ""
+    opens_on_shape_js = str(opens_on_shape).lower()
+    guide_view_active = "" if opens_on_shape else ' class="active"'
     pace_model = script_json(PACE_MODEL)
     initial_summary = script_json(course_edit_summary(course))
     base_url_json = script_json(base_url)
@@ -652,8 +705,26 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  /* Title and badges share a baseline row; badges never push the name to wrap. */
  .course-head{{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px}}
  .course-badges{{display:flex;flex-shrink:0;gap:4px;padding-top:2px}}
+ .badge-wrap{{position:relative;display:inline-flex}}
  .badge{{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;
-      border-radius:999px;background:#f2f6f0;border:1px solid #e1e7dd;font-size:16px;line-height:1}}
+      padding:0;border-radius:999px;background:#f2f6f0;border:1px solid #e1e7dd;font-size:16px;
+      line-height:1;font-family:inherit;cursor:help}}
+ .badge:focus-visible{{outline:3px solid #8ee0bb;outline-offset:2px}}
+ /* Right-anchored: the badges sit at the end of the title row, so a
+    centred bubble would hang off the screen edge on a phone. */
+ .badge-tip{{position:absolute;z-index:940;top:calc(100% + 9px);right:-6px;width:max-content;
+      max-width:min(252px,calc(100vw - 40px));padding:9px 11px;border-radius:11px;
+      background:#142018;color:#fff;font-size:12.5px;font-weight:600;line-height:1.45;
+      text-align:left;word-break:keep-all;box-shadow:0 8px 24px rgba(10,25,16,.28);
+      opacity:0;visibility:hidden;transform:translateY(-4px);
+      transition:opacity .14s ease-out,transform .14s ease-out,visibility .14s;
+      pointer-events:none}}
+ .badge-tip b{{display:block;font-size:13px;font-weight:800;margin-bottom:2px}}
+ .badge-tip::before{{content:"";position:absolute;bottom:100%;right:16px;border:6px solid transparent;
+      border-bottom-color:#142018}}
+ .badge-wrap.open .badge-tip{{opacity:1;visibility:visible;transform:none}}
+ @media (hover:hover){{.badge-wrap:hover .badge-tip,.badge-wrap:focus-within .badge-tip{{
+      opacity:1;visibility:visible;transform:none}}}}
  h1{{margin:0;font-size:26px;line-height:1.28;letter-spacing:-.035em;word-break:keep-all}}
  h2,h3{{margin:0 0 12px;font-size:17px;letter-spacing:-.02em}}
  .stat{{color:#3d473f;line-height:1.65;font-size:15px}}
@@ -735,8 +806,11 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  /* A 12px dot is unhittable with a finger. Widen the tap area to 44px on touch
     only -- on a mouse the dot is already precise, and enlarging it there would
     swallow map drags that start near a marker. */
- @media (pointer:coarse){{.facility-marker::before{{content:"";position:absolute;top:-16px;right:-16px;
-      bottom:-16px;left:-16px;border-radius:50%}}}}
+ /* 44px total, the accessible minimum -- not the 58px it used to be. With
+    up to 80 markers on one screen the larger disc tiled the map, and every
+    drag that began inside one was a marker gesture instead of a map gesture. */
+ @media (pointer:coarse){{.facility-marker::before{{content:"";position:absolute;top:-9px;right:-9px;
+      bottom:-9px;left:-9px;border-radius:50%}}}}
  .facility-marker.convenience_store{{background:#eaf1ff}}
  .facility-marker.restroom{{background:#e6f7ee}}
  .poi-pop{{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:#fff;
@@ -789,7 +863,32 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  /* The two tools read as what they do, and the active one stays obvious
     while a finger is on the map. */
  #eraserTool[aria-pressed="true"]{{background:#c0392b;color:#fff}}
- #penTool[aria-pressed="true"]{{background:#1668dc;color:#fff}}
+ #viaTool[aria-pressed="true"]{{background:#1668dc;color:#fff}}
+ /* Where the runner said to go. Kept visible while the span is reworked so a
+    second tap reads as refining the same detour. */
+ .via-dot{{display:block;width:14px;height:14px;border-radius:50%;border:3px solid #1668dc;
+      background:#fff;box-sizing:border-box;box-shadow:0 2px 8px rgba(0,0,0,.25)}}
+ /* Naming happens at the moment of saving, over the map that shows what is
+    being named -- a sheet rather than a route to a separate screen. */
+ .name-sheet{{position:fixed;z-index:1200;inset:0;display:flex;align-items:center;
+      justify-content:center;padding:20px;background:rgba(12,20,15,.5)}}
+ .name-sheet[hidden]{{display:none}}
+ .name-sheet-card{{width:100%;max-width:360px;padding:20px;border-radius:18px;background:#fff;
+      box-shadow:0 20px 60px rgba(8,20,13,.34)}}
+ .name-sheet-card h2{{margin:0 0 6px;font-size:18px;letter-spacing:-.02em}}
+ .name-sheet-card p{{margin:0 0 14px;color:#5c675e;font-size:13.5px;line-height:1.5;word-break:keep-all}}
+ .name-sheet-input{{width:100%;min-height:50px;padding:0 14px;box-sizing:border-box;
+      border:1.5px solid #dce3d8;border-radius:12px;background:#fff;color:#142018;
+      font-family:inherit;font-size:16px;font-weight:700}}
+ /* The name it would keep, shown in grey: saving without typing keeps exactly
+    what is written here, so the placeholder is a preview, not a prompt. */
+ .name-sheet-input::placeholder{{color:#98a49b;font-weight:600;opacity:1}}
+ .name-sheet-input:focus-visible{{outline:none;border-color:#087b59;box-shadow:0 0 0 3px rgba(8,123,89,.18)}}
+ .name-sheet-actions{{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}}
+ .name-sheet-btn{{min-height:50px;border:0;border-radius:12px;background:#087b59;color:#fff;
+      font-family:inherit;font-size:15px;font-weight:800;cursor:pointer}}
+ .name-sheet-btn.ghost{{background:#f2f6f0;color:#2b3630;border:1px solid #dce3d8;font-weight:700}}
+ .name-sheet-btn:disabled{{opacity:.5;cursor:not-allowed}}
  body.tool-active .edit-overlay{{touch-action:none}}
  /* One decision, one button, sitting where the erased stretch is. */
  .sel-erase{{position:absolute;z-index:955;left:50%;transform:translateX(-50%);
@@ -937,6 +1036,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
       #map{{height:clamp(280px,42svh,380px);min-height:0}}
       .view-toggle{{right:10px;top:10px}}
       .course-head{{gap:8px}}.badge{{width:28px;height:28px;font-size:15px}}
+      .badge-tip{{max-width:calc(100vw - 52px)}}
       .wrap{{display:block;padding:0 16px 96px}}.card,.panel{{padding:18px;margin-bottom:12px;border-radius:16px}}h1{{font-size:22px;line-height:1.25;word-break:keep-all}}
       .actions{{grid-template-columns:1fr 1fr}}.actions .btn{{padding:0 8px;text-align:center}}
       footer{{padding-bottom:96px}}.course-metrics{{gap:6px}}.edit-bar{{left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));}}
@@ -947,8 +1047,8 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
 </style></head><body class="page-{page}">
 <header class="brand"><strong>러니웨어<span class="brand-tagline">: 어디서든 러닝 코스 짜기!</span></strong></header>
 <div class="map-wrap"><div id="map"><div class="view-toggle" aria-label="지도 보기 전환">
- <button id="shapeView" type="button">{shape_view_label}</button>
- <button id="guideView" type="button" class="active">러닝 안내</button>
+ <button id="shapeView" type="button"{shape_view_active}>{shape_view_label}</button>
+ <button id="guideView" type="button"{guide_view_active}>러닝 안내</button>
  </div>{edit_chrome}<div class="run-hud" id="runHud" hidden><span class="run-dot" aria-hidden="true"></span><span id="runStatus" role="status" aria-live="polite"></span></div></div>
 <div class="wrap">
 {page_sections}
@@ -963,6 +1063,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const kms = {km_markers};
  const dirs = {dir_markers};
  const initialEditPath = {edit_path};
+ const initialEditGeometry = {edit_geometry};
  const editEnabled = {str(edit_enabled).lower()};
  const editNotice = {json.dumps(edit_notice, ensure_ascii=False)};
  const initialLengthKm = {course.length_km:.2f};
@@ -991,7 +1092,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const editSave = document.getElementById('editSave');
  const panTool = document.getElementById('panTool');
  const eraserTool = document.getElementById('eraserTool');
- const penTool = document.getElementById('penTool');
+ const viaTool = document.getElementById('viaTool');
  const editUndo = document.getElementById('editUndo');
  const editRedo = document.getElementById('editRedo');
  const editTools = document.querySelector('.edit-tools');
@@ -1171,7 +1272,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  // Kakao can reset interaction flags while applying bounds. Keep the default
  // course view explicitly draggable; segment selection opts out through applyMode().
  const syncMapInteraction = () => {{
-   const selecting = editing && (editMode === 'erase' || editMode === 'pen');
+   const selecting = editing && (editMode === 'erase' || editMode === 'via');
    map.setDraggable(!selecting);
    map.setZoomable(!selecting);
  }};
@@ -1192,7 +1293,15 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  let editing = false;
  let editMode = null;
  let editNodes = initialEditPath.map(point => [...point]);
+ // Per-edge OSM shape points, parallel to the edges of editNodes.
+ let editGeom = initialEditGeometry.slice();
  let selectedRange = null, gapRange = null;
+ // The span being reworked, captured *before* the first replacement, plus the
+ // points tapped inside it. Every via request re-routes that same original
+ // span through the whole list, so a second tap refines the detour instead of
+ // stacking on top of a route the first tap already changed.
+ let spanBase = null, vias = [];
+ const clearSpan = () => {{ spanBase=null; vias=[]; }};
  let undoStack = [], redoStack = [];
  let draftLines = [];
  let selectPointer = null;
@@ -1354,9 +1463,14 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      tab.href = currentCourseUrl + tab.dataset.page;
  }};
  let currentSummary = initialSummary;
+ // The name the course would keep if the runner saves without typing. It
+ // follows every edit, so a course that grew from 4.8km to 5.3km offers the
+ // 5.3km name rather than the one it had when the page loaded.
+ let currentNamePlaceholder = initialSummary.name_placeholder || '';
  const applySummary = summary => {{
    if (!summary) return;
    currentSummary = summary;
+   if (summary.name_placeholder) currentNamePlaceholder = summary.name_placeholder;
    setText('courseTitle', summary.title);
    setCourseLinks(summary.course_id);
    // Value and unit are separate nodes; textContent would eat the <i>.
@@ -1378,21 +1492,72 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    const badges = document.getElementById('courseBadges');
    if (badges && summary.badges) {{
      badges.replaceChildren();
-     for (const badge of summary.badges) {{
-       const el = document.createElement('span');
-       el.className = 'badge'; el.setAttribute('role','img');
-       el.setAttribute('aria-label', badge.label); el.title = badge.label;
-       el.textContent = badge.emoji;
-       badges.appendChild(el);
-     }}
+     summary.badges.forEach((badge, index) => badges.appendChild(buildBadge(badge, index)));
+     bindBadgeTips();
    }}
  }};
+ // Badges explain themselves. Hover and keyboard focus are handled in CSS;
+ // this adds the tap behaviour a phone needs, where there is no hover at all
+ // and `title=` shows nothing. One tip open at a time, dismissed by the next
+ // tap anywhere or by Escape.
+ let openBadge = null;
+ const closeBadgeTip = () => {{
+   if (!openBadge) return;
+   openBadge.classList.remove('open');
+   const button = openBadge.querySelector('.badge');
+   if (button) button.setAttribute('aria-expanded', 'false');
+   openBadge = null;
+ }};
+ const buildBadge = (badge, index) => {{
+   const wrap = document.createElement('span');
+   wrap.className = 'badge-wrap';
+   const button = document.createElement('button');
+   button.type = 'button';
+   button.className = 'badge';
+   button.setAttribute('aria-label', badge.label);
+   button.setAttribute('aria-expanded', 'false');
+   button.setAttribute('aria-describedby', 'badgeTip' + index);
+   const glyph = document.createElement('span');
+   glyph.setAttribute('aria-hidden', 'true');
+   glyph.textContent = badge.emoji;
+   button.appendChild(glyph);
+   const tip = document.createElement('span');
+   tip.className = 'badge-tip';
+   tip.id = 'badgeTip' + index;
+   tip.setAttribute('role', 'tooltip');
+   const label = document.createElement('b');
+   label.textContent = badge.label;
+   tip.append(label, badge.detail || '');   // textContent: never innerHTML
+   wrap.append(button, tip);
+   return wrap;
+ }};
+ const bindBadgeTips = () => {{
+   for (const button of document.querySelectorAll('.badge-wrap .badge')) {{
+     if (button.dataset.tipBound) continue;
+     button.dataset.tipBound = '1';
+     button.addEventListener('click', event => {{
+       event.stopPropagation();
+       const wrap = button.parentElement;
+       const wasOpen = wrap === openBadge;
+       closeBadgeTip();
+       if (wasOpen) return;
+       wrap.classList.add('open');
+       button.setAttribute('aria-expanded', 'true');
+       openBadge = wrap;
+     }});
+   }}
+ }};
+ bindBadgeTips();
+ document.addEventListener('click', closeBadgeTip);
+ document.addEventListener('keydown', event => {{
+   if (event.key === 'Escape') closeBadgeTip();
+ }});
  // One in-flight edit request at a time: a second replacement must not race
  // the first and apply its node indexes to a route that has already changed.
  const setEditBusy = value => {{
    editBusy = value;
    if (editTools) editTools.setAttribute('aria-busy', String(value));
-   for (const button of [panTool, eraserTool, penTool, editUndo, editRedo, editCancel, editSave]) {{
+   for (const button of [panTool, eraserTool, viaTool, editUndo, editRedo, editCancel, editSave]) {{
      if (!button) continue;
      if (value) button.disabled = true;
      else if (button === editUndo) button.disabled = !undoStack.length;
@@ -1402,9 +1567,11 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  }};
  // km rides along in the snapshot: only the server knows the real edge-geometry
  // length, so undo restores the value that came back with that path.
- const snapshot = () => ({{nodes:editNodes.map(point=>[...point]),km:editLengthKm,summary:currentSummary}});
- const restore = state => {{editNodes=state.nodes.map(point=>[...point]);selectedRange=null;gapRange=null;setEditDistance(state.km);applySummary(state.summary);renderDraft();}};
- const pointPath = points => points.map(([,lat,lon])=>new kakao.maps.LatLng(lat,lon));
+ const snapshot = () => ({{nodes:editNodes.map(point=>[...point]),geom:editGeom.slice(),
+   km:editLengthKm,summary:currentSummary}});
+ const restore = state => {{editNodes=state.nodes.map(point=>[...point]);editGeom=state.geom.slice();
+   selectedRange=null;gapRange=null;spanBase=null;vias=[];
+   setEditDistance(state.km);applySummary(state.summary);renderDraft();}};
  const selErase=document.getElementById('selErase');
  // Marking and erasing are one gesture and one button. A bar that also
  // offered 되돌리기 and 자동으로 잇기 put three decisions where there is one:
@@ -1460,20 +1627,22 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const renderDraft = () => {{
    draftLines.forEach(line=>line.setMap(null));draftLines=[];
    if (editing) {{
-     draftLines.push(new kakao.maps.Polyline({{map,path:pointPath(editNodes),strokeColor:'#087b59',strokeWeight:7,strokeOpacity:.96,strokeStyle:'solid'}}));
+     draftLines.push(new kakao.maps.Polyline({{map,path:drawnPath(0,editNodes.length-1),strokeColor:'#087b59',strokeWeight:7,strokeOpacity:.96,strokeStyle:'solid'}}));
      if(gapRange){{
-       // The erased stretch is drawn as an open break so the route reads as
-       // needing the pencil rather than as merely highlighted.
+       // The stretch waiting to be replaced, drawn as an open break.
        const gap=editNodes.slice(gapRange[0],gapRange[1]+1);
-       draftLines.push(new kakao.maps.Polyline({{map,path:pointPath(gap),strokeColor:'#e5322e',strokeWeight:12,strokeOpacity:.34,strokeStyle:'solid'}}));
+       draftLines.push(new kakao.maps.Polyline({{map,path:drawnPath(gapRange[0],gapRange[1]),strokeColor:'#e5322e',strokeWeight:12,strokeOpacity:.34,strokeStyle:'solid'}}));
        for(const endpoint of [gap[0],gap[gap.length-1]]){{
          draftLines.push(new kakao.maps.CustomOverlay({{map,position:new kakao.maps.LatLng(endpoint[1],endpoint[2]),content:'<span class="gap-end" aria-hidden="true"></span>',xAnchor:.5,yAnchor:.5,zIndex:7}}));
        }}
      }}
+     for(const via of vias){{
+       draftLines.push(new kakao.maps.CustomOverlay({{map,position:new kakao.maps.LatLng(via.lat,via.lon),content:'<span class="via-dot" aria-hidden="true"></span>',xAnchor:.5,yAnchor:.5,zIndex:9}}));
+     }}
      if(selectedRange){{
        const selected=editNodes.slice(selectedRange[0],selectedRange[1]+1);
-       draftLines.push(new kakao.maps.Polyline({{map,path:pointPath(selected),strokeColor:'#fff',strokeWeight:13,strokeOpacity:.96,strokeStyle:'solid'}}));
-       draftLines.push(new kakao.maps.Polyline({{map,path:pointPath(selected),strokeColor:'#e0522d',strokeWeight:8,strokeOpacity:1,strokeStyle:'solid'}}));
+       draftLines.push(new kakao.maps.Polyline({{map,path:drawnPath(selectedRange[0],selectedRange[1]),strokeColor:'#fff',strokeWeight:13,strokeOpacity:.96,strokeStyle:'solid'}}));
+       draftLines.push(new kakao.maps.Polyline({{map,path:drawnPath(selectedRange[0],selectedRange[1]),strokeColor:'#e0522d',strokeWeight:8,strokeOpacity:1,strokeStyle:'solid'}}));
        const ends=[selected[0],selected[selected.length-1]];
        ends.forEach((endpoint,end)=>{{
          const marker=new kakao.maps.CustomOverlay({{map,position:new kakao.maps.LatLng(endpoint[1],endpoint[2]),content:'<span class="edit-anchor" data-end="'+end+'" role="button" tabindex="0" aria-label="'+(end?'선택 끝점':'선택 시작점')+' 드래그해 구간 넓히기"></span>',xAnchor:.5,yAnchor:.5,zIndex:8}});
@@ -1482,6 +1651,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      }}
    }}
    syncSelectionBar();
+   dropScreenCache();
    if(editUndo)editUndo.disabled=editBusy||!undoStack.length;
    if(editRedo)editRedo.disabled=editBusy||!redoStack.length;
    if(editSave)editSave.disabled=editBusy;
@@ -1491,7 +1661,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const syncToolPressed = () => {{
    if(panTool)panTool.setAttribute('aria-pressed',String(!editMode));
    if(eraserTool)eraserTool.setAttribute('aria-pressed',String(editMode==='erase'));
-   if(penTool)penTool.setAttribute('aria-pressed',String(editMode==='pen'));
+   if(viaTool)viaTool.setAttribute('aria-pressed',String(editMode==='via'));
  }};
  const applyMode = () => {{
    syncToolPressed();
@@ -1506,7 +1676,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    applyMode();
    setEditStatus(
      editMode==='erase'?'지울 코스 선을 문지르세요. 끝점을 끌어 넓힐 수도 있어요.'
-     :editMode==='pen'?'지운 자리를 이을 새 길을 도로 위에 그려 주세요.'
+     :editMode==='via'?'지나가고 싶은 길을 탭하면 코스 선이 그쪽으로 끌려와요.'
      :'지도 이동 모드예요. 끌어서 코스를 살펴보세요.','info');
  }};
  // A selected line stays highlighted, but the tool releases so the map can be
@@ -1519,25 +1689,76 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    editing=value;document.body.classList.toggle('editing',value);
    setLayers(routeLayers,!value);setLayers(shapeLayers,false);setLayers(guideLayers,!value);
    showZoomControl(!value);
-   if(!value){{editMode=null;selectedRange=null;gapRange=null;document.body.classList.remove('tool-active');}}
+   if(!value){{editMode=null;selectedRange=null;gapRange=null;clearSpan();document.body.classList.remove('tool-active');}}
    syncMapInteraction();
    renderDraft();setEditDistance();
    if(!value)return hideEditToast();
-   setEditStatus(editNotice||'구간 선택을 누른 뒤 바꿀 코스 선을 탭하세요.','info');
+   setEditStatus(editNotice||'지우개로 바꿀 구간을 문지르거나, 경유점으로 지나갈 길을 탭하세요.','info');
  }};
  const projection=map.getProjection();
+ let dropScreenCache = () => {{}};
+ // Kakao's panBy() animates. Calling it once per pointermove restarts that
+ // animation every frame, so the map crawls a few pixels and springs back --
+ // which is what "the map won't drag" looked like on the info page, where 80
+ // facility markers meant almost every drag started on one of them. Moving
+ // the centre through the projection is immediate and lands under the finger.
+ const panByPixels = (dx, dy) => {{
+   const centre = projection.containerPointFromCoords(map.getCenter());
+   map.setCenter(projection.coordsFromContainerPoint(
+     new kakao.maps.Point(centre.x + dx, centre.y + dy)));
+   dropScreenCache();
+ }};
  const screenPoint = node => projection.containerPointFromCoords(new kakao.maps.LatLng(node[1],node[2]));
+ // The route as it is actually drawn: every graph node plus the OSM way shape
+ // points between them. `seg` carries the node index each sub-point belongs
+ // to, so a tap that lands on the drawn curve still resolves to an index the
+ // server understands. Without this the editor drew straight chords while the
+ // info and run pages drew the real street, and the same course had two lines.
+ const drawnPoints = (lo, hi) => {{
+   const out=[];
+   for(let i=lo;i<hi;i++){{
+     out.push({{lat:editNodes[i][1],lon:editNodes[i][2],seg:i}});
+     for(const [lat,lon] of (editGeom[i]||[])) out.push({{lat,lon,seg:i}});
+   }}
+   out.push({{lat:editNodes[hi][1],lon:editNodes[hi][2],seg:Math.max(lo,hi-1)}});
+   return out;
+ }};
+ const drawnPath = (lo, hi) =>
+   drawnPoints(lo, hi).map(point=>new kakao.maps.LatLng(point.lat,point.lon));
+ // Projecting several hundred points per pointermove is the one thing in the
+ // editor that could miss a frame, so the projection is cached and thrown away
+ // whenever the ground or the route moves under it.
+ let screenCache=null;
+ const screenLine = () => {{
+   if(screenCache)return screenCache;
+   screenCache=drawnPoints(0,editNodes.length-1).map(point=>{{
+     const screen=projection.containerPointFromCoords(new kakao.maps.LatLng(point.lat,point.lon));
+     return {{x:screen.x,y:screen.y,seg:point.seg}};
+   }});
+   return screenCache;
+ }};
+ dropScreenCache = () => {{ screenCache=null; }};
+ kakao.maps.event.addListener(map,'idle',dropScreenCache);
+ kakao.maps.event.addListener(map,'zoom_changed',dropScreenCache);
  const overlayPoint = event => {{const rect=editOverlay.getBoundingClientRect();return {{x:event.clientX-rect.left,y:event.clientY-rect.top}};}};
  const distanceToSegment = (point,a,b) => {{
    const dx=b.x-a.x,dy=b.y-a.y,len2=dx*dx+dy*dy||1;
    const t=Math.max(0,Math.min(1,((point.x-a.x)*dx+(point.y-a.y)*dy)/len2));
    return Math.hypot(point.x-(a.x+dx*t),point.y-(a.y+dy*t));
  }};
- const nearestSegment = point => {{
-   let best={{index:0,d:Infinity}};
-   for(let index=0;index<editNodes.length-1;index++){{
-     const d=distanceToSegment(point,screenPoint(editNodes[index]),screenPoint(editNodes[index+1]));
-     if(d<best.d)best={{index,d}};
+ // `lo`/`hi` bound the search to node indexes near what is already selected.
+ // A closed loop passes close to itself, so a globally-nearest search could
+ // answer with a segment on the far side of the course -- which is how one
+ // sweep of the eraser suddenly swallowed most of the route.
+ const nearestSegment = (point, lo, hi) => {{
+   const line=screenLine();
+   const from=(lo===undefined)?0:Math.max(0,lo);
+   const to=(hi===undefined)?editNodes.length-1:Math.min(editNodes.length-1,hi);
+   let best={{index:from,d:Infinity}};
+   for(let i=0;i<line.length-1;i++){{
+     if(line[i].seg<from||line[i].seg>=to)continue;
+     const d=distanceToSegment(point,line[i],line[i+1]);
+     if(d<best.d)best={{index:line[i].seg,d}};
    }}
    return best;
  }};
@@ -1549,9 +1770,16 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  // The eraser widens a range as it sweeps: a runner rubs out the stretch that
  // is wrong rather than tapping one edge of it and hoping that was the one.
  const HIT_SLOP = 28;
+ // How far past the swept range the next sample may reach. A finger moves
+ // along the line; it does not jump 30 junctions in one frame, so anything
+ // further away is the loop passing near itself and is ignored.
+ const ERASE_REACH = 24;
  const eraseAt = point => {{
-   const hit=nearestSegment(point);
+   const lo=selectedRange?selectedRange[0]-ERASE_REACH:undefined;
+   const hi=selectedRange?selectedRange[1]+ERASE_REACH:undefined;
+   const hit=nearestSegment(point,lo,hi);
    if(hit.d>HIT_SLOP)return false;
+   if(!selectedRange)clearSpan();   // a new sweep is a new span
    selectedRange = selectedRange
      ? [Math.min(selectedRange[0],hit.index),Math.max(selectedRange[1],hit.index+1)]
      : [hit.index,hit.index+1];
@@ -1564,72 +1792,111 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    else
      setEditStatus('코스 선 가까이를 문질러 주세요.','error',{{label:'닫기',run:()=>{{}}}});
  }};
- // The pencil collects screen points and hands the server the walkable path
- // underneath them; snapping is the server's job, not the finger's.
- let penStroke=[],penLine=null;
- const renderPen = () => {{
-   if(penLine){{penLine.setMap(null);penLine=null;}}
-   if(penStroke.length<2)return;
-   penLine=new kakao.maps.Polyline({{
-     map,path:penStroke.map(point=>projection.coordsFromContainerPoint(
-       new kakao.maps.Point(point.x,point.y))),
-     strokeColor:'#1668dc',strokeWeight:6,strokeOpacity:.95,strokeStyle:'solid'}});
+ // Everything below replaces the freehand pencil. A finger cannot trace a
+ // pedestrian network it cannot see -- Kakao does not draw most of it -- so
+ // the editor never asks it to. The eraser marks a span and the span is
+ // re-routed on the walking graph; tapping adds a place to go through, which
+ // pulls the same span toward it. Every metre on screen comes from the graph.
+ //
+ // Route metres between two node indexes, for sizing a span around a tap.
+ const spanMetres = (lo, hi) => {{
+   let total=0;
+   for(let i=lo;i<hi;i++){{
+     const a=editNodes[i],b=editNodes[i+1];
+     const dy=(b[1]-a[1])*111320,dx=(b[2]-a[2])*88800;
+     total+=Math.hypot(dx,dy);
+   }}
+   return total;
  }};
- const strokeRange = () => {{
-   if(gapRange)return [...gapRange];
-   if(selectedRange)return [...selectedRange];
-   const a=nearestNodeIndex(penStroke[0]);
-   const b=nearestNodeIndex(penStroke[penStroke.length-1]);
-   const lo=Math.min(a,b),hi=Math.max(a,b);
+ // A tap with nothing selected reshapes the stretch either side of the
+ // nearest point on the route. Sized in metres rather than nodes so a dense
+ // downtown grid and a sparse riverside path behave the same way.
+ const SPAN_REACH_M = 260;
+ const spanAround = index => {{
+   let lo=index,hi=Math.min(index+1,editNodes.length-1);
+   while(lo>0&&spanMetres(lo-1,index)<SPAN_REACH_M)lo--;
+   while(hi<editNodes.length-1&&spanMetres(index,hi+1)<SPAN_REACH_M)hi++;
    return [lo,Math.min(hi,editNodes.length-2)];
  }};
- const finishPen = async () => {{
-   if(editBusy||penStroke.length<2){{penStroke=[];renderPen();return;}}
-   const range=strokeRange();
-   if(!(range[0]<range[1])){{
-     penStroke=[];renderPen();
-     setEditStatus('기존 코스 선에서 시작해 다른 지점까지 그려 주세요.','error',{{label:'닫기',run:()=>{{}}}});
-     return;
-   }}
-   // The server caps the stroke, and a finger crossing the screen produces
-   // hundreds of points; thin here so an ordinary line is never rejected for
-   // its length alone.
-   const STROKE_MAX=240;
-   const source=penStroke.length>STROKE_MAX
-     ? penStroke.filter((_,i)=>i%Math.ceil(penStroke.length/STROKE_MAX)===0)
-       .concat([penStroke[penStroke.length-1]])
-     : penStroke;
-   const stroke=source.map(point=>{{
-     const latlng=projection.coordsFromContainerPoint(new kakao.maps.Point(point.x,point.y));
-     return {{lat:latlng.getLat(),lon:latlng.getLng()}};
-   }});
-   const before=snapshot();
-   setEditBusy(true);setEditStatus('그린 길을 보행로에 맞추는 중…','busy');
-   try{{
-     const payload=await postEdit({{action:'snap',path:editNodes.map(point=>point[0]),
-       from_index:range[0],to_index:range[1],stroke}});
-     undoStack.push(before);if(undoStack.length>40)undoStack.shift();redoStack=[];
-     editNodes=payload.path.map(point=>[...point]);selectedRange=null;gapRange=null;
-     setEditDistance(payload.length_km);applySummary(payload.summary);
-     if(payload.note)setEditStatus(payload.note,'error',{{label:'닫기',run:()=>{{}}}});
-     else setEditStatus('새 길로 이었어요 · '+editLengthKm.toFixed(2)+'km','success');
-   }}catch(error){{
-     setEditStatus(error.name==='AbortError'?'길을 맞추는 시간이 초과됐어요. 조금 짧게 그려 주세요.':(error.message||'그린 길을 잇지 못했어요.'),'error',{{label:'닫기',run:()=>{{}}}});
-   }}finally{{penStroke=[];renderPen();setEditBusy(false);renderDraft();releaseTool();}}
+ const beginSpan = range => {{
+   spanBase={{path:editNodes.map(point=>point[0]),range:[...range],before:snapshot()}};
+   vias=[];
  }};
- // Erasing leaves the route open on purpose: the pencil draws what replaces
- // it, which is the whole point of having two tools.
- if(selErase)selErase.addEventListener('click',()=>{{
+ // One place where a server reply becomes the route on screen, so the nodes,
+ // the street geometry, the distance and the panels below can never disagree.
+ const applyEdit = (payload, before) => {{
+   if(before){{undoStack.push(before);if(undoStack.length>40)undoStack.shift();redoStack=[];}}
+   editNodes=payload.path.map(point=>[...point]);
+   editGeom=(payload.geometry||[]).slice();
+   selectedRange=null;gapRange=null;
+   setEditDistance(payload.length_km);applySummary(payload.summary);
+ }};
+ // Erasing used to leave a gap that only the pencil could close, so a runner
+ // who rubbed out a spur and pressed 저장 saved the route with the spur still
+ // in it. Erasing now asks for the replacement itself: the same two ends,
+ // reconnected on another walkable way.
+ const eraseSelection = async () => {{
    if(editBusy||!selectedRange)return;
-   gapRange=[...selectedRange];
-   selectedRange=null;
-   setMode('pen');
+   const range=[...selectedRange];
+   beginSpan(range);
+   const before=spanBase.before;
+   setEditBusy(true);setEditStatus('지운 자리를 이을 길을 찾는 중…','busy');
+   try{{
+     const payload=await postEdit({{action:'reroute',path:spanBase.path,
+       from_index:range[0],to_index:range[1]}});
+     applyEdit(payload,before);
+     if(payload.note)setEditStatus(payload.note,'error',{{label:'닫기',run:()=>{{}}}});
+     else setEditStatus('지운 자리를 다른 길로 이었어요 · '+editLengthKm.toFixed(2)+'km','success');
+   }}catch(error){{
+     // The only walkable link between two parts of the city is a real thing.
+     // Keep the selection so the runner can hand the router somewhere to go
+     // instead of starting the sweep again.
+     gapRange=range;selectedRange=null;
+     setEditStatus(
+       error.name==='AbortError'
+         ? '대체 보행로를 찾는 시간이 초과됐어요. 더 짧은 구간을 지워 주세요.'
+         : (error.message||'지운 자리를 이을 보행로를 찾지 못했어요.'),
+       'error',{{label:'닫기',run:()=>{{}}}});
+   }}finally{{setEditBusy(false);renderDraft();}}
+ }};
+ // Tapping pulls the span toward the tapped place. Each tap re-sends every
+ // via point against the span as it was before the first one, so taps refine
+ // one detour rather than piling detours onto each other.
+ const addVia = async point => {{
+   if(editBusy)return;
+   const latlng=projection.coordsFromContainerPoint(new kakao.maps.Point(point.x,point.y));
+   if(!spanBase){{
+     const hit=nearestSegment(point);
+     const range=gapRange||selectedRange||spanAround(hit.index);
+     if(!(range[0]<range[1])){{
+       setEditStatus('코스 선 위의 한 지점을 먼저 골라 주세요.','error',{{label:'닫기',run:()=>{{}}}});
+       return;
+     }}
+     beginSpan(range);
+   }}
+   const before=vias.length?null:spanBase.before;
+   vias.push({{lat:latlng.getLat(),lon:latlng.getLng()}});
    renderDraft();
-   setEditStatus('지웠어요. 연필로 끊긴 두 끝을 이어 주세요.','info');
- }});
+   setEditBusy(true);setEditStatus('짚은 곳을 지나는 보행로를 찾는 중…','busy');
+   try{{
+     const payload=await postEdit({{action:'via',path:spanBase.path,
+       from_index:spanBase.range[0],to_index:spanBase.range[1],vias}});
+     applyEdit(payload,before);
+     if(payload.note)setEditStatus(payload.note,'blocked',{{label:'닫기',run:()=>{{}}}});
+     else setEditStatus('그 길로 이었어요 · '+editLengthKm.toFixed(2)+'km','success');
+   }}catch(error){{
+     vias.pop();
+     setEditStatus(
+       error.name==='AbortError'
+         ? '보행로를 찾는 시간이 초과됐어요. 조금 더 가까운 곳을 짚어 주세요.'
+         : (error.message||'짚은 곳으로 잇지 못했어요.'),
+       'error',{{label:'닫기',run:()=>{{}}}});
+   }}finally{{setEditBusy(false);renderDraft();}}
+ }};
+ if(selErase)selErase.addEventListener('click',eraseSelection);
  if(panTool)panTool.addEventListener('click',()=>setMode('pan'));
  if(eraserTool)eraserTool.addEventListener('click',()=>setMode('erase'));
- if(penTool)penTool.addEventListener('click',()=>setMode('pen'));
+ if(viaTool)viaTool.addEventListener('click',()=>setMode('via'));
  if(editOverlay){{
    const editPointers=new Map();
    let twoFingerPan=false,panCenter=null;
@@ -1651,9 +1918,13 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
          setEditStatus('구간을 조절했어요. 지우기를 누르세요.','info');
          return;
        }}
-       if(editMode==='pen'){{finishPen();return;}}
-       // A tap is a sweep of length zero; erase the one segment under it.
-       if(Math.hypot(info.current.x-info.start.x,info.current.y-info.start.y)<=10)selectSegmentAt(info.current);
+       const still=Math.hypot(info.current.x-info.start.x,info.current.y-info.start.y)<=10;
+       // A tap on the via tool is the whole gesture; a drag with it is not a
+       // gesture at all, so it is ignored rather than guessed at.
+       if(editMode==='via'){{if(still)addVia(info.current);return;}}
+       // A tap with the eraser is a sweep of length zero: mark the one
+       // segment under it.
+       if(still)selectSegmentAt(info.current);
        else setEditStatus('지울 구간을 골랐어요. 지우기를 누르세요.','info');
      }}
    }};
@@ -1673,8 +1944,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
        document.body.classList.add('handle-drag');
        return;
      }}
-     if(editMode==='pen'){{penStroke=[point];renderPen();}}
-     else if(editMode==='erase')eraseAt(point);
+     if(editMode==='erase')eraseAt(point);
    }});
    editOverlay.addEventListener('pointermove',event=>{{
      if(!editPointers.has(event.pointerId))return;
@@ -1682,21 +1952,15 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      if(twoFingerPan){{
        if(editPointers.size<2)return;
        const next=centerOfPointers();
-       if(panCenter)map.panBy(panCenter.x-next.x,panCenter.y-next.y);
+       if(panCenter)panByPixels(panCenter.x-next.x,panCenter.y-next.y);
        panCenter=next;return;
      }}
      if(event.pointerId!==selectPointer)return;
      if(dragEnd!==null){{moveHandle(point);return;}}
      if(editMode==='erase')eraseAt(point);
-     else if(editMode==='pen'){{
-       const last=penStroke[penStroke.length-1];
-       // Thin the stroke as it is drawn: the server samples it anyway, and a
-       // point every pixel makes the preview polyline crawl.
-       if(!last||Math.hypot(point.x-last.x,point.y-last.y)>=6){{penStroke.push(point);renderPen();}}
-     }}
    }});
    editOverlay.addEventListener('pointerup',endOverlayPointer);
-   editOverlay.addEventListener('pointercancel',event=>{{editPointers.delete(event.pointerId);if(event.pointerId===selectPointer)selectPointer=null;penStroke=[];renderPen();}});
+   editOverlay.addEventListener('pointercancel',event=>{{editPointers.delete(event.pointerId);if(event.pointerId===selectPointer)selectPointer=null;}});
  }}
  if(editUndo)editUndo.addEventListener('click',()=>{{
    if(editBusy||!undoStack.length)return;
@@ -1719,22 +1983,46 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    if(editBusy)return;
    const hadEdits=undoStack.length>0;
    const discarded={{...snapshot(),stack:undoStack.slice()}};
-   editNodes=initialEditPath.map(point=>[...point]);selectedRange=null;undoStack=[];
+   editNodes=initialEditPath.map(point=>[...point]);
+   editGeom=initialEditGeometry.slice();
+   selectedRange=null;undoStack=[];clearSpan();
    setEditDistance(initialLengthKm);applySummary(initialSummary);setEditing(false);
    if(!hadEdits)return;
    showEditToast('원본 코스로 되돌렸어요.','info',{{label:'실행 취소',run:()=>{{
      editNodes=discarded.nodes.map(point=>[...point]);
+     editGeom=discarded.geom.slice();
      undoStack=discarded.stack;
      setEditDistance(discarded.km);
      applySummary(discarded.summary);
      setEditing(true);
    }}}});
  }});
- if(editSave)editSave.addEventListener('click',async()=>{{
+ // Saving asks for a name first. The field is empty and the name the course
+ // already has sits behind it in grey, so pressing 저장 straight away keeps
+ // that name -- typing is an option, not a step.
+ const nameSheet = document.getElementById('nameSheet');
+ const nameSheetInput = document.getElementById('nameSheetInput');
+ const nameSheetSave = document.getElementById('nameSheetSave');
+ const nameSheetCancel = document.getElementById('nameSheetCancel');
+ const closeNameSheet = () => {{
+   if(!nameSheet)return;
+   nameSheet.hidden=true;
+   if(editSave)editSave.focus();
+ }};
+ const openNameSheet = () => {{
+   if(!nameSheet||!nameSheetInput)return;
+   nameSheetInput.value='';
+   nameSheetInput.placeholder=currentNamePlaceholder;
+   nameSheet.hidden=false;
+   nameSheetInput.focus();
+ }};
+ const commitSave = async () => {{
    if(!editing||editBusy)return;
+   const name=nameSheetInput?nameSheetInput.value.trim():'';
+   closeNameSheet();
    setEditBusy(true);setEditStatus('수정한 코스를 저장 중…','busy');
    try{{
-     const payload=await postEdit({{action:'save',path:editNodes.map(point=>point[0])}});
+     const payload=await postEdit({{action:'save',path:editNodes.map(point=>point[0]),name}});
      setEditStatus('저장했어요. 새 코스로 이동합니다…','success');
      location.assign(payload.preview_url);
    }}
@@ -1742,6 +2030,19 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      setEditStatus(error.name==='AbortError'?'저장 시간이 초과됐어요. 수정한 선은 그대로 남아 있어요.':(error.message||'저장하지 못했어요. 다시 시도해 주세요.'),'error',{{label:'닫기',run:()=>{{}}}});
      setEditBusy(false);
    }}
+ }};
+ if(editSave)editSave.addEventListener('click',()=>{{
+   if(!editing||editBusy)return;
+   openNameSheet();
+ }});
+ if(nameSheetSave)nameSheetSave.addEventListener('click',commitSave);
+ if(nameSheetCancel)nameSheetCancel.addEventListener('click',closeNameSheet);
+ if(nameSheetInput)nameSheetInput.addEventListener('keydown',event=>{{
+   if(event.key==='Enter'){{event.preventDefault();commitSave();}}
+   if(event.key==='Escape'){{event.preventDefault();closeNameSheet();}}
+ }});
+ if(nameSheet)nameSheet.addEventListener('click',event=>{{
+   if(event.target===nameSheet)closeNameSheet();
  }});
  // No entry button any more -- arriving on this page IS the intent.
  if (PAGE === 'edit' && editEnabled) setEditing(true);
@@ -1802,7 +2103,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      if(Math.hypot(ev.clientX-facilityPointer.startX,ev.clientY-facilityPointer.startY)>FACILITY_TAP_SLOP)facilityPointer.moved=true;
      if(facilityPointer.moved){{
        closePop();
-       map.panBy(facilityPointer.lastX-ev.clientX,facilityPointer.lastY-ev.clientY);
+       panByPixels(facilityPointer.lastX-ev.clientX,facilityPointer.lastY-ev.clientY);
      }}
      facilityPointer.lastX=ev.clientX;facilityPointer.lastY=ev.clientY;preventKakaoMap();
    }});
@@ -1847,6 +2148,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  }};
  shapeView.addEventListener('click', () => setMapMode('shape'));
  guideView.addEventListener('click', () => setMapMode('guide'));
+ if ({opens_on_shape_js}) setMapMode('shape');
  let watchId = null;
  let userMarker = null;
  let accuracyCircle = null;

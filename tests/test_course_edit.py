@@ -7,7 +7,9 @@ from starlette.requests import Request
 
 from runart.course import CourseError, generate_course
 from runart.models import CourseParams, CourseWaypoint, decode_course_id, encode_course_id
+from runart.naming import course_title
 from runart.render import preview_html
+from runart import graph as graphmod
 from runart import server
 
 
@@ -221,7 +223,7 @@ def test_mobile_preview_uses_compact_summary_and_accessible_edit_controls():
     assert 'aria-live="polite"' in page
     assert 'AbortController' in page and '3500' in page
     assert "action:'save'" in page
-    assert 'id="eraserTool"' in page and 'id="penTool"' in page
+    assert 'id="eraserTool"' in page and 'id="viaTool"' in page
     assert 'id="drawTool"' not in page
     assert 'id="eraseTool"' not in page
     assert 'id="editUndo"' in page
@@ -234,7 +236,10 @@ def test_mobile_preview_uses_compact_summary_and_accessible_edit_controls():
     assert 'body.editing.tool-active .facility-marker' in page
     assert "const syncMapInteraction = () =>" in page
     assert "map.setDraggable(!selecting)" in page
-    assert "map.panBy(panCenter.x-next.x,panCenter.y-next.y)" in page
+    # panByPixels, not panBy: Kakao's panBy animates, so one call per
+    # pointermove restarts the animation every frame and the map barely moves.
+    assert "panByPixels(panCenter.x-next.x,panCenter.y-next.y)" in page
+    assert "map.setCenter(projection.coordsFromContainerPoint(" in page
     assert 'class="edit-bar"' not in page
     assert 'body.editing .edit-bar' not in page
 
@@ -357,7 +362,9 @@ def test_edit_tools_have_44px_tap_targets_without_growing():
     # a 44px box under a mouse would swallow map drags near a marker.
     assert "@media (pointer:coarse)" in page
     assert ".facility-marker::before" in page
-    assert "top:-16px;right:-16px;\n      bottom:-16px;left:-16px" in page  # 12 + 32 = 44
+    # 26px marker + 9px on each side = 44. It used to be 16px a side (58px),
+    # which with 80 markers on one screen tiled the map and ate every drag.
+    assert "top:-9px;right:-9px;\n      bottom:-9px;left:-9px" in page
 
 
 def test_mobile_map_gestures_and_facility_taps_do_not_conflict():
@@ -369,13 +376,16 @@ def test_mobile_map_gestures_and_facility_taps_do_not_conflict():
     # accidentally submitting a stroke.
     assert "event.pointerType==='touch'&&editPointers.size>=2" in page
     assert "twoFingerPan=true" in page
-    assert "map.panBy(panCenter.x-next.x,panCenter.y-next.y)" in page
+    # panByPixels, not panBy: Kakao's panBy animates, so one call per
+    # pointermove restarts the animation every frame and the map barely moves.
+    assert "panByPixels(panCenter.x-next.x,panCenter.y-next.y)" in page
+    assert "map.setCenter(projection.coordsFromContainerPoint(" in page
     # Facility markers distinguish a short tap from a drag and use Kakao's own
     # propagation guard rather than relying on DOM bubbling alone.
     assert "const FACILITY_TAP_SLOP = 8" in page
     assert "kakao.maps.event.preventMap" in page
     assert "if(!facilityPointer.moved)toggle()" in page
-    assert "map.panBy(facilityPointer.lastX-ev.clientX" in page
+    assert "panByPixels(facilityPointer.lastX-ev.clientX" in page
     assert "clickable:true" in page
     assert "kakao.maps.event.addListener(map, 'click', closePop)" in page
     # Desktop hover remains the primary quick preview for convenience markers.
@@ -397,16 +407,19 @@ def test_editor_erases_a_swept_range_and_draws_its_replacement():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
-    assert "const nearestSegment = point" in page
+    assert "const nearestSegment = (point, lo, hi)" in page
     assert "const eraseAt" in page
     # The prompt became a hint and the action became a button beside it.
     assert "지울 구간을 골랐어요. 지우기를 누르세요." in page
     assert 'id="selErase"' in page
     assert "strokeColor:'#e0522d'" in page
     assert 'class="edit-anchor" data-end=' in page
-    # The pencil is back, but the stroke is thinned and snapped server-side.
-    assert "penStroke.push(point)" in page
-    assert "action:'snap'" in page
+    # Erasing reconnects on its own -- a swept span is replaced by another
+    # walkable way rather than left as a gap only the pencil could close.
+    assert "action:'reroute'" in page
+    assert "const eraseSelection" in page
+    # Tapping reshapes the span through the tapped place; nothing is freehand.
+    assert "action:'via'" in page
 
 
 def test_revert_is_undoable_and_separated_from_save():
@@ -593,7 +606,7 @@ def test_course_title_and_badges_share_a_row():
     assert 'class="course-head"' in page
     assert 'class="course-badges"' in page
     # badges are labelled, never emoji-only
-    assert 'role="img" aria-label="일반 러닝 코스"' in page
+    assert 'class="badge" type="button" aria-label="일반 러닝 코스"' in page
 
 
 def test_map_container_is_positioned_for_its_absolute_controls():
@@ -921,3 +934,246 @@ def test_the_editor_surfaces_that_note_instead_of_claiming_success():
     page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert "if(payload.note)setEditStatus(payload.note,'error'" in page
+
+
+# ---------------------------------------------------------------------------
+# Naming a saved course
+# ---------------------------------------------------------------------------
+
+def test_a_typed_name_joins_the_distance_rather_than_replacing_it():
+    """A runner scanning saved courses reads the number first, so "AA런" typed
+    on a 4.8km course has to come back as "4.8km AA런"."""
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    cid = encode_course_id(source.params)
+    response = asyncio.run(server.edit_course_route(_json_request(cid, {
+        "action": "save", "path": source.path, "name": "AA런",
+    })))
+    payload = json.loads(response.body)
+    saved = decode_course_id(payload["course_id"])
+    assert response.status_code == 200
+    assert saved.custom_name == "AA런"
+
+    from runart.course import course_from_path
+    named = course_from_path(source.params, source.path, "AA런")
+    assert course_title(named) == f"{named.length_km:.1f}km AA런"
+
+
+def test_saving_without_typing_keeps_the_generated_name():
+    """The field opens empty with the current name behind it in grey, so an
+    untouched save must leave the title exactly as it was."""
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    cid = encode_course_id(source.params)
+    response = asyncio.run(server.edit_course_route(_json_request(cid, {
+        "action": "save", "path": source.path, "name": "",
+    })))
+    saved = decode_course_id(json.loads(response.body)["course_id"])
+    assert saved.custom_name == ""
+
+
+def test_an_unnamed_course_id_is_byte_identical_to_the_ids_minted_before_names():
+    """custom_name is popped from canonical() when empty, so every link ever
+    shared still decodes -- and still encodes to the same string."""
+    params = CourseParams(**CITY_HALL, distance_km=5)
+    assert "custom_name" not in params.canonical()
+    assert encode_course_id(params) == encode_course_id(
+        CourseParams(**params.canonical()))
+    named = params.model_copy(update={"custom_name": "AA런"})
+    assert decode_course_id(encode_course_id(named)).custom_name == "AA런"
+
+
+def test_a_course_name_cannot_smuggle_control_characters_into_the_page():
+    from runart.models import clean_course_name
+    assert clean_course_name("  AA \n 런  ") == "AA 런"
+    assert clean_course_name("A‮B") == "AB"
+    assert clean_course_name("가" * 60) == "가" * 24
+    assert clean_course_name(None) == ""
+
+    course = generate_course(CourseParams(
+        **CITY_HALL, distance_km=5, custom_name="<script>x</script>"))
+    page = preview_html(course, [], "https://runnywhere.example")
+    assert "<script>x</script>" not in page.split("<script>\n const segs")[0]
+    assert "&lt;script&gt;" in page
+
+
+# ---------------------------------------------------------------------------
+# Erasing reconnects on its own (the protruding-spur case)
+# ---------------------------------------------------------------------------
+
+def _course_with_dead_end_spur():
+    """A loop with a real out-and-back onto a graph leaf grafted into it.
+
+    A leaf is the honest version of "삐죽 튀어나온 선": the only way back is the
+    way you came, so no alternative route exists and the span can only be cut.
+    """
+    from runart.course import course_from_path, edge_is_runnable
+    g = graphmod.get_graph()
+    base = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    for index in range(5, len(base.path) - 5):
+        node = base.path[index]
+        for neighbour in g[node]:
+            if g.degree(neighbour) == 1 and edge_is_runnable(g.edges[node, neighbour]):
+                spurred = base.path[:index + 1] + [neighbour, node] + base.path[index + 1:]
+                return base, course_from_path(base.params, spurred), index, neighbour
+    raise AssertionError("no dead-end spur available in the bundled graph")
+
+
+def test_erasing_a_dead_end_spur_cuts_it_away_instead_of_refusing():
+    """The commonest reason to reach for the eraser was the one thing it could
+    not do: there is no alternative path along a spur, so the request to find
+    one correctly failed and the runner was told to draw instead."""
+    from runart.course import reroute_segment
+    base, spurred, index, tip = _course_with_dead_end_spur()
+
+    edited = reroute_segment(base.params, spurred.path, index, index + 1)
+
+    assert tip not in edited.path
+    assert edited.path == base.path
+    assert "왕복으로 튀어나온" in edited.note
+
+
+def test_a_span_with_a_real_alternative_still_gets_the_alternative():
+    """Cutting is the fallback, not the behaviour: a span that another walkable
+    way can replace is replaced, not deleted."""
+    from runart.course import reroute_segment
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    edited = reroute_segment(source.params, source.path, 1, 2)
+    assert edited.path != source.path
+    assert edited.note == ""
+
+
+def test_collapsing_an_excursion_never_opens_the_loop():
+    from runart.course import collapse_excursion
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    for lo, hi in ((1, 3), (0, 2), (len(source.path) - 4, len(source.path) - 2)):
+        trimmed = collapse_excursion(source.path, lo, hi)
+        if trimmed is not None:
+            assert trimmed[0] == trimmed[-1]
+            assert len(trimmed) >= 3
+
+
+# ---------------------------------------------------------------------------
+# Tapping a place to go through
+# ---------------------------------------------------------------------------
+
+def test_tapping_a_place_routes_the_span_through_it():
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    cid = encode_course_id(source.params)
+    lat, lon = source.points[20]
+    response = asyncio.run(server.edit_course_route(_json_request(cid, {
+        "action": "via", "path": source.path, "from_index": 8, "to_index": 34,
+        "vias": [{"lat": lat + 0.0015, "lon": lon + 0.0015}],
+    })))
+    payload = json.loads(response.body)
+    assert response.status_code == 200
+    nodes = [point[0] for point in payload["path"]]
+    assert nodes[0] == source.path[0] and nodes[-1] == source.path[-1]
+    assert nodes != source.path
+    assert payload["length_km"] > 0
+    assert "geometry" in payload and len(payload["geometry"]) == len(nodes) - 1
+
+
+def test_a_via_request_without_a_span_is_refused_by_name():
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    cid = encode_course_id(source.params)
+    response = asyncio.run(server.edit_course_route(_json_request(cid, {
+        "action": "via", "path": source.path,
+        "vias": [{"lat": source.points[5][0], "lon": source.points[5][1]}],
+    })))
+    assert response.status_code == 400
+    assert "구간" in json.loads(response.body)["error"]
+
+
+def test_too_many_taps_are_refused_before_any_routing_work():
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    cid = encode_course_id(source.params)
+    response = asyncio.run(server.edit_course_route(_json_request(cid, {
+        "action": "via", "path": source.path, "from_index": 4, "to_index": 30,
+        "vias": [{"lat": 37.56 + i * 0.0002, "lon": 126.97} for i in range(40)],
+    })))
+    assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Saying why a drawn line is not there
+# ---------------------------------------------------------------------------
+
+def test_a_staircase_is_named_as_the_reason_a_span_was_not_taken():
+    """"선을 그렸는데 안 그려진다" was always true and never explained. Stairs
+    and steep unpaved paths are excluded by edge_is_runnable, so a tap on one
+    has to come back with the reason rather than a silently different route."""
+    from runart.course import blocked_reason_near, highway_class
+    g = graphmod.get_graph()
+    explained = 0
+    checked = 0
+    for u, v, attrs in g.edges(data=True):
+        if highway_class(attrs) != "steps":
+            continue
+        checked += 1
+        middle = ((g.nodes[u]["lat"] + g.nodes[v]["lat"]) / 2,
+                  (g.nodes[u]["lon"] + g.nodes[v]["lon"]) / 2)
+        if "계단" in blocked_reason_near(*middle):
+            explained += 1
+        if checked >= 40:
+            break
+    # Deliberately conservative: silence when a runnable way is just as close.
+    assert explained >= checked // 2, f"only {explained}/{checked} staircases explained"
+
+
+def test_a_steep_path_is_named_by_its_grade():
+    from runart.course import blocked_reason_near, highway_class
+    g = graphmod.get_graph()
+    for u, v, attrs in g.edges(data=True):
+        if highway_class(attrs) != "path":
+            continue
+        if abs(float(attrs.get("slope_pct", 0) or 0)) <= 12:
+            continue
+        middle = ((g.nodes[u]["lat"] + g.nodes[v]["lat"]) / 2,
+                  (g.nodes[u]["lon"] + g.nodes[v]["lon"]) / 2)
+        reason = blocked_reason_near(*middle)
+        if reason:
+            assert "경사" in reason and "%" in reason
+            return
+    raise AssertionError("no steep path explained anywhere in the graph")
+
+
+def test_an_ordinary_pavement_is_not_apologised_for():
+    """The note must mean something. A tap next to a perfectly runnable way
+    gets silence, not a manufactured excuse."""
+    from runart.course import blocked_reason_near
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    for lat, lon in source.points[:25]:
+        assert blocked_reason_near(lat, lon) == ""
+
+
+def test_an_unreachable_tap_is_reported_with_the_edited_course():
+    from runart.course import unreached_point_note
+    g = graphmod.get_graph()
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    assert unreached_point_note(g, source.path, [source.points[3]]) == ""
+    far = (source.points[3][0] + 0.02, source.points[3][1] + 0.02)
+    assert unreached_point_note(g, source.path, [far]) != ""
+
+
+# ---------------------------------------------------------------------------
+# One course, one line
+# ---------------------------------------------------------------------------
+
+def test_the_editor_is_handed_the_same_street_shapes_the_other_pages_draw():
+    """The editor drew straight chords between graph nodes while info and run
+    drew real OSM way geometry, so the same course had two different lines and
+    the edited one cut corners through blocks it never enters."""
+    from runart.render import edit_path_geometry, edit_path_nodes, route_points
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    nodes = edit_path_nodes(source.path)
+    geometry = edit_path_geometry(source.path)
+
+    assert len(geometry) == len(nodes) - 1
+    assert any(shape for shape in geometry), "no edge geometry at all"
+
+    expanded = []
+    for index, node in enumerate(nodes):
+        expanded.append((node[1], node[2]))
+        if index < len(geometry):
+            expanded.extend(tuple(point) for point in (geometry[index] or []))
+    drawn = [(round(lat, 6), round(lon, 6)) for lat, lon in route_points(source)]
+    assert expanded == drawn, "the editor's line and the info page's line differ"

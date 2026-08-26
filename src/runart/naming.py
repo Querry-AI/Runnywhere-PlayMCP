@@ -9,6 +9,7 @@ Presentation only -- imports shapes/graph but nothing imports it back.
 import re
 
 from . import graph as graphmod
+from .models import clean_course_name
 from .shapes import SHAPES
 
 # Animal courses are named after the run, not the species.
@@ -51,8 +52,8 @@ def short_place(location_name: str) -> str:
     return place[:PLACE_MAX_CHARS]
 
 
-def course_title(course) -> str:
-    """Plain-text course name. Callers escape it for their own output."""
+def auto_course_title(course) -> str:
+    """The generated name, ignoring anything the runner typed."""
     p = course.params
     km = f"{course.length_km:.1f}km"
     run = RUN_NAMES_KO.get(p.shape or "")
@@ -60,6 +61,25 @@ def course_title(course) -> str:
         return f"{km} {run}"
     place = short_place(p.location_name)
     return f"{km} {place}런" if place else f"{km} 러닝 코스"
+
+
+def course_name_placeholder(course) -> str:
+    """The generated name without its distance -- what the rename field shows
+    in grey. Saving without typing keeps exactly this."""
+    return auto_course_title(course).split(" ", 1)[-1]
+
+
+def course_title(course) -> str:
+    """Plain-text course name. Callers escape it for their own output.
+
+    The distance always leads: a runner scanning a list of saved courses reads
+    the number first, so a typed name joins it rather than replacing it --
+    "AA런" saved on a 4.8km course reads "4.8km AA런".
+    """
+    custom = clean_course_name(getattr(course.params, "custom_name", ""))
+    if custom:
+        return f"{course.length_km:.1f}km {custom}"
+    return auto_course_title(course)
 
 
 def green_share(course) -> float:
@@ -81,24 +101,49 @@ def course_badges(course) -> list[dict]:
 
     Every badge carries a Korean label -- an emoji alone conveys nothing to a
     screen reader, and several of these differ only by hue at small sizes.
+    ``detail`` says *why* the badge is there, because the label alone still
+    leaves a runner guessing what "도심 위주" was measured against; the page
+    shows it in a tooltip on hover and on tap.
     """
     p = course.params
     badges = []
 
     shape = SHAPES.get(p.shape) if p.shape else None
     if shape:
-        badges.append({"emoji": shape.emoji, "label": f"{shape.name_ko} 모양 코스"})
+        badges.append({
+            "emoji": shape.emoji,
+            "label": f"{shape.name_ko} 모양 코스",
+            "detail": f"달린 자취가 {shape.name_ko} 모양으로 그려지는 GPS 아트 코스예요.",
+        })
     else:
-        badges.append({"emoji": TRACK_EMOJI, "label": "일반 러닝 코스"})
+        badges.append({
+            "emoji": TRACK_EMOJI,
+            "label": "일반 러닝 코스",
+            "detail": "모양 없이 달리기 좋은 길만 골라 이은 코스예요.",
+        })
 
     # park_score merges parks and riverside paths in the source data, so this
     # is a green/city split -- it does not claim to identify a river.
-    if green_share(course) >= GREEN_SHARE_MIN:
-        badges.append({"emoji": GREEN_EMOJI, "label": "공원·강변 위주"})
+    green = green_share(course)
+    if green >= GREEN_SHARE_MIN:
+        badges.append({
+            "emoji": GREEN_EMOJI,
+            "label": "공원·강변 위주",
+            "detail": f"코스의 {green:.0%}가 공원·강변길이에요. 차와 마주칠 일이 적어요.",
+        })
     else:
-        badges.append({"emoji": CITY_EMOJI, "label": "도심 위주"})
+        badges.append({
+            "emoji": CITY_EMOJI,
+            "label": "도심 위주",
+            "detail": (f"공원·강변길이 {green:.0%}뿐이라 도심 도로 위주예요. "
+                       "신호와 사람이 많을 수 있어요."),
+        })
 
     if p.night_mode:
-        badges.append({"emoji": NIGHT_EMOJI, "label": "야간 안전 모드 · 조명 좋은 길"})
+        badges.append({
+            "emoji": NIGHT_EMOJI,
+            "label": "야간 안전 모드 · 조명 좋은 길",
+            "detail": "가로등·CCTV가 많은 길에 가중치를 둬서 만든 야간용 코스예요.",
+        })
 
     return badges

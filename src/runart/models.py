@@ -7,11 +7,28 @@ alone — no session, no database (PRD §5.1 stateless design).
 
 import base64
 import json
+import re
 import zlib
 
 from pydantic import BaseModel, Field, model_validator
 
 FACILITY_TYPES = ("convenience_store", "restroom", "water", "park")
+
+COURSE_NAME_MAX_CHARS = 24
+# Control characters and the bidi overrides. A course name is echoed into a
+# page title, a GPX file name and an MCP markdown reply; escaping covers the
+# markup, this covers the characters escaping cannot make safe to display.
+_UNSAFE_NAME_CHARS = re.compile(r"[\x00-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
+
+
+def clean_course_name(name: str) -> str:
+    """A course name as it is safe to store and show, or "" for none."""
+    if not isinstance(name, str):
+        return ""
+    text = _UNSAFE_NAME_CHARS.sub("", name)
+    return " ".join(text.split())[:COURSE_NAME_MAX_CHARS].strip()
+
+
 
 DEFAULT_DISTANCE_KM = 5.0
 DEFAULT_PACE_MIN_PER_KM = 6.5
@@ -44,6 +61,10 @@ class CourseParams(BaseModel):
     need_facilities: list[str] = Field(default_factory=list, max_length=8)
     manual_waypoints: list[CourseWaypoint] = Field(default_factory=list, max_length=6)
     manual_path: list[int] = Field(default_factory=list, max_length=1200)
+    # A name the runner typed when saving an edit. Empty means "use the
+    # generated title", and canonical() drops it in that case so every
+    # course_id minted before this field existed still decodes byte-identically.
+    custom_name: str = Field(default="", max_length=24)
 
     @model_validator(mode="after")
     def validate_manual_waypoints(self):
@@ -69,6 +90,9 @@ class CourseParams(BaseModel):
             d.pop("manual_waypoints")
         if not d["manual_path"]:
             d.pop("manual_path")
+        d["custom_name"] = clean_course_name(d["custom_name"])
+        if not d["custom_name"]:
+            d.pop("custom_name")
         return d
 
 

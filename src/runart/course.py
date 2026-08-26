@@ -17,7 +17,7 @@ import networkx as nx
 from . import graph as graphmod
 from .facilities import facility_requirement_score
 from .geo import haversine_m, to_latlon, to_xy
-from .models import CourseParams, CourseWaypoint
+from .models import CourseParams, CourseWaypoint, clean_course_name
 from .rfs import (GATED_WEIGHT_FACTOR, prefers_park_paths,
                   route_rfs_summary, routing_weight)
 
@@ -57,6 +57,10 @@ HIGHWAY_COST_FACTOR = {
 # "평지" 판정: 누적 상승 < 8m/km. SRTM 30m 고도의 현실적 잡음 수준을 반영한
 # 기준 (러닝 앱 통념상 10m/km 이하면 평지 취급).
 FLAT_CUM_GAIN_PER_KM = 8.0
+# Ways that are pedestrian by construction. Named ones are drawn on the
+# basemap and are the closest thing the data has to "the sidewalk".
+NAMED_WALKWAY_HIGHWAYS = frozenset({"footway", "path", "pedestrian"})
+NAMED_WALKWAY_COST = 0.95
 
 
 class CourseError(Exception):
@@ -81,6 +85,11 @@ class Course:
     ascent_m: float = 0.0
     rfs: dict = field(default_factory=dict)
     shape_similarity: float | None = None
+    # Why the produced line differs from what was asked for -- stairs, a grade
+    # the router refuses, a cut edge with no alternative. Empty when the route
+    # is exactly what the request implied. Presentation only; never persisted
+    # into the course_id.
+    note: str = ""
 
     @property
     def length_km(self) -> float:
@@ -262,7 +271,7 @@ def _manual_waypoint_course(params: CourseParams) -> Course:
     stops = [start_node, *(node for node, _ in snapped), start_node]
     if any(node not in g for node in stops):
         raise CourseError("경유점이 현재 도로망 범위를 벗어났어요. 경유점을 가까이 옮겨 주세요.")
-    weight = easy_route_weight(_routing_weight_for(params))
+    weight = easy_route_weight(_routing_weight_for(params), prefer_named_walkways=True)
     deadline = time.perf_counter() + 0.8
     path: list = []
     for a, b in zip(stops, stops[1:]):
@@ -298,8 +307,15 @@ def _manual_waypoint_course(params: CourseParams) -> Course:
     )
 
 
-def course_from_path(params: CourseParams, path: list[int]) -> Course:
-    """Build metrics for an exact, already road-snapped path."""
+def course_from_path(params: CourseParams, path: list[int],
+                     name: str | None = None) -> Course:
+    """Build metrics for an exact, already road-snapped path.
+
+    ``name`` is what the runner typed in the save dialog. ``None`` keeps
+    whatever the params already carry; "" clears it back to the generated
+    title. Either way it rides in the course_id, so a renamed course is still
+    reproducible from its link alone.
+    """
     g = graphmod.get_graph()
     if len(path) < 3 or len(path) > 1200 or path[0] != path[-1]:
         raise CourseError("코스 선이 출발점으로 이어지지 않았어요. 끊어진 구간을 다시 연결해 주세요.")
@@ -311,12 +327,15 @@ def course_from_path(params: CourseParams, path: list[int]) -> Course:
     if not 1000.0 <= length <= 42195.0:
         raise CourseError("수정한 코스는 1km 이상 42.195km 이하로 만들어 주세요.")
     summary = route_rfs_summary(g, path, params.night_mode, params.include_hills)
-    normalized = params.model_copy(update={
+    update = {
         "shape": None,
         "manual_waypoints": [],
         "manual_path": path,
         "distance_km": round(length / 1000.0, 2),
-    })
+    }
+    if name is not None:
+        update["custom_name"] = clean_course_name(name)
+    normalized = params.model_copy(update=update)
     return Course(
         params=normalized,
         path=path,
@@ -327,6 +346,47 @@ def course_from_path(params: CourseParams, path: list[int]) -> Course:
     )
 
 
+# How far outside the erased span to look for the junction that closes an
+# out-and-back. A spur long enough to need more than this is not a spur.
+EXCURSION_SEARCH = 200
+
+
+def collapse_excursion(path: list[int], from_index: int,
+                       to_index: int) -> list[int] | None:
+    """Remove the out-and-back the erased span sits inside, if there is one.
+
+    Rubbing out a spur that pokes off the route is the commonest reason to
+    reach for the eraser, and it was the one thing the eraser could not do:
+    the only way from one end of a spur to the other is back along the spur,
+    so asking for an alternative walkable path correctly answered "there is
+    none" and the runner was told to draw. What they meant was "take this
+    off", and taking it off means cutting back to the junction where the route
+    left itself.
+
+    Returns the shortened path, or ``None`` when the span is not part of an
+    out-and-back and genuinely needs a replacement route.
+    """
+    lo = max(0, from_index - EXCURSION_SEARCH)
+    hi = min(len(path) - 1, to_index + EXCURSION_SEARCH)
+    best: tuple[int, int, int] | None = None
+    for i in range(from_index, lo - 1, -1):
+        for j in range(to_index, hi + 1):
+            if path[i] != path[j]:
+                continue
+            cost = (from_index - i) + (j - to_index)
+            if best is None or cost < best[0]:
+                best = (cost, i, j)
+            break                      # nearest j for this i is enough
+    if best is None:
+        return None
+    _, i, j = best
+    trimmed = path[:i] + path[j:]
+    # A loop still has to be a loop, and a course still has to have a course.
+    if len(trimmed) < 3 or trimmed[0] != trimmed[-1]:
+        return None
+    return trimmed
+
+
 def reroute_segment(params: CourseParams, path: list[int], from_index: int,
                     to_index: int) -> Course:
     """Detach one route span and reconnect its endpoints on another walkable path.
@@ -335,39 +395,211 @@ def reroute_segment(params: CourseParams, path: list[int], from_index: int,
     lifting one piece of the route off the map and snapping a different street
     segment between the same two endpoints.  It is intentionally endpoint-only:
     the browser never has to turn an imprecise finger stroke into coordinates.
+
+    When no alternative exists at all, the span is checked for being part of an
+    out-and-back and simply cut away -- see collapse_excursion.
     """
     course_from_path(params, path)
     if not (0 <= from_index < to_index < len(path) - 1):
         raise CourseError("바꿀 구간을 코스 선 위에서 다시 선택해 주세요.")
-    if to_index - from_index > max(80, (len(path) - 1) // 2):
-        raise CourseError("한 번에 바꿀 구간이 너무 길어요. 더 짧은 구간을 선택해 주세요.")
+    # Matched to the eraser: one sweep routinely marks well over 80 nodes, and
+    # the work here is a single bounded Dijkstra either way.
+    if to_index - from_index > max(400, (len(path) - 1) * 3 // 4):
+        raise CourseError(
+            f"한 번에 바꾸려는 구간이 {to_index - from_index}개로 너무 길어요. "
+            "절반쯤씩 나눠서 수정해 주세요.")
 
     g = graphmod.get_graph()
     blocked_edges = {
         frozenset((a, b))
         for a, b in zip(path[from_index:to_index], path[from_index + 1:to_index + 1])
     }
-    base_weight = easy_route_weight(_routing_weight_for(params))
+    base_weight = easy_route_weight(_routing_weight_for(params), prefer_named_walkways=True)
 
     def alternative_weight(u, v, attrs):
         if frozenset((u, v)) in blocked_edges:
             return None
         return base_weight(u, v, attrs)
 
+    replacement = None
     try:
         replacement = _route(
             g, alternative_weight, path[from_index], path[to_index]
         )
-    except (nx.NetworkXNoPath, nx.NodeNotFound) as exc:
+    except (nx.NetworkXNoPath, nx.NodeNotFound):
+        replacement = None
+    if replacement is None or replacement == path[from_index:to_index + 1]:
+        trimmed = collapse_excursion(path, from_index, to_index)
+        if trimmed is not None:
+            course = course_from_path(params, trimmed)
+            course.note = ("대신할 다른 보행로가 없어서, 왕복으로 튀어나온 "
+                           "구간을 통째로 잘라냈어요.")
+            return course
         raise CourseError(
-            "이 구간을 대신할 보행로가 없어요. 더 짧거나 다른 구간을 선택해 주세요."
-        ) from exc
-    if replacement == path[from_index:to_index + 1]:
-        raise CourseError(
-            "이 구간을 대신할 다른 보행로가 없어요. 다른 구간을 선택해 주세요."
+            "이 구간을 대신할 다른 보행로가 없어요. 이 길은 두 지역을 잇는 "
+            "유일한 보행로예요. 더 넓은 범위를 지우거나 다른 구간을 골라 주세요."
         )
     edited_path = path[:from_index] + replacement + path[to_index + 1:]
     return course_from_path(params, edited_path)
+
+
+# How far from a requested point the produced route may pass and still count
+# as having gone there. Two sides of one city block is ~70m; beyond that the
+# router plainly went somewhere else and owes the runner a reason.
+VIA_REACHED_M = 70.0
+# Only ways this close to the tap are candidates for explaining the detour.
+BLOCKED_PROBE_M = 55.0
+MAX_VIA_POINTS = 12
+
+
+def _blocked_edge_reason(attrs: dict) -> str:
+    """Why this way can never carry a course, in the runner's words."""
+    highway = highway_class(attrs)
+    if attrs.get("gated"):
+        return "입장료를 받고 밤에 문을 닫는 곳이라 코스에 넣지 않았어요."
+    if highway == "steps":
+        return "계단 구간이라 코스로 반영할 수 없어요."
+    if highway == "path" and abs(float(attrs.get("slope_pct", 0.0) or 0.0)) > 10.0:
+        return (f"경사가 {abs(float(attrs['slope_pct'])):.0f}%로 높아 "
+                "해당 구간은 코스로 반영할 수 없어요.")
+    if highway in NON_RUNNABLE_HIGHWAYS:
+        return "보행자가 다닐 수 없는 차도라 코스로 반영할 수 없어요."
+    return ""
+
+
+def blocked_reason_near(lat: float, lon: float,
+                        radius_m: float = BLOCKED_PROBE_M) -> str:
+    """Explain why a spot the runner pointed at holds no usable course line.
+
+    The probe is the *nearest way*, not the nearest node: every staircase ends
+    at a footway, so asking "is there a runnable edge anywhere around here"
+    answers yes in the middle of a stairway and explains nothing. Returns ""
+    when the closest way is perfectly runnable -- the route simply preferred
+    another one, which is not something to apologise for.
+    """
+    g = graphmod.get_graph()
+    best_blocked = (math.inf, "")
+    best_open = math.inf
+    seen: set[frozenset] = set()
+    for node, _ in graphmod.nearby_nodes(
+            lat, lon, limit=16, max_distance_m=radius_m):
+        for neighbour in g[node]:
+            key = frozenset((node, neighbour))
+            if key in seen:
+                continue
+            seen.add(key)
+            attrs = g.edges[node, neighbour]
+            a, b = g.nodes[node], g.nodes[neighbour]
+            distance = _perpendicular_m(
+                (lat, lon), (a["lat"], a["lon"]), (b["lat"], b["lon"]))
+            if edge_is_runnable(attrs) and not attrs.get("gated"):
+                best_open = min(best_open, distance)
+            elif distance < best_blocked[0]:
+                best_blocked = (distance, _blocked_edge_reason(attrs))
+    # A tie goes to silence: only claim a way is in the runner's path when it
+    # is clearly the closest thing to where they pointed.
+    if best_blocked[1] and best_blocked[0] + 8.0 < best_open:
+        return best_blocked[1]
+    return ""
+
+
+def unreached_point_note(g, path: list[int],
+                         points: list[tuple[float, float]]) -> str:
+    """One sentence about the first requested point the route never reached.
+
+    A drawn or tapped point that the replacement skipped is the single most
+    confusing thing the editor does: the line the runner asked for simply is
+    not there, and until now nothing said why.
+    """
+    if not points:
+        return ""
+    on_route = [(g.nodes[node]["lat"], g.nodes[node]["lon"]) for node in path]
+    for lat, lon in points:
+        if any(haversine_m(lat, lon, plat, plon) <= VIA_REACHED_M
+               for plat, plon in on_route):
+            continue
+        reason = blocked_reason_near(lat, lon)
+        if reason:
+            return reason
+        return ("짚은 곳을 지나는 보행로를 찾지 못해 가장 가까운 길로 이었어요. "
+                "지도에 그려진 길 위를 짚으면 더 정확해요.")
+    return ""
+
+
+def route_via_points(params: CourseParams, path: list[int], from_index: int,
+                     to_index: int, vias: list[CourseWaypoint]) -> Course:
+    """Re-route one span so it passes through the points the runner tapped.
+
+    The freehand pencil asked a finger to trace a pedestrian network it cannot
+    see. This asks for the same thing the eraser asks for -- two ends and, at
+    most, a handful of places to go through -- and lets the walking graph draw
+    every metre in between. Nothing here is freehand, so nothing here can leave
+    the road network.
+    """
+    course_from_path(params, path)
+    if not (0 <= from_index < to_index < len(path) - 1):
+        raise CourseError("바꿀 구간을 코스 선 위에서 다시 선택해 주세요.")
+    if to_index - from_index > max(400, (len(path) - 1) * 3 // 4):
+        raise CourseError(
+            f"한 번에 바꾸려는 구간이 {to_index - from_index}개로 너무 길어요. "
+            "절반쯤씩 나눠서 수정해 주세요.")
+    if len(vias) > MAX_VIA_POINTS:
+        raise CourseError(
+            f"경유점은 {MAX_VIA_POINTS}개까지 찍을 수 있어요. "
+            "구간을 나눠서 수정해 주세요.")
+
+    g = graphmod.get_graph()
+    requested = [(point.lat, point.lon) for point in vias]
+    weight = easy_route_weight(_routing_weight_for(params), prefer_named_walkways=True)
+    replacement: list[int] = []
+    touched: list[int] = []
+    cursor = path[from_index]
+
+    def connect(target: int) -> list[int] | None:
+        try:
+            return _route(g, weight, cursor, target)
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            return None
+
+    for lat, lon in requested:
+        # A tap names a place, not a junction. The absolutely nearest node is
+        # routinely one the router cannot reach at all -- the foot of a
+        # staircase, a service ramp, a courtyard inside a building complex --
+        # so the next few candidates get a turn before the edit is refused.
+        segment = None
+        candidates = graphmod.nearby_nodes(
+            lat, lon, limit=6, max_distance_m=STROKE_SNAP_MAX_M)
+        for node, _ in candidates:
+            if node == cursor:
+                segment, chosen = [cursor], cursor
+                break
+            found = connect(node)
+            if found is not None:
+                segment, chosen = found, node
+                break
+        if segment is None:
+            raise CourseError(
+                blocked_reason_near(lat, lon)
+                or "짚은 곳까지 이어지는 보행로를 찾지 못했어요. "
+                   "지도에 그려진 길 위를 짚어 주세요.")
+        replacement.extend(segment if not replacement else segment[1:])
+        cursor = chosen
+        touched.append(chosen)
+
+    closing = connect(path[to_index])
+    if closing is None:
+        raise CourseError(
+            "짚은 곳에서 기존 코스로 돌아오는 보행로를 찾지 못했어요. "
+            "조금 더 코스 가까이를 짚어 주세요.")
+    replacement.extend(closing if not replacement else closing[1:])
+    # A tapped detour is deliberate by construction -- there is no unsteady
+    # hand to second-guess -- so only the router's own hesitation (a there-and-
+    # back to touch one stop) is trimmed, and every tap is protected.
+    replacement = drop_backtracking(replacement, frozenset(touched))
+    edited_path = path[:from_index] + replacement + path[to_index + 1:]
+    course = course_from_path(params, edited_path)
+    course.note = unreached_point_note(g, course.path, requested)
+    return course
 
 
 def snap_drawn_segment(params: CourseParams, path: list[int], from_index: int,
@@ -420,7 +652,7 @@ def snap_drawn_segment(params: CourseParams, path: list[int], from_index: int,
             "지도에 보이는 도로나 보도를 따라 그려 주세요.")
 
     stops = [path[from_index], *drawn_nodes, path[to_index]]
-    weight = easy_route_weight(_routing_weight_for(params))
+    weight = easy_route_weight(_routing_weight_for(params), prefer_named_walkways=True)
     replacement: list[int] = []
     # A waypoint can land on a node that no walkable way reaches -- a courtyard
     # inside a building complex, say. Skipping it and carrying on to the next
@@ -657,11 +889,18 @@ def retrace_share(graph, path: list[int]) -> float:
     return repeated / total if total else 0.0
 
 
-def easy_route_weight(base_weight: str):
+def easy_route_weight(base_weight: str, prefer_named_walkways: bool = False):
     """Prefer roads that are easier to follow without exposing a new score.
 
     A tiny fixed cost per edge discourages routes made of many short alley
     fragments while keeping the existing RFS/length weighting dominant.
+
+    ``prefer_named_walkways`` is an *edit-only* preference. A course_id
+    re-generates its course from parameters alone, so any change to the
+    weights generation uses silently rewrites every link ever shared --
+    measured: the same eight starts came back with different routes. Edits
+    carry their node path in the id instead, so they are free to route on a
+    better rule than the one that drew the original.
     """
     def _weight(_u, _v, attrs):
         if not edge_is_runnable(attrs):
@@ -669,6 +908,16 @@ def easy_route_weight(base_weight: str):
         gated = GATED_WEIGHT_FACTOR if attrs.get("gated") else 1.0
         highway = highway_class(attrs)
         factor = HIGHWAY_COST_FACTOR.get(highway, 1.06)
+        # A *named* footway or plaza is a real walkway -- a riverside
+        # promenade, a park path with a name -- and Kakao draws it. The
+        # generic footway cost exists to steer away from the unnamed alley
+        # network, which the map does not draw and a runner cannot follow;
+        # it should not also push an edit off 반포천길 and onto the road
+        # beside it. Unnamed ones keep their cost and their 2.2x alignment
+        # penalty (rfs.map_alignment_factor).
+        if (prefer_named_walkways and attrs.get("name")
+                and highway in NAMED_WALKWAY_HIGHWAYS):
+            factor = min(factor, NAMED_WALKWAY_COST)
         sidewalk = float(attrs.get("sidewalk_score", 0.5))
         if sidewalk >= 0.85:
             factor *= 0.90

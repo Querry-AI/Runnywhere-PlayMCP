@@ -36,7 +36,11 @@ KAKAO_DOUBLE = """<script>
   LatLng.prototype.getLat = function(){ return this._lat; };
   LatLng.prototype.getLng = function(){ return this._lng; };
   function Point(x, y){ this.x = x; this.y = y; }
-  function Polyline(){} Polyline.prototype.setMap=function(){}; Polyline.prototype.setPath=function(){};
+  function Polyline(o){ this._o = o || {}; this._map = this._o.map || null;
+    window.__lines=(window.__lines||[]); window.__lines.push(this); }
+  Polyline.prototype.setMap=function(m){ this._map = m; };
+  Polyline.prototype.setPath=function(p){ this._o.path = p; };
+  Polyline.prototype.getPath=function(){ return this._o.path; };
   function CustomOverlay(o){ this._o = o || {}; }
   CustomOverlay.prototype.setMap = function(m){
     if (!m || !this._o.content) return;
@@ -54,6 +58,8 @@ KAKAO_DOUBLE = """<script>
   Map.prototype.addControl=function(c){ this.controls.push(c); };
   Map.prototype.removeControl=function(c){ this.controls = this.controls.filter(x => x !== c); };
   Map.prototype.setBounds=function(){};
+  Map.prototype.getCenter=function(){ return this.center || new LatLng(37.5665, 126.978); };
+  Map.prototype.getLevel=function(){ return 6; };
   Map.prototype.setCenter=function(pos){ this.center=pos; this.centerCount=(this.centerCount||0)+1; };
   Map.prototype.setDraggable=function(v){ this.draggable=v; };
   Map.prototype.setZoomable=function(v){ this.zoomable=v; };
@@ -63,7 +69,9 @@ KAKAO_DOUBLE = """<script>
     coordsFromContainerPoint: p => new LatLng(37.57 - p.y/100000, 126.97 + p.x/100000) }; };
   window.kakao = { maps: { load: fn => fn(), Map, LatLng, Point, Polyline, CustomOverlay,
     Circle, LatLngBounds, ZoomControl: function(){}, ControlPosition: { LEFT: 'LEFT' },
-    event: { addListener: function(){}, preventMap: function(){ window.__preventMapCount=(window.__preventMapCount||0)+1; } }, services: { Status: { OK: 'OK' } } } };
+    event: { addListener: function(t,e,fn){ (window.__mapListeners=window.__mapListeners||[]).push([e,fn]); },
+      preventMap: function(){ window.__preventMapCount=(window.__preventMapCount||0)+1; } },
+    services: { Status: { OK: 'OK' } } } };
 })();
 </script>
 """
@@ -71,13 +79,13 @@ KAKAO_DOUBLE = """<script>
 SCRIPT_MARKER = "<script>\n const segs ="
 
 
-def _page(shape: str | None) -> str:
+def _page(shape: str | None, page: str = "edit") -> str:
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     if shape:
         course.params = course.params.model_copy(update={"shape": shape})
     facilities = facilities_along(route_points(course),
                                   ["convenience_store", "restroom"], limit=80)
-    return preview_html(course, facilities, "https://runnywhere.example")
+    return preview_html(course, facilities, "https://runnywhere.example", page=page)
 
 
 def _harness(page: str) -> str:
@@ -89,9 +97,14 @@ def _harness(page: str) -> str:
 def main() -> None:
     outdir = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     outdir.mkdir(parents=True, exist_ok=True)
-    for name, shape in (("harness.html", None), ("harness_animal.html", "dog")):
+    for name, shape, page in (
+        ("harness.html", None, "edit"),
+        ("harness_animal.html", "dog", "edit"),
+        ("harness_info.html", None, "info"),
+        ("harness_info_animal.html", "dog", "info"),
+    ):
         target = outdir / name
-        target.write_text(_harness(_page(shape)), encoding="utf-8")
+        target.write_text(_harness(_page(shape, page)), encoding="utf-8")
         print(f"{target} ({target.stat().st_size:,}B)")
 
 
