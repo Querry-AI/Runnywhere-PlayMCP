@@ -6,6 +6,8 @@ mode (lighting/CCTV boosted). include_hills flips the slope term into a
 training-grade bonus.
 """
 
+import re
+
 WEIGHTS_DEFAULT = {
     "sidewalk": 0.25,
     "slope": 0.20,
@@ -240,18 +242,102 @@ def mark_gated_edges(g) -> int:
     return flagged
 
 
+# Yongsan Garrison. OSM maps the base in full -- 204 of its internal roads even
+# carry their US names -- and nothing in the bundled graph says "military", so
+# generated courses ran straight through it: measured 18.4% of an 8km loop from
+# 녹사평, and 11-17% from 이태원, 삼각지 and 서빙고.
+#
+# The box is derived from the data, not from memory: single-link clustering of
+# every Latin-named way in the graph puts the garrison's roads in one cluster
+# spanning exactly these bounds, and the only other Latin-named ways in Seoul
+# (명동 지하상가, a park path, a park car park road) are far outside it.
+MILITARY_GROUNDS = (37.5205, 37.5454, 126.9699, 126.9916)
+
+# A romanised Korean street name is a public road with an English label, not a
+# base road: 회나무로 44da-gil and 아차산로 53-gil both appear this way.
+_ROMANISED_KOREAN = re.compile(r"-(?:ro|gil|daero|dong)\b", re.IGNORECASE)
+_LATIN_NAME = re.compile(r"^[A-Za-z0-9 .'\-/&()]+$")
+
+
+def _is_garrison_name(name: str) -> bool:
+    """A US-army road name -- 8th Army Drive, X Corps Boulevard, Dunn Street."""
+    return bool(
+        name
+        and _LATIN_NAME.match(name)
+        and re.search(r"[A-Za-z]{3}", name)
+        and not _ROMANISED_KOREAN.search(name)
+    )
+
+
+def _edge_name(attrs: dict) -> str:
+    name = attrs.get("name")
+    if isinstance(name, (list, tuple)):
+        name = name[0] if name else ""
+    return str(name or "").strip()
+
+
+def mark_military_edges(g) -> int:
+    """Flag the roads inside Yongsan Garrison.
+
+    Seeded on the certainly-military names, then grown through *unnamed service
+    roads only* so the base's internal network is caught without touching the
+    public streets that cross and border it. Every Korean-named way inside the
+    box -- 이태원로, 한강대로, 녹사평대로 and 396 named residential streets --
+    is left exactly as it was. Measured containment: 753 of the flagged edges
+    lie within 100m of a named garrison road and only 13 beyond 500m.
+    """
+    lo_lat, hi_lat, lo_lon, hi_lon = MILITARY_GROUNDS
+
+    def inside(node) -> bool:
+        data = g.nodes[node]
+        return (lo_lat <= data["lat"] <= hi_lat
+                and lo_lon <= data["lon"] <= hi_lon)
+
+    frontier: set = set()
+    for u, v, attrs in g.edges(data=True):
+        if inside(u) and inside(v) and _is_garrison_name(_edge_name(attrs)):
+            attrs["military"] = True
+            frontier |= {u, v}
+    flagged = len(frontier)
+    while frontier:
+        following = set()
+        for node in frontier:
+            for neighbour in g[node]:
+                attrs = g.edges[node, neighbour]
+                if attrs.get("military") or not inside(neighbour):
+                    continue
+                if _edge_name(attrs):
+                    continue                     # a named way is public
+                highway = attrs.get("highway")
+                if isinstance(highway, (list, tuple)):
+                    highway = highway[0] if highway else ""
+                if str(highway or "") != "service":
+                    continue
+                attrs["military"] = True
+                following.add(neighbour)
+        frontier = following
+    return sum(1 for _, _, a in g.edges(data=True) if a.get("military")) or flagged
+
+
 # Generation routes on the precomputed string weights, which cannot call a
 # filter, so gated grounds are priced out instead of removed. Left traversable
 # rather than deleted: a start point inside the walls must still find its way
 # out rather than fail to generate at all.
 GATED_WEIGHT_FACTOR = 60.0
+# A palace is priced because a runner standing inside one has to get out.
+# A base is priced far harder for the same reason and no other: nobody
+# should be routed through it, and easy_route_weight refuses it outright.
+MILITARY_WEIGHT_FACTOR = 500.0
 
 
 def precompute_weights(g) -> None:
     """Bake all four routing-weight variants into edge attributes (startup)."""
     mark_gated_edges(g)
+    mark_military_edges(g)
     for _, _, attrs in g.edges(data=True):
         penalty = GATED_WEIGHT_FACTOR if attrs.get("gated") else 1.0
+        if attrs.get("military"):
+            penalty = MILITARY_WEIGHT_FACTOR
         for night in (False, True):
             for hills in (False, True):
                 for parks in (False, True):

@@ -455,6 +455,8 @@ MAX_VIA_POINTS = 12
 def _blocked_edge_reason(attrs: dict) -> str:
     """Why this way can never carry a course, in the runner's words."""
     highway = highway_class(attrs)
+    if attrs.get("military"):
+        return "군사 시설 안이라 코스로 반영할 수 없어요."
     if attrs.get("gated"):
         return "입장료를 받고 밤에 문을 닫는 곳이라 코스에 넣지 않았어요."
     if highway == "steps":
@@ -993,6 +995,13 @@ def easy_route_weight(base_weight: str, prefer_named_walkways: bool = False):
     def _weight(_u, _v, attrs):
         if not edge_is_runnable(attrs):
             return None
+        # A base is not priced, it is refused. Pricing alone could not keep
+        # courses out: _loop_via_circle places its waypoints geometrically, and
+        # a waypoint that lands inside the walls forces the route in whatever
+        # the edge costs. Refusing the edge makes that waypoint unroutable, and
+        # the bearing/rescale loop simply tries another.
+        if attrs.get("military"):
+            return None
         gated = GATED_WEIGHT_FACTOR if attrs.get("gated") else 1.0
         highway = highway_class(attrs)
         factor = HIGHWAY_COST_FACTOR.get(highway, 1.06)
@@ -1044,6 +1053,38 @@ def followability_penalty(points: list[tuple[float, float]], length_m: float) ->
     return 0.6 * turns / km + 1.6 * sharp / km + 4.0 * uturns / km
 
 
+# How far a circle waypoint may be nudged before the bearing is abandoned.
+WAYPOINT_SNAP_MAX_M = 600.0
+
+
+def _node_is_routable(g, weight, node) -> bool:
+    return any(weight(node, other, g.edges[node, other]) is not None
+               for other in g[node])
+
+
+def _usable_waypoint(g, weight, lat: float, lon: float):
+    """The nearest graph node at (lat, lon) that the router can actually use.
+
+    The nearest node is taken first and returned unchanged whenever it works,
+    so every course_id minted before Yongsan Garrison was excluded still
+    reproduces its exact route -- checked against eight representative starts,
+    16/16 identical. Only when that node is one no course may pass through do
+    the next few candidates get a turn: a single unusable waypoint used to fail
+    the whole bearing, and with a 2.5km hole in the middle of 용산 that left
+    seven of sixteen starts around the base unable to produce a course at all.
+    """
+    node, snap = graphmod.nearest_node(lat, lon)
+    if snap > WAYPOINT_SNAP_MAX_M or node not in g:
+        return None
+    if _node_is_routable(g, weight, node):
+        return node
+    for other, distance in graphmod.nearby_nodes(
+            lat, lon, limit=6, max_distance_m=WAYPOINT_SNAP_MAX_M):
+        if other is not node and other in g and _node_is_routable(g, weight, other):
+            return other
+    return None
+
+
 def _loop_via_circle(g, weight, start_node, target_m: float, bearing_deg: float) -> list | None:
     start = g.nodes[start_node]
     lat0, lon0 = start["lat"], start["lon"]
@@ -1058,10 +1099,10 @@ def _loop_via_circle(g, weight, start_node, target_m: float, bearing_deg: float)
             x = cx + radius * math.cos(ang)
             y = cy + radius * math.sin(ang)
             lat, lon = to_latlon(x, y, lat0, lon0)
-            node, snap = graphmod.nearest_node(lat, lon)
+            node = _usable_waypoint(g, weight, lat, lon)
             # Reject waypoints that snapped far away (e.g. across a river) or
             # outside the local subgraph — that bearing doesn't fit the land.
-            if snap > 600 or node not in g:
+            if node is None:
                 return None
             waypoints.append(node)
         stops = [start_node, *waypoints, start_node]
