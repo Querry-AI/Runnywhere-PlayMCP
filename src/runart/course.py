@@ -634,6 +634,27 @@ def snap_drawn_segment(params: CourseParams, path: list[int], from_index: int,
             "6km보다 짧게 나눠 그려 주세요.")
 
     g = graphmod.get_graph()
+    # Saving must never bridge an unfinished sketch on the runner's behalf.
+    # The freehand draft has to actually touch both red ends; reverse drawing
+    # is accepted and normalised before it is snapped to walkable roads.
+    start = g.nodes[path[from_index]]
+    finish = g.nodes[path[to_index]]
+    forward = (
+        haversine_m(start["lat"], start["lon"], stroke[0].lat, stroke[0].lon),
+        haversine_m(finish["lat"], finish["lon"], stroke[-1].lat, stroke[-1].lon),
+    )
+    reverse = (
+        haversine_m(start["lat"], start["lon"], stroke[-1].lat, stroke[-1].lon),
+        haversine_m(finish["lat"], finish["lon"], stroke[0].lat, stroke[0].lon),
+    )
+    endpoint_limit_m = 60.0
+    if max(reverse) < max(forward):
+        stroke = list(reversed(stroke))
+        forward = reverse
+    if forward[0] > endpoint_limit_m or forward[1] > endpoint_limit_m:
+        raise CourseError(
+            "코스 선이 이어지지 않았어요. 붉은 구간의 양 끝까지 선을 연결해야 저장할 수 있어요."
+        )
     drawn_nodes = []
     far_from_road = 0
     for point in stroke_waypoints(stroke):

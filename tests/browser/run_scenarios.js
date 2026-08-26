@@ -138,10 +138,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 6. the eraser grows along the line, and erasing reconnects ----
+  // ---- 6. the eraser grows along the line and leaves a local red gap ----
   {
     const { p, errors } = await page(browser, 'harness.html');
-    const out = await p.evaluate(async (SUMMARY_JSON) => {
+    const out = await p.evaluate(async () => {
       const overlay = document.getElementById('editOverlay');
       overlay.setPointerCapture = () => {};
       const proj = window.__map.getProjection();
@@ -164,21 +164,23 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       let sent = null;
       window.fetch = async (url, opts) => {
         sent = JSON.parse(opts.body);
-        const path = initialEditPath.map(p => p[0]);
-        return { ok: true, json: async () => ({
-          path: initialEditPath.map(p => [...p]),
-          geometry: initialEditGeometry.slice(),
-          length_km: 4.44, note: '', summary: SUMMARY_JSON }) };
+        return { ok: true, json: async () => ({ preview_url: '#unexpected' }) };
       };
       document.getElementById('selErase').click();
-      await new Promise(r => setTimeout(r, 120));
-      return { swept, sent, distance: document.getElementById('editDistance').textContent,
-        toast: document.getElementById('editToastText').textContent };
-    }, SUMMARY(4.44));
+      await new Promise(r => setTimeout(r, 40));
+      const red = (window.__lines || []).filter(
+        l => l._map && l._o.strokeColor === '#e5322e').pop();
+      return { swept, sent,
+        redPoints: red ? red._o.path.length : 0, redOpacity: red && red._o.strokeOpacity,
+        distance: document.getElementById('editDistance').textContent,
+        state: document.getElementById('editDraftState').textContent };
+    });
     check('eraser sweep marks a span', out.swept === true, JSON.stringify(out.swept));
-    check('erasing asks the server to reconnect the gap',
-      out.sent && out.sent.action === 'reroute', JSON.stringify(out.sent && out.sent.action));
-    check('erasing applies the reconnected route', out.distance === '4.44km', out.distance + ' | ' + out.toast);
+    check('erasing makes no route-generation request', out.sent === null, JSON.stringify(out.sent));
+    check('the erased geometry remains translucent red',
+      out.redPoints > 1 && out.redOpacity === 0.32, JSON.stringify(out));
+    check('the route is visibly marked incomplete',
+      /미완성/.test(out.distance) && out.state === '연결 필요', `${out.distance} | ${out.state}`);
     check('no page errors while erasing', errors.length === 0, errors.join(' | '));
     await p.close();
   }
@@ -215,15 +217,16 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 8. the drawing tool pulls the line instead of drawing it ----
+  // ---- 8. freehand stays local and keeps its exact draft shape ----
   {
     const { p, errors } = await page(browser, 'harness.html');
-    const out = await p.evaluate(async (SUMMARY_JSON) => {
+    const out = await p.evaluate(async () => {
       const overlay = document.getElementById('editOverlay');
       overlay.setPointerCapture = () => {};
       const proj = window.__map.getProjection();
-      const screen = (lat, lon) => {
-        const s = proj.containerPointFromCoords(new kakao.maps.LatLng(lat, lon));
+      const at = i => {
+        const s = proj.containerPointFromCoords(
+          new kakao.maps.LatLng(initialEditPath[i][1], initialEditPath[i][2]));
         return { x: s.x, y: s.y };
       };
       const fire = (type, pt) => overlay.dispatchEvent(new PointerEvent(type, {
@@ -233,89 +236,100 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       const sent = [];
       window.fetch = async (url, opts) => {
         sent.push(JSON.parse(opts.body));
-        return { ok: true, json: async () => ({
-          path: initialEditPath.map(q => [...q]),
-          geometry: initialEditGeometry.slice(),
-          length_km: 5.55, note: '', summary: SUMMARY_JSON }) };
+        return { ok: true, json: async () => ({ preview_url: '#unexpected' }) };
       };
+      // Make a gap first.
+      document.getElementById('eraserTool').click();
+      fire('pointerdown', at(10));
+      for (const i of [12, 14, 16, 18, 20]) fire('pointermove', at(i));
+      fire('pointerup', at(20));
+      document.getElementById('selErase').click();
+
       document.getElementById('drawTool').click();
       const pressed = document.getElementById('drawTool').getAttribute('aria-pressed');
       const draggable = window.__map.draggable;
 
-      // grab the line, pull it away, release
-      const grab = screen(initialEditPath[10][1], initialEditPath[10][2]);
-      fire('pointerdown', grab);
-      const grabbed = sent.length;
-      for (const step of [1, 2, 3, 4]) {
-        fire('pointermove', { x: grab.x + step * 26, y: grab.y + step * 26 });
-        await new Promise(r => setTimeout(r, 30));
-      }
-      fire('pointerup', { x: grab.x + 104, y: grab.y + 104 });
-      await new Promise(r => setTimeout(r, 200));
-      return { pressed, draggable, grabbed, sent,
-        distance: document.getElementById('editDistance').textContent };
-    }, SUMMARY(5.55));
+      const red=(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#e5322e').pop();
+      const rs=proj.containerPointFromCoords(red._o.path[0]);
+      const re=proj.containerPointFromCoords(red._o.path[red._o.path.length-1]);
+      const start={x:rs.x,y:rs.y},end={x:re.x,y:re.y};
+      fire('pointerdown', start);
+      for (const t of [.2, .4, .6, .8])
+        fire('pointermove', { x:start.x+(end.x-start.x)*t+18*Math.sin(t*Math.PI),
+          y:start.y+(end.y-start.y)*t-24*Math.sin(t*Math.PI) });
+      fire('pointerup', end);
+      await new Promise(r => setTimeout(r, 60));
+      const blue = (window.__lines || []).filter(
+        l => l._map && l._o.strokeColor === '#1668dc').pop();
+      const bp=blue&&blue._o.path;
+      const rp=red&&red._o.path;
+      const metres=(a,b)=>Math.hypot((a.getLat()-b.getLat())*111320,(a.getLng()-b.getLng())*88800);
+      const state=document.getElementById('editDraftState').textContent;
+      return { pressed, draggable, sent, strokes:(window.__lines || []).filter(
+          l=>l._map&&l._o.strokeColor==='#1668dc').length,
+        bluePoints:blue ? blue._o.path.length : 0,
+        connection:state==='저장 가능',
+        joins:bp&&rp?[metres(bp[0],rp[0]),metres(bp[bp.length-1],rp[rp.length-1])]:[],
+        distance:document.getElementById('editDistance').textContent,
+        state };
+    });
 
     check('drawing tool engages', out.pressed === 'true', out.pressed);
-    check('the map stops panning while the line is being pulled',
+    check('the map stops panning while freehand is active',
       out.draggable === false, `draggable=${out.draggable}`);
-    check('grabbing alone changes nothing', out.grabbed === 0, `requests=${out.grabbed}`);
-    check('pulling re-routes on the walking graph, not freehand',
-      out.sent.length >= 2 && out.sent.every(r => r.action === 'via'),
-      JSON.stringify(out.sent.map(r => r.action)));
-    check('each pull carries one point, the finger',
-      out.sent.every(r => r.vias && r.vias.length === 1),
-      JSON.stringify(out.sent.map(r => r.vias && r.vias.length)));
-    // A span that grew with the pull let the replacement swallow more route
-    // than the detour added, so pulling harder made the course shorter.
-    check('the span stays where the finger grabbed it',
-      new Set(out.sent.map(r => `${r.from_index}..${r.to_index}`)).size === 1,
-      out.sent.map(r => `${r.from_index}..${r.to_index}`).join(' '));
-    check('every pull re-routes the original span, never a stacked one',
-      new Set(out.sent.map(r => JSON.stringify(r.path))).size === 1,
-      `distinct base paths=${new Set(out.sent.map(r => JSON.stringify(r.path))).size}`);
-    check('the pulled distance lands on screen', out.distance === '5.55km', out.distance);
-    check('no page errors while pulling', errors.length === 0, errors.join(' | '));
+    check('drawing makes no request before save', out.sent.length === 0, JSON.stringify(out.sent));
+    check('the exact freehand stroke remains visible',
+      out.strokes === 1 && out.bluePoints >= 5, JSON.stringify(out));
+    check('a stroke touching both red ends becomes save-ready',
+      out.connection === true && out.state === '저장 가능', JSON.stringify(out));
+    check('drafting never invents a new distance', /미완성/.test(out.distance), out.distance);
+    check('no page errors while drawing', errors.length === 0, errors.join(' | '));
     await p.close();
   }
 
-  // ---- 8b. a whole pull is one undo step, not one per sample ----
+  // ---- 8b. multiple strokes can continue an unfinished freehand draft ----
   {
     const { p } = await page(browser, 'harness.html');
-    const undos = await p.evaluate(async (SUMMARY_JSON) => {
+    const undos = await p.evaluate(async () => {
       const overlay = document.getElementById('editOverlay');
       overlay.setPointerCapture = () => {};
       const proj = window.__map.getProjection();
-      const s = proj.containerPointFromCoords(
-        new kakao.maps.LatLng(initialEditPath[10][1], initialEditPath[10][2]));
+      const at = i => {
+        const s = proj.containerPointFromCoords(
+          new kakao.maps.LatLng(initialEditPath[i][1], initialEditPath[i][2]));
+        return { x:s.x, y:s.y };
+      };
       const fire = (type, pt) => overlay.dispatchEvent(new PointerEvent(type, {
         pointerId: 6, bubbles: true,
         clientX: overlay.getBoundingClientRect().left + pt.x,
         clientY: overlay.getBoundingClientRect().top + pt.y }));
-      window.fetch = async () => ({ ok: true, json: async () => ({
-        path: initialEditPath.map(q => [...q]),
-        geometry: initialEditGeometry.slice(),
-        length_km: 6.66, note: '', summary: SUMMARY_JSON }) });
+      document.getElementById('eraserTool').click();
+      fire('pointerdown', at(10));fire('pointermove', at(15));fire('pointerup', at(20));
+      document.getElementById('selErase').click();
       document.getElementById('drawTool').click();
-      fire('pointerdown', { x: s.x, y: s.y });
-      for (const step of [1, 2, 3, 4, 5]) {
-        fire('pointermove', { x: s.x + step * 30, y: s.y + step * 30 });
-        await new Promise(r => setTimeout(r, 30));
-      }
-      fire('pointerup', { x: s.x + 150, y: s.y + 150 });
-      await new Promise(r => setTimeout(r, 250));
-      const pulled = document.getElementById('editDistance').textContent;
+      const red=(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#e5322e').pop();
+      const redStart=red._o.path[0],redEnd=red._o.path[red._o.path.length-1];
+      const startPoint=proj.containerPointFromCoords(redStart),endPoint=proj.containerPointFromCoords(redEnd);
+      const start={x:startPoint.x,y:startPoint.y},end={x:endPoint.x,y:endPoint.y};
+      const mid={x:start.x+(end.x-start.x)*.25,y:start.y+(end.y-start.y)*.25};
+      fire('pointerdown',start);fire('pointermove',mid);fire('pointerup',mid);
+      fire('pointerdown',mid);fire('pointermove',end);fire('pointerup',end);
+      const state=()=>document.getElementById('editDraftState').textContent;
+      const strokes=()=>(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#1668dc').length;
+      const hasGap=()=>(window.__lines||[]).some(l=>l._map&&l._o.strokeColor==='#e5322e');
+      const before={strokes:strokes(),ready:state()==='저장 가능'};
       document.getElementById('editUndo').click();
-      await new Promise(r => setTimeout(r, 80));
-      return { pulled, afterOne: document.getElementById('editDistance').textContent,
-        original: initialLengthKm.toFixed(2) + 'km',
-        undoStillOn: document.getElementById('editUndo').disabled === false };
-    }, SUMMARY(6.66));
-    check('a pull moves the distance', undos.pulled === '6.66km', undos.pulled);
-    check('one undo takes back the whole pull',
-      undos.afterOne === undos.original, `${undos.afterOne} vs ${undos.original}`);
-    check('the pull left no extra undo steps behind',
-      undos.undoStillOn === false, `undo enabled=${undos.undoStillOn}`);
+      const afterOne={strokes:strokes(),ready:state()==='저장 가능'};
+      document.getElementById('editUndo').click();
+      const afterTwo={strokes:strokes(),ready:state()==='저장 가능',gap:hasGap()};
+      return {before,afterOne,afterTwo};
+    });
+    check('separate strokes can complete one route draft',
+      undos.before.strokes === 2 && undos.before.ready === true, JSON.stringify(undos));
+    check('one undo removes only the last stroke',
+      undos.afterOne.strokes === 1 && undos.afterOne.ready === false, JSON.stringify(undos));
+    check('a second undo keeps the red gap but removes the first stroke',
+      undos.afterTwo.strokes === 0 && !!undos.afterTwo.gap, JSON.stringify(undos));
     await p.close();
   }
 
@@ -350,12 +364,51 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   }
   {
     const { p } = await page(browser, 'harness.html');
-    const sent = await p.evaluate(async () => {
+    const blocked = await p.evaluate(async () => {
+      const overlay=document.getElementById('editOverlay');overlay.setPointerCapture=()=>{};
+      const proj=window.__map.getProjection();
+      const at=i=>{const s=proj.containerPointFromCoords(new kakao.maps.LatLng(initialEditPath[i][1],initialEditPath[i][2]));return {x:s.x,y:s.y};};
+      const fire=(type,pt)=>overlay.dispatchEvent(new PointerEvent(type,{pointerId:11,bubbles:true,
+        clientX:overlay.getBoundingClientRect().left+pt.x,clientY:overlay.getBoundingClientRect().top+pt.y}));
       let body = null;
-      window.fetch = async (url, opts) => {
-        body = JSON.parse(opts.body);
-        return { ok: true, json: async () => ({ preview_url: '#saved' }) };
-      };
+      window.fetch=async(url,opts)=>{body=JSON.parse(opts.body);return {ok:true,json:async()=>({preview_url:'#saved'})};};
+      document.getElementById('eraserTool').click();
+      fire('pointerdown',at(10));fire('pointermove',at(15));fire('pointerup',at(20));
+      document.getElementById('selErase').click();
+      document.getElementById('drawTool').click();
+      // A middle fragment touches neither red endpoint.
+      fire('pointerdown',at(13));fire('pointermove',at(15));fire('pointerup',at(17));
+      document.getElementById('editSave').click();
+      await new Promise(r=>setTimeout(r,40));
+      return {body,sheetHidden:document.getElementById('nameSheet').hidden,
+        error:document.getElementById('editToastText').textContent};
+    });
+    check('an unconnected draft is rejected before the name sheet',
+      blocked.body === null && blocked.sheetHidden === true && /이어지지|양 끝/.test(blocked.error),
+      JSON.stringify(blocked));
+    await p.close();
+  }
+  {
+    const { p } = await page(browser, 'harness.html');
+    const sent = await p.evaluate(async () => {
+      const overlay=document.getElementById('editOverlay');overlay.setPointerCapture=()=>{};
+      const proj=window.__map.getProjection();
+      const at=i=>{const s=proj.containerPointFromCoords(new kakao.maps.LatLng(initialEditPath[i][1],initialEditPath[i][2]));return {x:s.x,y:s.y};};
+      const fire=(type,pt)=>overlay.dispatchEvent(new PointerEvent(type,{pointerId:12,bubbles:true,
+        clientX:overlay.getBoundingClientRect().left+pt.x,clientY:overlay.getBoundingClientRect().top+pt.y}));
+      let body=null;
+      window.fetch=async(url,opts)=>{body=JSON.parse(opts.body);return {ok:true,json:async()=>({preview_url:'#saved'})};};
+      document.getElementById('eraserTool').click();
+      fire('pointerdown',at(10));fire('pointermove',at(15));fire('pointerup',at(20));
+      document.getElementById('selErase').click();
+      document.getElementById('drawTool').click();
+      const red=(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#e5322e').pop();
+      const rs=proj.containerPointFromCoords(red._o.path[0]);
+      const re=proj.containerPointFromCoords(red._o.path[red._o.path.length-1]);
+      const start={x:rs.x,y:rs.y},end={x:re.x,y:re.y};
+      fire('pointerdown',start);
+      fire('pointermove',{x:(start.x+end.x)/2,y:(start.y+end.y)/2});
+      fire('pointerup',end);
       document.getElementById('editSave').click();
       const input = document.getElementById('nameSheetInput');
       input.value = 'AA런';
@@ -363,57 +416,55 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       await new Promise(r => setTimeout(r, 120));
       return body;
     });
-    check('a typed name is sent with the save', sent && sent.name === 'AA런', JSON.stringify(sent && sent.name));
+    check('a connected draft is generated only in the save request',
+      sent && sent.action === 'save_draft' && sent.stroke.length >= 2 && sent.name === 'AA런',
+      JSON.stringify(sent));
     await p.close();
   }
 
-  // ---- 10. reverting restores the line, not half of it ----
+  // ---- 10. reset stays in the editor and its discarded draft is undoable ----
   {
     const { p, errors } = await page(browser, 'harness.html');
-    const out = await p.evaluate(async (SUMMARY_JSON) => {
-      const drawnLength = () => {
-        const line = (window.__lines || [])
-          .filter(l => l._map && l._o.strokeColor === '#087b59').pop();
-        return line ? line._o.path.length : 0;
-      };
-      const before = drawnLength();
-      // an edit that returns a *shorter* path with matching geometry
-      window.fetch = async () => ({ ok: true, json: async () => ({
-        path: initialEditPath.slice(0, 40).concat([initialEditPath[0]]),
-        geometry: new Array(40).fill(null),
-        length_km: 2.2, note: '', summary: SUMMARY_JSON }) });
+    const out = await p.evaluate(async () => {
       const overlay = document.getElementById('editOverlay');
       overlay.setPointerCapture = () => {};
       const proj = window.__map.getProjection();
-      const on = proj.containerPointFromCoords(
-        new kakao.maps.LatLng(initialEditPath[10][1], initialEditPath[10][2]));
+      const at=i=>{const s=proj.containerPointFromCoords(
+        new kakao.maps.LatLng(initialEditPath[i][1],initialEditPath[i][2]));return {x:s.x,y:s.y};};
       const fire = (t, pt) => overlay.dispatchEvent(new PointerEvent(t, {
         pointerId: 9, bubbles: true,
         clientX: overlay.getBoundingClientRect().left + pt.x,
         clientY: overlay.getBoundingClientRect().top + pt.y }));
+      document.getElementById('eraserTool').click();
+      fire('pointerdown',at(10));fire('pointermove',at(15));fire('pointerup',at(20));
+      document.getElementById('selErase').click();
       document.getElementById('drawTool').click();
-      fire('pointerdown', on); fire('pointerup', on);
-      await new Promise(r => setTimeout(r, 150));
-      const edited = drawnLength();
+      const red=(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#e5322e').pop();
+      const rs=proj.containerPointFromCoords(red._o.path[0]);
+      const re=proj.containerPointFromCoords(red._o.path[red._o.path.length-1]);
+      const start={x:rs.x,y:rs.y},end={x:re.x,y:re.y};
+      fire('pointerdown',start);fire('pointermove',{x:(start.x+end.x)/2,y:(start.y+end.y)/2});fire('pointerup',end);
+      const counts=()=>({gap:(window.__lines||[]).some(l=>l._map&&l._o.strokeColor==='#e5322e'),
+        strokes:(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#1668dc').length});
+      const drafted=counts();
       document.getElementById('editCancel').click();
-      await new Promise(r => setTimeout(r, 80));
-      const reverted = document.getElementById('editDistance').textContent;
-      // 실행 취소 of the revert re-enters the editor with the discarded state:
-      // nodes and street geometry have to come back together, or the line is
-      // drawn from one edit's nodes and another edit's shapes.
+      await new Promise(r => setTimeout(r, 40));
+      const reset={editing:document.body.classList.contains('editing'),...counts(),
+        distance:document.getElementById('editDistance').textContent,
+        state:document.getElementById('editDraftState').textContent};
       document.getElementById('editToastAction').click();
-      await new Promise(r => setTimeout(r, 80));
-      return { before, edited, distance: document.getElementById('editDistance').textContent,
-        original: initialLengthKm.toFixed(2) + 'km',
-        reverted, restored: drawnLength() };
-    }, SUMMARY(2.2));
-    check('an edit changes the drawn line', out.edited > 0 && out.edited !== out.before,
+      await new Promise(r => setTimeout(r, 40));
+      const restored={...counts(),
+        state:document.getElementById('editDraftState').textContent};
+      return {drafted,reset,restored,original:initialLengthKm.toFixed(2)+'km'};
+    });
+    check('reset restores the original route but remains in editing',
+      out.reset.editing && out.reset.gap === false && out.reset.strokes === 0 &&
+      out.reset.distance === out.original && out.reset.state === '편집 준비', JSON.stringify(out));
+    check('undoing reset restores the red gap and freehand stroke',
+      out.restored.gap && out.restored.strokes === out.drafted.strokes && out.restored.state === '저장 가능',
       JSON.stringify(out));
-    check('reverting puts the original distance back',
-      out.reverted === out.original, `${out.reverted} vs ${out.original}`);
-    check('undoing a revert brings back the edit, nodes and shapes together',
-      out.restored === out.edited, `${out.restored} vs ${out.edited} points`);
-    check('no page errors while reverting', errors.length === 0, errors.join(' | '));
+    check('no page errors while resetting', errors.length === 0, errors.join(' | '));
     await p.close();
   }
 

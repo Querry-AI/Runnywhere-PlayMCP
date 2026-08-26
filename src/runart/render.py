@@ -30,7 +30,7 @@ COURSE_ID_MAX_CHARS = 4096
 # an edit toolbar, a tracking control and a page of prose at the same time.
 COURSE_PAGES = ("info", "run", "edit")
 TAB_LABELS = {"info": "코스 정보", "run": "달리기", "edit": "코스 편집"}
-TAB_ICONS = {"info": "📋", "run": "▶", "edit": "✏️"}
+TAB_ICONS = {"info": "📋", "run": "🏃", "edit": "✏️"}
 PAGE_PATHS = {"info": "", "run": "/run", "edit": "/editor"}
 
 
@@ -450,7 +450,7 @@ def _edit_chrome_html() -> str:
     "코스 편집" button pinned to the map, which is how the map came to hold an
     edit toolbar, a tracking control and a view switch at the same time.
     """
-    return """<svg id="editOverlay" class="edit-overlay" aria-hidden="true"></svg><div class="edit-tools" role="toolbar" aria-label="코스 편집 도구"><div class="edit-tools-head"><strong>코스 편집</strong><div id="editDistance" class="edit-distance" aria-label="수정 중인 코스 거리"></div></div><div class="edit-mode-group" role="group" aria-label="편집 방식"><button id="panTool" class="edit-tool mode" type="button" aria-label="지도 이동" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 11V6.5a1.5 1.5 0 0 1 3 0V10 5.5a1.5 1.5 0 0 1 3 0V10 7a1.5 1.5 0 0 1 3 0v4-2a1.5 1.5 0 0 1 3 0v4.5c0 4.4-3 7.5-7.3 7.5H12c-2.4 0-4.1-1-5.5-2.8L3.8 15a1.7 1.7 0 0 1 2.6-2.2L8.5 15"/></svg><span>지도 이동</span></button><button id="eraserTool" class="edit-tool mode" type="button" aria-label="지우개 · 코스 선을 문질러 지우기" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15.5 4.5 4 4a2 2 0 0 1 0 2.8l-7.7 7.7H7.5l-3-3a2 2 0 0 1 0-2.8l8.2-8.7a2 2 0 0 1 2.8 0Z"/><path d="m9 9 6 6M12 19h8"/></svg><span>지우기</span></button><button id="drawTool" class="edit-tool mode" type="button" aria-label="그리기 · 코스 선을 잡고 끌어 도보 길 따라 늘이고 줄이기" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5.5 4 4M4 20l3.8-.8L19 8a2.1 2.1 0 0 0-3-3L4.8 16.2 4 20Z"/><path d="M12.5 7.5l4 4"/></svg><span>선 그리기</span></button></div><div class="edit-action-group" role="group" aria-label="편집 작업"><button id="editUndo" class="edit-tool action" type="button" aria-label="마지막 수정 실행 취소" title="한 번 되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 7-4 4 4 4"/><path d="M5 11h8a6 6 0 0 1 6 6v1"/></svg><span>실행 취소</span></button><button id="editRedo" class="edit-tool action" type="button" aria-label="되돌린 수정 다시 실행" title="다시 실행"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 7 4 4-4 4"/><path d="M19 11h-8a6 6 0 0 0-6 6v1"/></svg><span>다시 실행</span></button><button id="editCancel" class="edit-tool action reset" type="button" aria-label="모든 수정 초기화" title="전체 초기화"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"/><path d="M4 4v4.6h4.6"/></svg><span>초기화</span></button><button id="editSave" class="edit-tool action save" type="button" aria-label="수정한 코스를 새 코스로 저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><span>저장</span></button></div></div><button class="sel-erase" id="selErase" type="button" hidden>선택 구간 지우기</button><div id="editToast" class="edit-toast" role="status" aria-live="polite" data-tone="info" hidden><span class="edit-toast-spin" aria-hidden="true"></span><span id="editToastText" class="edit-toast-text"></span><button id="editToastAction" class="edit-toast-action" type="button" hidden></button></div><div id="nameSheet" class="name-sheet" role="dialog" aria-modal="true" aria-labelledby="nameSheetTitle" hidden><div class="name-sheet-card"><h2 id="nameSheetTitle">코스 이름을 지어 주세요</h2><p id="nameSheetHint">비워 두면 지금 이름 그대로 저장돼요.</p><input id="nameSheetInput" class="name-sheet-input" type="text" maxlength="24" autocomplete="off" enterkeyhint="done" aria-labelledby="nameSheetTitle" aria-describedby="nameSheetHint"><div class="name-sheet-actions"><button id="nameSheetCancel" class="name-sheet-btn ghost" type="button">취소</button><button id="nameSheetSave" class="name-sheet-btn" type="button">저장</button></div></div></div></div>"""
+    return """<svg id="editOverlay" class="edit-overlay" aria-hidden="true"></svg><div class="edit-tools" role="toolbar" aria-label="코스 편집 도구"><div class="edit-tools-head"><div class="edit-tools-title"><strong>코스 편집</strong><span id="editDraftState" class="edit-draft-state">편집 준비</span></div><div id="editDistance" class="edit-distance" aria-label="수정 중인 코스 거리"></div></div><div class="edit-mode-group" role="group" aria-label="편집 방식"><button id="panTool" class="edit-tool mode" type="button" aria-label="지도 이동" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 11V6.5a1.5 1.5 0 0 1 3 0V10 5.5a1.5 1.5 0 0 1 3 0V10 7a1.5 1.5 0 0 1 3 0v4-2a1.5 1.5 0 0 1 3 0v4.5c0 4.4-3 7.5-7.3 7.5H12c-2.4 0-4.1-1-5.5-2.8L3.8 15a1.7 1.7 0 0 1 2.6-2.2L8.5 15"/></svg><span>지도 이동</span></button><button id="eraserTool" class="edit-tool mode" type="button" aria-label="지우개 · 코스 선을 문질러 지우기" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15.5 4.5 4 4a2 2 0 0 1 0 2.8l-7.7 7.7H7.5l-3-3a2 2 0 0 1 0-2.8l8.2-8.7a2 2 0 0 1 2.8 0Z"/><path d="m9 9 6 6M12 19h8"/></svg><span>지우기</span></button><button id="drawTool" class="edit-tool mode" type="button" aria-label="그리기 · 지운 구간을 자유롭게 이어 그리기" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5.5 4 4M4 20l3.8-.8L19 8a2.1 2.1 0 0 0-3-3L4.8 16.2 4 20Z"/><path d="M12.5 7.5l4 4"/></svg><span>선 그리기</span></button></div><div class="edit-action-group" role="group" aria-label="편집 작업"><button id="editUndo" class="edit-tool action" type="button" aria-label="마지막 수정 실행 취소" title="한 번 되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 7-4 4 4 4"/><path d="M5 11h8a6 6 0 0 1 6 6v1"/></svg><span>실행 취소</span></button><button id="editRedo" class="edit-tool action" type="button" aria-label="되돌린 수정 다시 실행" title="다시 실행"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 7 4 4-4 4"/><path d="M19 11h-8a6 6 0 0 0-6 6v1"/></svg><span>다시 실행</span></button><button id="editCancel" class="edit-tool action reset" type="button" aria-label="모든 수정 초기화" title="전체 초기화"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"/><path d="M4 4v4.6h4.6"/></svg><span>초기화</span></button><button id="editSave" class="edit-tool action save" type="button" aria-label="수정한 코스를 새 코스로 저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><span>저장</span></button></div></div><button class="sel-erase" id="selErase" type="button" hidden>선택 구간 지우기</button><div id="editToast" class="edit-toast" role="status" aria-live="polite" data-tone="info" hidden><span class="edit-toast-spin" aria-hidden="true"></span><span id="editToastText" class="edit-toast-text"></span><button id="editToastAction" class="edit-toast-action" type="button" hidden></button></div><div id="nameSheet" class="name-sheet" role="dialog" aria-modal="true" aria-labelledby="nameSheetTitle" hidden><div class="name-sheet-card"><h2 id="nameSheetTitle">코스 이름을 지어 주세요</h2><p id="nameSheetHint">비워 두면 지금 이름 그대로 저장돼요.</p><input id="nameSheetInput" class="name-sheet-input" type="text" maxlength="24" autocomplete="off" enterkeyhint="done" aria-labelledby="nameSheetTitle" aria-describedby="nameSheetHint"><div class="name-sheet-actions"><button id="nameSheetCancel" class="name-sheet-btn ghost" type="button">취소</button><button id="nameSheetSave" class="name-sheet-btn" type="button">저장</button></div></div></div></div>"""
 
 
 def _tab_bar_html(base_url: str, cid: str, page: str) -> str:
@@ -824,10 +824,15 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .poi-pop span{{font-size:13px;color:#5c675e;line-height:1.4;word-break:keep-all}}
  .sr-only{{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}}
  .edit-tools{{position:absolute;z-index:950;left:12px;top:12px;width:min(500px,calc(100% - 24px));
-      display:none;padding:12px;border:1px solid rgba(20,35,25,.12);border-radius:16px;
-      background:rgba(255,255,255,.97);box-shadow:0 8px 24px rgba(10,28,19,.16)}}
+      display:none;padding:12px;border:1px solid #dde5df;border-radius:16px;
+      background:#fff;box-shadow:0 8px 24px rgba(10,28,19,.14)}}
  .edit-tools-head{{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}}
+ .edit-tools-title{{display:flex;align-items:center;gap:7px;min-width:0}}
  .edit-tools-head strong{{font-size:15px;font-weight:800;color:#142018}}
+ .edit-draft-state{{padding:3px 7px;border-radius:999px;background:#f0f3f0;color:#657168;
+      font-size:10.5px;font-weight:750;line-height:1.3;word-break:keep-all}}
+ .edit-draft-state[data-state="open"]{{background:#fff0ee;color:#a23c31}}
+ .edit-draft-state[data-state="ready"]{{background:#e9f6ef;color:#087b59}}
  .edit-mode-group,.edit-action-group{{display:grid;gap:6px}}
  .edit-mode-group{{grid-template-columns:repeat(3,minmax(0,1fr));padding:4px;border-radius:12px;background:#eef2ed}}
  .edit-action-group{{grid-template-columns:repeat(4,minmax(0,1fr));margin-top:8px}}
@@ -921,6 +926,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  body.handle-drag{{touch-action:none}}
  .edit-distance{{display:none;align-items:center;min-height:28px;padding:0 9px;border-radius:999px;
       background:#edf5f0;color:#17613e;font-size:12px;font-weight:800}}
+ .edit-distance[data-state="open"]{{background:#fff0ee;color:#a23c31}}
  body.editing .edit-distance{{display:flex}}
  .edit-tools[aria-busy="true"] .edit-tool{{opacity:.45}}
  body.editing .edit-tools{{display:block}}
@@ -1113,6 +1119,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const editToastText = document.getElementById('editToastText');
  const editToastAction = document.getElementById('editToastAction');
  const editDistance = document.getElementById('editDistance');
+ const editDraftState = document.getElementById('editDraftState');
  const PAGE = {page_json};
  const mapNode = document.getElementById('map');
  // Single visible + announced feedback channel. `role="status"` on the toast
@@ -1309,12 +1316,12 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  // Per-edge OSM shape points, parallel to the edges of editNodes.
  let editGeom = initialEditGeometry.slice();
  let selectedRange = null, gapRange = null;
- // The span being reworked, captured *before* the first replacement, plus the
- // points tapped inside it. Every via request re-routes that same original
- // span through the whole list, so a second tap refines the detour instead of
- // stacking on top of a route the first tap already changed.
- let spanBase = null, vias = [];
- const clearSpan = () => {{ spanBase=null; vias=[]; }};
+ // Freehand strokes stay local until save. Lifting a finger starts another
+ // stroke rather than asking the server to invent a route immediately.
+ let draftStrokes = [], activeStroke = null;
+ const clearDraft = () => {{
+   selectedRange=null;gapRange=null;draftStrokes=[];activeStroke=null;
+ }};
  let undoStack = [], redoStack = [];
  let draftLines = [];
  let selectPointer = null;
@@ -1332,7 +1339,10 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  }};
  const setEditDistance = km => {{
    if (typeof km === 'number' && isFinite(km)) editLengthKm = km;
-   if (editDistance) editDistance.textContent = editLengthKm.toFixed(2) + 'km';
+   if (editDistance) {{
+     editDistance.textContent = editLengthKm.toFixed(2) + 'km' + (gapRange ? ' · 미완성' : '');
+     editDistance.dataset.state = gapRange ? 'open' : 'complete';
+   }}
  }};
  // The panels under the map describe the course; once the course changes they
  // must follow, or the page shows one route and describes another.
@@ -1578,13 +1588,48 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      else button.disabled = false;
    }}
  }};
- // km rides along in the snapshot: only the server knows the real edge-geometry
- // length, so undo restores the value that came back with that path.
+ // Draft state rides along with the original route so undo/redo can restore
+ // an erased red span and every unfinished freehand stroke exactly as drawn.
  const snapshot = () => ({{nodes:editNodes.map(point=>[...point]),geom:editGeom.slice(),
-   km:editLengthKm,summary:currentSummary}});
+   km:editLengthKm,summary:currentSummary,
+   selected:selectedRange?[...selectedRange]:null,gap:gapRange?[...gapRange]:null,
+   strokes:draftStrokes.map(stroke=>stroke.map(point=>({{...point}})) )}});
  const restore = state => {{editNodes=state.nodes.map(point=>[...point]);editGeom=state.geom.slice();
-   selectedRange=null;gapRange=null;spanBase=null;vias=[];
+   selectedRange=state.selected?[...state.selected]:null;gapRange=state.gap?[...state.gap]:null;
+   draftStrokes=(state.strokes||[]).map(stroke=>stroke.map(point=>({{...point}})) );activeStroke=null;
    setEditDistance(state.km);applySummary(state.summary);renderDraft();}};
+ const metresBetween = (a,b) => {{
+   const dy=(b.lat-a.lat)*111320;
+   const dx=(b.lon-a.lon)*88800;
+   return Math.hypot(dx,dy);
+ }};
+ const ENDPOINT_JOIN_M=55,STROKE_JOIN_M=55;
+ const draftConnection = () => {{
+   if(!gapRange)return {{ok:true,stroke:[]}};
+   const strokes=draftStrokes.filter(stroke=>stroke.length>1);
+   if(!strokes.length)return {{ok:false,reason:'붉은 구간의 한쪽 끝에서 다른 쪽 끝까지 선을 그려 주세요.'}};
+   for(let i=1;i<strokes.length;i++){{
+     if(metresBetween(strokes[i-1][strokes[i-1].length-1],strokes[i][0])>STROKE_JOIN_M)
+       return {{ok:false,reason:'그린 선 사이가 끊어져 있어요. 앞선 선의 끝에서 이어 그려 주세요.'}};
+   }}
+   let stroke=strokes.flatMap((part,index)=>index?part.slice(1):part).map(point=>({{...point}}));
+   const a={{lat:editNodes[gapRange[0]][1],lon:editNodes[gapRange[0]][2]}};
+   const b={{lat:editNodes[gapRange[1]][1],lon:editNodes[gapRange[1]][2]}};
+   const forward={{start:metresBetween(stroke[0],a),end:metresBetween(stroke[stroke.length-1],b)}};
+   const reverse={{start:metresBetween(stroke[0],b),end:metresBetween(stroke[stroke.length-1],a)}};
+   if(reverse.start+reverse.end<forward.start+forward.end){{stroke=stroke.reverse();forward.start=reverse.end;forward.end=reverse.start;}}
+   if(forward.start>ENDPOINT_JOIN_M||forward.end>ENDPOINT_JOIN_M)
+     return {{ok:false,reason:'코스 선이 이어지지 않았어요. 붉은 구간의 양 끝까지 선을 연결해 주세요.'}};
+   return {{ok:true,stroke}};
+ }};
+ const syncDraftState = () => {{
+   if(!editDraftState)return;
+   const connection=draftConnection();
+   const state=selectedRange?'selecting':gapRange?(connection.ok?'ready':'open'):'idle';
+   editDraftState.dataset.state=state;
+   editDraftState.textContent=state==='selecting'?'구간 선택 중':state==='ready'?'저장 가능':state==='open'?'연결 필요':'편집 준비';
+   setEditDistance();
+ }};
  const selErase=document.getElementById('selErase');
  // Marking and erasing are one gesture and one button. A bar that also
  // offered 되돌리기 and 자동으로 잇기 put three decisions where there is one:
@@ -1640,17 +1685,30 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const renderDraft = () => {{
    draftLines.forEach(line=>line.setMap(null));draftLines=[];
    if (editing) {{
-     draftLines.push(new kakao.maps.Polyline({{map,path:drawnPath(0,editNodes.length-1),strokeColor:'#087b59',strokeWeight:7,strokeOpacity:.96,strokeStyle:'solid'}}));
+     // An erased span is a real open draft: keep the untouched route green,
+     // and preserve the removed geometry only as translucent red guidance.
      if(gapRange){{
-       // The stretch waiting to be replaced, drawn as an open break.
+       if(gapRange[0]>0)draftLines.push(new kakao.maps.Polyline({{map,path:drawnPath(0,gapRange[0]),strokeColor:'#087b59',strokeWeight:7,strokeOpacity:.96,strokeStyle:'solid'}}));
+       if(gapRange[1]<editNodes.length-1)draftLines.push(new kakao.maps.Polyline({{map,path:drawnPath(gapRange[1],editNodes.length-1),strokeColor:'#087b59',strokeWeight:7,strokeOpacity:.96,strokeStyle:'solid'}}));
+     }}else{{
+       draftLines.push(new kakao.maps.Polyline({{map,path:drawnPath(0,editNodes.length-1),strokeColor:'#087b59',strokeWeight:7,strokeOpacity:.96,strokeStyle:'solid'}}));
+     }}
+     if(gapRange){{
+       // Red remembers exactly what was erased; it never becomes a random
+       // alternate route behind the runner's back.
        const gap=editNodes.slice(gapRange[0],gapRange[1]+1);
-       draftLines.push(new kakao.maps.Polyline({{map,path:drawnPath(gapRange[0],gapRange[1]),strokeColor:'#e5322e',strokeWeight:12,strokeOpacity:.34,strokeStyle:'solid'}}));
+       draftLines.push(new kakao.maps.Polyline({{map,path:drawnPath(gapRange[0],gapRange[1]),strokeColor:'#e5322e',strokeWeight:10,strokeOpacity:.32,strokeStyle:'solid'}}));
        for(const endpoint of [gap[0],gap[gap.length-1]]){{
          draftLines.push(new kakao.maps.CustomOverlay({{map,position:new kakao.maps.LatLng(endpoint[1],endpoint[2]),content:'<span class="gap-end" aria-hidden="true"></span>',xAnchor:.5,yAnchor:.5,zIndex:7}}));
        }}
      }}
-     for(const via of vias){{
-       draftLines.push(new kakao.maps.CustomOverlay({{map,position:new kakao.maps.LatLng(via.lat,via.lon),content:'<span class="via-dot" aria-hidden="true"></span>',xAnchor:.5,yAnchor:.5,zIndex:9}}));
+     // Freehand stays freehand while editing. Road snapping and route
+     // generation happen only after a connected draft passes save validation.
+     for(const stroke of draftStrokes){{
+       if(stroke.length<2)continue;
+       const path=stroke.map(point=>new kakao.maps.LatLng(point.lat,point.lon));
+       draftLines.push(new kakao.maps.Polyline({{map,path,strokeColor:'#fff',strokeWeight:9,strokeOpacity:.86,strokeStyle:'solid'}}));
+       draftLines.push(new kakao.maps.Polyline({{map,path,strokeColor:'#1668dc',strokeWeight:5,strokeOpacity:.96,strokeStyle:'solid'}}));
      }}
      if(selectedRange){{
        const selected=editNodes.slice(selectedRange[0],selectedRange[1]+1);
@@ -1664,6 +1722,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      }}
    }}
    syncSelectionBar();
+   syncDraftState();
    dropScreenCache();
    if(editUndo)editUndo.disabled=editBusy||!undoStack.length;
    if(editRedo)editRedo.disabled=editBusy||!redoStack.length;
@@ -1689,7 +1748,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    applyMode();
    setEditStatus(
      editMode==='erase'?'지울 코스 선을 문지르세요. 끝점을 끌어 넓힐 수도 있어요.'
-     :editMode==='draw'?'코스 선을 잡고 끌어 보세요. 도보 길을 따라 늘어나고 줄어들어요.'
+     :editMode==='draw'?'붉은 구간의 한쪽 끝에서 다른 쪽 끝까지 자유롭게 이어 그리세요.'
      :'지도 이동 모드예요. 끌어서 코스를 살펴보세요.','info');
  }};
  // A selected line stays highlighted, but the tool releases so the map can be
@@ -1702,11 +1761,11 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    editing=value;document.body.classList.toggle('editing',value);
    setLayers(routeLayers,!value);setLayers(shapeLayers,false);setLayers(guideLayers,!value);
    showZoomControl(!value);
-   if(!value){{editMode=null;selectedRange=null;gapRange=null;clearSpan();document.body.classList.remove('tool-active');}}
+   if(!value){{editMode=null;clearDraft();document.body.classList.remove('tool-active');}}
    syncMapInteraction();
    renderDraft();setEditDistance();
    if(!value)return hideEditToast();
-   setEditStatus(editNotice||'지우개로 지울 구간을 문지르거나, 그리기로 코스 선을 끌어 보세요.','info');
+   setEditStatus(editNotice||'지우개로 구간을 지운 뒤, 붉은 선의 양 끝을 자유롭게 이어 그리세요.','info');
  }};
  const projection=map.getProjection();
  let dropScreenCache = () => {{}};
@@ -1788,11 +1847,14 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  // further away is the loop passing near itself and is ignored.
  const ERASE_REACH = 24;
  const eraseAt = point => {{
+   if(gapRange){{
+     setEditStatus('먼저 붉은 구간을 선으로 잇거나 실행 취소해 주세요.','error',{{label:'닫기',run:()=>{{}}}});
+     return false;
+   }}
    const lo=selectedRange?selectedRange[0]-ERASE_REACH:undefined;
    const hi=selectedRange?selectedRange[1]+ERASE_REACH:undefined;
    const hit=nearestSegment(point,lo,hi);
    if(hit.d>HIT_SLOP)return false;
-   if(!selectedRange)clearSpan();   // a new sweep is a new span
    selectedRange = selectedRange
      ? [Math.min(selectedRange[0],hit.index),Math.max(selectedRange[1],hit.index+1)]
      : [hit.index,hit.index+1];
@@ -1801,155 +1863,43 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  }};
  const selectSegmentAt = point => {{
    if(eraseAt(point))
-     setEditStatus('지울 구간을 골랐어요. 지우기를 누르세요.','info');
+     setEditStatus('지울 구간을 골랐어요. 선택 구간 지우기를 누르세요.','info');
    else
      setEditStatus('코스 선 가까이를 문질러 주세요.','error',{{label:'닫기',run:()=>{{}}}});
  }};
- // Everything below replaces the freehand pencil. A finger cannot trace a
- // pedestrian network it cannot see -- Kakao does not draw most of it -- so
- // the editor never asks it to. The eraser marks a span and the span is
- // re-routed on the walking graph; tapping adds a place to go through, which
- // pulls the same span toward it. Every metre on screen comes from the graph.
- //
- // Route metres between two node indexes, for sizing a span around a tap.
- const spanMetres = (lo, hi) => {{
-   let total=0;
-   for(let i=lo;i<hi;i++){{
-     const a=editNodes[i],b=editNodes[i+1];
-     const dy=(b[1]-a[1])*111320,dx=(b[2]-a[2])*88800;
-     total+=Math.hypot(dx,dy);
-   }}
-   return total;
- }};
- // Grabbing the line reshapes the stretch either side of the grab point.
- // Sized in metres rather than nodes so a dense downtown grid and a sparse
- // riverside path behave the same way.
- const SPAN_REACH_M = 260;
- const spanAround = (index, reach) => {{
-   const want=Math.max(SPAN_REACH_M,reach||0);
-   let lo=index,hi=Math.min(index+1,editNodes.length-1);
-   while(lo>0&&spanMetres(lo-1,index)<want)lo--;
-   while(hi<editNodes.length-1&&spanMetres(index,hi+1)<want)hi++;
-   return [lo,Math.min(hi,editNodes.length-2)];
- }};
- const beginSpan = range => {{
-   spanBase={{path:editNodes.map(point=>point[0]),range:[...range],before:snapshot()}};
-   vias=[];
- }};
- // One place where a server reply becomes the route on screen, so the nodes,
- // the street geometry, the distance and the panels below can never disagree.
- const applyEdit = (payload, before) => {{
-   if(before){{undoStack.push(before);if(undoStack.length>40)undoStack.shift();redoStack=[];}}
-   editNodes=payload.path.map(point=>[...point]);
-   editGeom=(payload.geometry||[]).slice();
-   selectedRange=null;gapRange=null;
-   setEditDistance(payload.length_km);applySummary(payload.summary);
- }};
- // Erasing used to leave a gap that only the pencil could close, so a runner
- // who rubbed out a spur and pressed 저장 saved the route with the spur still
- // in it. Erasing now asks for the replacement itself: the same two ends,
- // reconnected on another walkable way.
- const eraseSelection = async () => {{
+ // Erasing changes only the local draft. The original geometry stays visible
+ // in translucent red until the runner freely draws its replacement.
+ const eraseSelection = () => {{
    if(editBusy||!selectedRange)return;
-   const range=[...selectedRange];
-   beginSpan(range);
-   const before=spanBase.before;
-   setEditBusy(true);setEditStatus('지운 자리를 이을 길을 찾는 중…','busy');
-   try{{
-     const payload=await postEdit({{action:'reroute',path:spanBase.path,
-       from_index:range[0],to_index:range[1]}});
-     applyEdit(payload,before);
-     if(payload.note)setEditStatus(payload.note,'error',{{label:'닫기',run:()=>{{}}}});
-     else setEditStatus('지운 자리를 다른 길로 이었어요 · '+editLengthKm.toFixed(2)+'km','success');
-   }}catch(error){{
-     // The only walkable link between two parts of the city is a real thing.
-     // Keep the selection so the runner can hand the router somewhere to go
-     // instead of starting the sweep again.
-     gapRange=range;selectedRange=null;
-     setEditStatus(
-       error.name==='AbortError'
-         ? '대체 보행로를 찾는 시간이 초과됐어요. 더 짧은 구간을 지워 주세요.'
-         : (error.message||'지운 자리를 이을 보행로를 찾지 못했어요.'),
-       'error',{{label:'닫기',run:()=>{{}}}});
-   }}finally{{setEditBusy(false);renderDraft();}}
+   undoStack.push(snapshot());if(undoStack.length>40)undoStack.shift();redoStack=[];
+   gapRange=[...selectedRange];selectedRange=null;draftStrokes=[];activeStroke=null;
+   releaseTool();renderDraft();
  }};
- // ---- 그리기: pull the line, do not draw it ----------------------------
- // The pencil asked a finger to trace a pedestrian network Kakao does not
- // draw. This is the eraser's gesture pointed the other way: grab the course
- // line and drag, and the stretch under your finger is re-routed to pass
- // through wherever the finger is. Pull away and the line lengthens; pull
- // back toward where it was and it shortens again. Every metre of it is drawn
- // by the walking graph, so it cannot leave the road network however the
- // finger moves.
- const DRAG_STEP_PX = 12;          // ignore jitter between samples
- let dragPending = null, dragInFlight = false, dragActive = false;
- const beginDrawDrag = point => {{
-   // Grabbing is more forgiving than sweeping: you are reaching for the line,
-   // not tracing it.
-   const hit=nearestSegment(point);
-   if(hit.d>HIT_SLOP*1.6){{
-     setEditStatus('코스 선을 잡고 끌어 주세요.','error',{{label:'닫기',run:()=>{{}}}});
+ // ---- 그리기: preserve the freehand draft until save -------------------
+ const DRAW_STEP_PX=5;
+ let dragActive=false,lastDrawPoint=null;
+ const coordsAt = point => {{
+   const latlng=projection.coordsFromContainerPoint(new kakao.maps.Point(point.x,point.y));
+   return {{lat:latlng.getLat(),lon:latlng.getLng()}};
+ }};
+ const beginFreeDraw = point => {{
+   if(!gapRange){{
+     setEditStatus('먼저 지우기로 바꿀 구간을 붉게 표시해 주세요.','error',{{label:'닫기',run:()=>{{}}}});
      return false;
    }}
-   spanBase={{path:editNodes.map(node=>node[0]),origin:hit.index,
-     range:spanAround(hit.index),before:snapshot(),pushed:false}};
-   vias=[];dragActive=true;dragPending=null;
+   undoStack.push(snapshot());if(undoStack.length>40)undoStack.shift();redoStack=[];
+   activeStroke=[coordsAt(point)];draftStrokes.push(activeStroke);
+   dragActive=true;lastDrawPoint=point;renderDraft();
    return true;
  }};
- // One request in flight at a time, always carrying the latest finger
- // position: a drag produces far more samples than the network can answer,
- // and every stale reply would fight the newest one for the same route.
- const flushDrawDrag = () => {{
-   if(dragInFlight||!dragPending||!spanBase)return;
-   const job=dragPending;dragPending=null;dragInFlight=true;
-   // The span is whatever the finger grabbed and does not grow with the pull.
-   // Widening it let the replacement swallow more of the route than the
-   // detour added, so pulling harder made the course *shorter*: measured
-   // 5.23km -> 3.96km over a 312m pull. Held fixed, the same pull stretches
-   // the line out to the finger and back, 5.23km -> 5.61km.
-   const range=spanBase.range;
-   postEdit({{action:'via',path:spanBase.path,from_index:range[0],
-     to_index:range[1],vias:[{{lat:job.lat,lon:job.lon}}]}})
-     .then(payload => {{
-       // The whole drag is one undo step, not one per sample.
-       applyEdit(payload,spanBase.pushed?null:spanBase.before);
-       spanBase.pushed=true;
-       vias=[{{lat:job.lat,lon:job.lon}}];
-       if(job.final){{
-         if(payload.note)setEditStatus(payload.note,'blocked',{{label:'닫기',run:()=>{{}}}});
-         else setEditStatus('그 길로 이었어요 · '+editLengthKm.toFixed(2)+'km','success');
-       }}
-     }})
-     .catch(error => {{
-       // Mid-drag the finger passes over rivers and building interiors on its
-       // way somewhere reachable. Those are not failures worth a toast; only
-       // where the finger comes to rest is.
-       if(!job.final)return;
-       setEditStatus(
-         error.name==='AbortError'
-           ? '보행로를 찾는 시간이 초과됐어요. 조금 더 가까운 곳까지만 끌어 주세요.'
-           : (error.message||'그쪽으로 잇는 보행로를 찾지 못했어요.'),
-         'error',{{label:'닫기',run:()=>{{}}}});
-     }})
-     .finally(() => {{
-       dragInFlight=false;renderDraft();
-       if(dragPending)flushDrawDrag();
-     }});
+ const appendFreeDraw = (point,force) => {{
+   if(!dragActive||!activeStroke)return;
+   if(!force&&lastDrawPoint&&Math.hypot(point.x-lastDrawPoint.x,point.y-lastDrawPoint.y)<DRAW_STEP_PX)return;
+   activeStroke.push(coordsAt(point));lastDrawPoint=point;renderDraft();
  }};
- const drawDragTo = (point, final) => {{
-   if(!spanBase)return;
-   const latlng=projection.coordsFromContainerPoint(
-     new kakao.maps.Point(point.x,point.y));
-   const next={{lat:latlng.getLat(),lon:latlng.getLng(),final:Boolean(final)}};
-   // The dot goes where the finger is straight away; the line catches up when
-   // the graph answers.
-   vias=[{{lat:next.lat,lon:next.lon}}];
-   dragPending=next;renderDraft();flushDrawDrag();
- }};
- const endDrawDrag = point => {{
+ const endFreeDraw = point => {{
    if(!dragActive)return;
-   dragActive=false;
-   drawDragTo(point,true);
+   appendFreeDraw(point,true);dragActive=false;activeStroke=null;lastDrawPoint=null;renderDraft();
  }};
  if(selErase)selErase.addEventListener('click',eraseSelection);
  if(panTool)panTool.addEventListener('click',()=>setMode('pan'));
@@ -1962,6 +1912,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    const endOverlayPointer=event=>{{
      if(!editPointers.has(event.pointerId))return;
      const info=editPointers.get(event.pointerId);
+     info.current=overlayPoint(event);
      editPointers.delete(event.pointerId);
      if(twoFingerPan){{
        if(editPointers.size===0){{twoFingerPan=false;panCenter=null;selectPointer=null;}}
@@ -1976,10 +1927,9 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
          setEditStatus('구간을 조절했어요. 지우기를 누르세요.','info');
          return;
        }}
-       // Releasing commits wherever the finger came to rest. A tap is the
-       // degenerate case -- a pull of length zero -- and re-routes the span
-       // through the tapped place, which is what a tap plainly means.
-       if(editMode==='draw'){{endDrawDrag(info.current);return;}}
+       // Releasing only ends this freehand stroke. The draft remains exactly
+       // as drawn and can be continued with another stroke.
+       if(editMode==='draw'){{endFreeDraw(info.current);return;}}
        const still=Math.hypot(info.current.x-info.start.x,info.current.y-info.start.y)<=10;
        // A tap with the eraser is a sweep of length zero: mark the one
        // segment under it.
@@ -2004,7 +1954,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
        return;
      }}
      if(editMode==='erase')eraseAt(point);
-     else if(editMode==='draw')beginDrawDrag(point);
+     else if(editMode==='draw')beginFreeDraw(point);
    }});
    editOverlay.addEventListener('pointermove',event=>{{
      if(!editPointers.has(event.pointerId))return;
@@ -2018,18 +1968,13 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      if(event.pointerId!==selectPointer)return;
      if(dragEnd!==null){{moveHandle(point);return;}}
      if(editMode==='erase')eraseAt(point);
-     else if(editMode==='draw'&&dragActive){{
-       const last=dragPending||(vias.length?vias[0]:null);
-       const moved=!last||Math.hypot(
-         point.x-projection.containerPointFromCoords(
-           new kakao.maps.LatLng(last.lat,last.lon)).x,
-         point.y-projection.containerPointFromCoords(
-           new kakao.maps.LatLng(last.lat,last.lon)).y)>=DRAG_STEP_PX;
-       if(moved)drawDragTo(point,false);
-     }}
+     else if(editMode==='draw'&&dragActive)appendFreeDraw(point,false);
    }});
    editOverlay.addEventListener('pointerup',endOverlayPointer);
-   editOverlay.addEventListener('pointercancel',event=>{{editPointers.delete(event.pointerId);if(event.pointerId===selectPointer)selectPointer=null;dragActive=false;dragPending=null;}});
+   editOverlay.addEventListener('pointercancel',event=>{{
+     editPointers.delete(event.pointerId);if(event.pointerId===selectPointer)selectPointer=null;
+     dragActive=false;activeStroke=null;lastDrawPoint=null;renderDraft();
+   }});
  }}
  if(editUndo)editUndo.addEventListener('click',()=>{{
    if(editBusy||!undoStack.length)return;
@@ -2043,27 +1988,19 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    restore(redoStack.pop());
    setEditStatus('다시 실행했어요.','info');
  }});
- // Reverting is the only irreversible action in the editor, so it is made
- // reversible instead of guarded by a modal: a confirm sheet would cover the
- // map and add a step, while an undo offer costs nothing when it is not needed.
- // The distance is restored with the path -- the badge would otherwise keep
- // showing the length of the discarded edit.
+ // Reset returns to the route that was present on entering this editor, but
+ // never exits the editing screen. The discarded draft remains one tap away.
  if(editCancel)editCancel.addEventListener('click',()=>{{
    if(editBusy)return;
-   const hadEdits=undoStack.length>0;
-   const discarded={{...snapshot(),stack:undoStack.slice()}};
+   const hadEdits=Boolean(undoStack.length||selectedRange||gapRange||draftStrokes.length);
+   const discarded={{...snapshot(),stack:undoStack.slice(),redo:redoStack.slice()}};
    editNodes=initialEditPath.map(point=>[...point]);
    editGeom=initialEditGeometry.slice();
-   selectedRange=null;undoStack=[];clearSpan();
-   setEditDistance(initialLengthKm);applySummary(initialSummary);setEditing(false);
+   clearDraft();undoStack=[];redoStack=[];editMode=null;applyMode();
+   setEditDistance(initialLengthKm);applySummary(initialSummary);renderDraft();
    if(!hadEdits)return;
    showEditToast('원본 코스로 되돌렸어요.','info',{{label:'실행 취소',run:()=>{{
-     editNodes=discarded.nodes.map(point=>[...point]);
-     editGeom=discarded.geom.slice();
-     undoStack=discarded.stack;
-     setEditDistance(discarded.km);
-     applySummary(discarded.summary);
-     setEditing(true);
+     undoStack=discarded.stack;redoStack=discarded.redo;restore(discarded);
    }}}});
  }});
  // Saving asks for a name first. The field is empty and the name the course
@@ -2087,11 +2024,21 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  }};
  const commitSave = async () => {{
    if(!editing||editBusy)return;
+   const connection=draftConnection();
+   if(gapRange&&!connection.ok){{
+     closeNameSheet();
+     setEditStatus(connection.reason,'error',{{label:'닫기',run:()=>{{}}}});
+     return;
+   }}
    const name=nameSheetInput?nameSheetInput.value.trim():'';
    closeNameSheet();
    setEditBusy(true);setEditStatus('수정한 코스를 저장 중…','busy');
    try{{
-     const payload=await postEdit({{action:'save',path:editNodes.map(point=>point[0]),name}});
+     const body=gapRange
+       ? {{action:'save_draft',path:editNodes.map(point=>point[0]),
+          from_index:gapRange[0],to_index:gapRange[1],stroke:connection.stroke,name}}
+       : {{action:'save',path:editNodes.map(point=>point[0]),name}};
+     const payload=await postEdit(body);
      setEditStatus('저장했어요. 새 코스로 이동합니다…','success');
      location.assign(payload.preview_url);
    }}
@@ -2102,6 +2049,11 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  }};
  if(editSave)editSave.addEventListener('click',()=>{{
    if(!editing||editBusy)return;
+   const connection=draftConnection();
+   if(gapRange&&!connection.ok){{
+     setEditStatus(connection.reason,'error',{{label:'닫기',run:()=>{{}}}});
+     return;
+   }}
    openNameSheet();
  }});
  if(nameSheetSave)nameSheetSave.addEventListener('click',commitSave);

@@ -1630,6 +1630,13 @@ def _unchanged_note(before: list[int], after: list[int]) -> str:
             "다른 곳을 경유점으로 짚어 주세요.")
 
 
+def _save_drawn_draft(params, path: list[int], from_index: int, to_index: int,
+                      stroke: list[CourseWaypoint], name: str) -> Course:
+    """Validate/snap a freehand draft only at the moment it is saved."""
+    snapped = snap_drawn_segment(params, path, from_index, to_index, stroke)
+    return course_from_path(params, snapped.path, name)
+
+
 class _CourseEditPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: str
@@ -1730,6 +1737,20 @@ async def edit_course_route(request: Request) -> Response:
                 course = await anyio.to_thread.run_sync(
                     functools.partial(course_from_path, edited, payload.path,
                                       payload.name),
+                    abandon_on_cancel=True,
+                )
+            elif payload.action == "save_draft":
+                if payload.from_index is None or payload.to_index is None:
+                    return JSONResponse(
+                        {"error": "붉게 지운 구간의 양 끝을 확인해 주세요."},
+                        status_code=400,
+                    )
+                course = await anyio.to_thread.run_sync(
+                    functools.partial(
+                        _save_drawn_draft, edited, payload.path,
+                        payload.from_index, payload.to_index, payload.stroke,
+                        payload.name,
+                    ),
                     abandon_on_cancel=True,
                 )
             else:

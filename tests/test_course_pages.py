@@ -35,6 +35,7 @@ def test_every_page_carries_the_same_three_tab_bar():
         assert f'href="https://runnywhere.example/c/{cid}/editor"' in markup
         for label in ("코스 정보", "달리기", "코스 편집"):
             assert label in markup
+        assert '<span class="tab-icon" aria-hidden="true">🏃</span><span>달리기</span>' in markup
         # Exactly one tab is current, and it is this page's own.
         assert markup.count('aria-current="page"') == 1
 
@@ -135,24 +136,18 @@ def test_tabs_carry_an_unsaved_edit_to_the_other_pages():
     assert "tab.href = currentCourseUrl + tab.dataset.page" in edit
 
 
-def test_erasing_reconnects_the_route_by_itself():
-    """Zillow gives drawing its own Clear button; an action tucked into a
-    status toast is a message, not a control.
-
-    Erasing used to leave a gap only the pencil could close, so a runner who
-    rubbed out a spur and pressed 저장 saved the route with the spur still in
-    it. The eraser now asks for the replacement itself.
-    """
+def test_erasing_keeps_a_red_local_gap_without_rerouting():
+    """The erased geometry stays as guidance until the runner draws and saves."""
     edit = _page(_course(), "edit")
 
     assert 'id="selErase"' in edit and "지우기</button>" in edit
     assert 'id="selBar"' not in edit
     assert "const replaceSelected" not in edit
     assert "const eraseSelection" in edit
-    assert "action:'reroute'" in edit
+    assert "action:'reroute'" not in edit
     assert "selErase.addEventListener('click',eraseSelection)" in edit
-    # The gap is what a *failed* reconnection leaves behind, not the happy path.
-    assert "gapRange=range;selectedRange=null;" in edit
+    assert "gapRange=[...selectedRange];selectedRange=null" in edit
+    assert "strokeColor:'#e5322e',strokeWeight:10,strokeOpacity:.32" in edit
 
 
 def test_selection_ends_drag_both_ways_through_the_drawing_overlay():
@@ -197,46 +192,31 @@ def test_info_page_does_not_carry_the_other_apps_box():
     assert "다른 앱으로 달리기" in _page(_course(), "run")
 
 
-def test_the_drawing_tool_pulls_the_line_instead_of_drawing_it():
-    """The drawing tool stays; its gesture changes. Freehand asked a finger to
-    trace a pedestrian network Kakao does not draw, which is how a stroke came
-    back as a line through a building. Now it is the eraser's gesture pointed
-    the other way: grab the course line and drag, and the stretch under the
-    finger is re-routed along walking paths -- longer as you pull away,
-    shorter as you pull back."""
+def test_the_drawing_tool_keeps_freehand_local_until_save():
+    """Drawing may remain incomplete and must not generate a route mid-gesture."""
     edit = _page(_course(), "edit")
 
     assert 'id="eraserTool"' in edit and 'id="drawTool"' in edit
     assert 'id="penTool"' not in edit and 'id="segmentTool"' not in edit
     assert "지우개" in edit and "그리기" in edit
-    # Nothing freehand survives: no stroke collection, no stroke request.
-    assert "penStroke" not in edit
-    assert "action:'snap'" not in edit
-    # Grab, pull, release -- the graph draws every metre in between.
-    assert "const beginDrawDrag" in edit
-    assert "const drawDragTo" in edit
-    assert "const endDrawDrag" in edit
-    assert "action:'via'" in edit
+    assert "let draftStrokes = [], activeStroke = null" in edit
+    assert "const beginFreeDraw" in edit
+    assert "const appendFreeDraw" in edit
+    assert "const endFreeDraw" in edit
+    assert "action:'via'" not in edit and "action:'reroute'" not in edit
+    assert "action:'save_draft'" in edit
     assert "const eraseAt" in edit
     assert "coordsFromContainerPoint" in edit
 
 
-def test_a_pull_is_one_request_at_a_time_and_one_undo_step():
-    """A drag makes far more samples than the network can answer. Every stale
-    reply would fight the newest one for the same route, and an undo step per
-    sample would make one gesture take a dozen presses to take back."""
+def test_each_freehand_stroke_is_one_undo_step_and_never_a_request():
+    """Pointer samples render locally; starting a stroke captures one snapshot."""
     edit = _page(_course(), "edit")
 
-    assert "if(dragInFlight||!dragPending||!spanBase)return" in edit
-    assert "if(dragPending)flushDrawDrag()" in edit
-    assert "spanBase.pushed?null:spanBase.before" in edit
-    # The span is fixed at what the finger grabbed. Widening it with the
-    # pull made the replacement swallow more route than the detour added, so
-    # pulling harder shortened the course: 5.23km -> 3.96km over a 312m pull.
-    assert "range:spanAround(hit.index)" in edit
-    assert "const range=spanBase.range" in edit
-    # Every sample re-routes the span as it was before the drag started.
-    assert "path:spanBase.path" in edit
+    assert "undoStack.push(snapshot())" in edit
+    assert "activeStroke=[coordsAt(point)];draftStrokes.push(activeStroke)" in edit
+    assert "activeStroke.push(coordsAt(point))" in edit
+    assert "postEdit(" not in edit.split("const beginFreeDraw")[1].split("if(selErase)")[0]
 
 
 def test_editor_can_step_forward_again_after_stepping_back():
