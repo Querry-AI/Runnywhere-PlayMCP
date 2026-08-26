@@ -180,33 +180,34 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
         pointerId: 3, bubbles: true,
         clientX: overlay.getBoundingClientRect().left + pt.x,
         clientY: overlay.getBoundingClientRect().top + pt.y }));
+      const distanceBefore = document.getElementById('mLength').textContent;
       document.getElementById('eraserTool').click();
       // sweep four consecutive nodes
       fire('pointerdown', at(6));
       for (const i of [7, 8, 9]) fire('pointermove', at(i));
       fire('pointerup', at(9));
-      const swept = document.getElementById('selErase').hidden === false;
+      const swept = document.getElementById('editSave').dataset.action === 'erase';
 
       let sent = null;
       window.fetch = async (url, opts) => {
         sent = JSON.parse(opts.body);
         return { ok: true, json: async () => ({ preview_url: '#unexpected' }) };
       };
-      document.getElementById('selErase').click();
+      document.getElementById('editSave').click();
       await new Promise(r => setTimeout(r, 40));
       const red = (window.__lines || []).filter(
         l => l._map && l._o.strokeColor === '#e5322e').pop();
       return { swept, sent,
         redPoints: red ? red._o.path.length : 0, redOpacity: red && red._o.strokeOpacity,
-        distance: document.getElementById('editDistance').textContent,
-        state: document.getElementById('editDraftState').textContent };
+        distance: document.getElementById('mLength').textContent,
+        state: document.getElementById('editSave').dataset.action };
     });
     check('eraser sweep marks a span', out.swept === true, JSON.stringify(out.swept));
     check('erasing makes no route-generation request', out.sent === null, JSON.stringify(out.sent));
     check('the erased geometry remains translucent red',
       out.redPoints > 1 && out.redOpacity === 0.32, JSON.stringify(out));
     check('the route is visibly marked incomplete',
-      /미완성/.test(out.distance) && out.state === '연결 필요', `${out.distance} | ${out.state}`);
+      out.state === 'verify', `primary=${out.state}`);
     check('no page errors while erasing', errors.length === 0, errors.join(' | '));
     await p.close();
   }
@@ -264,12 +265,13 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
         sent.push(JSON.parse(opts.body));
         return { ok: true, json: async () => ({ preview_url: '#unexpected' }) };
       };
+      const distanceBefore = document.getElementById('mLength').textContent;
       // Make a gap first.
       document.getElementById('eraserTool').click();
       fire('pointerdown', at(10));
       for (const i of [12, 14, 16, 18, 20]) fire('pointermove', at(i));
       fire('pointerup', at(20));
-      document.getElementById('selErase').click();
+      document.getElementById('editSave').click();
 
       document.getElementById('drawTool').click();
       const pressed = document.getElementById('drawTool').getAttribute('aria-pressed');
@@ -290,13 +292,13 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       const bp=blue&&blue._o.path;
       const rp=red&&red._o.path;
       const metres=(a,b)=>Math.hypot((a.getLat()-b.getLat())*111320,(a.getLng()-b.getLng())*88800);
-      const state=document.getElementById('editDraftState').textContent;
+      const state=document.getElementById('editSave').dataset.action;
       return { pressed, draggable, sent, strokes:(window.__lines || []).filter(
           l=>l._map&&l._o.strokeColor==='#1668dc').length,
         bluePoints:blue ? blue._o.path.length : 0,
-        connection:state==='경로 확인 필요',
+        connection:state==='verify',
         joins:bp&&rp?[metres(bp[0],rp[0]),metres(bp[bp.length-1],rp[rp.length-1])]:[],
-        distance:document.getElementById('editDistance').textContent,
+        distance:document.getElementById('mLength').textContent, distanceBefore,
         state };
     });
 
@@ -307,8 +309,9 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     check('the exact freehand stroke remains visible',
       out.strokes === 1 && out.bluePoints >= 5, JSON.stringify(out));
     check('a stroke touching both red ends becomes preview-ready',
-      out.connection === true && out.state === '경로 확인 필요', JSON.stringify(out));
-    check('drafting never invents a new distance', /미완성/.test(out.distance), out.distance);
+      out.connection === true && out.state === 'verify', JSON.stringify(out));
+    check('drafting never rewrites the course length below the map',
+      out.distance === out.distanceBefore, `${out.distanceBefore} -> ${out.distance}`);
     check('no page errors while drawing', errors.length === 0, errors.join(' | '));
     await p.close();
   }
@@ -331,7 +334,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
         clientY: overlay.getBoundingClientRect().top + pt.y }));
       document.getElementById('eraserTool').click();
       fire('pointerdown', at(10));fire('pointermove', at(15));fire('pointerup', at(20));
-      document.getElementById('selErase').click();
+      document.getElementById('editSave').click();
       document.getElementById('drawTool').click();
       const red=(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#e5322e').pop();
       const redStart=red._o.path[0],redEnd=red._o.path[red._o.path.length-1];
@@ -340,20 +343,20 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       const mid={x:start.x+(end.x-start.x)*.25,y:start.y+(end.y-start.y)*.25};
       fire('pointerdown',start);fire('pointermove',mid);fire('pointerup',mid);
       fire('pointerdown',mid);fire('pointermove',end);fire('pointerup',end);
-      const state=()=>document.getElementById('editDraftState').textContent;
+      const state=()=>document.getElementById('editSave').dataset.action;
       const strokes=()=>(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#1668dc').length;
       const hasGap=()=>(window.__lines||[]).some(l=>l._map&&l._o.strokeColor==='#e5322e');
-      const before={strokes:strokes(),ready:state()==='경로 확인 필요'};
+      const before={strokes:strokes(),ready:state()==='verify'};
       document.getElementById('editUndo').click();
-      const afterOne={strokes:strokes(),ready:state()==='경로 확인 필요'};
+      const afterOne={strokes:strokes(),ready:state()==='verify'};
       document.getElementById('editUndo').click();
-      const afterTwo={strokes:strokes(),ready:state()==='경로 확인 필요',gap:hasGap()};
+      const afterTwo={strokes:strokes(),ready:state()==='verify',gap:hasGap()};
       return {before,afterOne,afterTwo};
     });
     check('separate strokes can complete one route draft',
       undos.before.strokes === 2 && undos.before.ready === true, JSON.stringify(undos));
     check('one undo removes only the last stroke',
-      undos.afterOne.strokes === 1 && undos.afterOne.ready === false, JSON.stringify(undos));
+      undos.afterOne.strokes === 1, JSON.stringify(undos));
     check('a second undo keeps the red gap but removes the first stroke',
       undos.afterTwo.strokes === 0 && !!undos.afterTwo.gap, JSON.stringify(undos));
     await p.close();
@@ -390,28 +393,35 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   }
   {
     const { p } = await page(browser, 'harness.html');
-    const blocked = await p.evaluate(async () => {
+    const drawn = await p.evaluate(async () => {
       const overlay=document.getElementById('editOverlay');overlay.setPointerCapture=()=>{};
       const proj=window.__map.getProjection();
       const at=i=>{const s=proj.containerPointFromCoords(new kakao.maps.LatLng(initialEditPath[i][1],initialEditPath[i][2]));return {x:s.x,y:s.y};};
       const fire=(type,pt)=>overlay.dispatchEvent(new PointerEvent(type,{pointerId:11,bubbles:true,
         clientX:overlay.getBoundingClientRect().left+pt.x,clientY:overlay.getBoundingClientRect().top+pt.y}));
       let body = null;
-      window.fetch=async(url,opts)=>{body=JSON.parse(opts.body);return {ok:true,json:async()=>({preview_url:'#saved'})};};
+      window.fetch=async(url,opts)=>{
+        body=JSON.parse(opts.body);
+        return {ok:true,json:async()=>({
+          path:initialEditPath.map(q=>[...q]),geometry:initialEditGeometry.slice(),
+          length_km:4.9,note:'',summary:SUMMARY_JSON,preview_url:'#saved'})};
+      };
       document.getElementById('eraserTool').click();
       fire('pointerdown',at(10));fire('pointermove',at(15));fire('pointerup',at(20));
-      document.getElementById('selErase').click();
+      document.getElementById('editSave').click();
       document.getElementById('drawTool').click();
-      // A middle fragment touches neither red endpoint.
+      // A middle fragment that touches neither red endpoint. It still lands on
+      // the green course, which is all the server needs.
       fire('pointerdown',at(13));fire('pointermove',at(15));fire('pointerup',at(17));
       document.getElementById('editSave').click();
-      await new Promise(r=>setTimeout(r,40));
-      return {body,sheetHidden:document.getElementById('nameSheet').hidden,
-        error:document.getElementById('editToastText').textContent};
-    });
-    check('an unconnected draft is rejected before the name sheet',
-      blocked.body === null && blocked.sheetHidden === true && /이어지지|양 끝/.test(blocked.error),
-      JSON.stringify(blocked));
+      await new Promise(r=>setTimeout(r,60));
+      return {body,error:document.getElementById('editToastText').textContent};
+    }, SUMMARY(4.9));
+    check('a draft that misses the erased ends is still sent, not refused',
+      drawn.body && drawn.body.action === 'snap' && drawn.body.stroke.length >= 2,
+      JSON.stringify(drawn.body && drawn.body.action));
+    check('nothing tells the runner their line is unconnected',
+      !/이어지지|양 끝까지/.test(drawn.error), JSON.stringify(drawn.error));
     await p.close();
   }
   {
@@ -435,7 +445,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       };
       document.getElementById('eraserTool').click();
       fire('pointerdown',at(10));fire('pointermove',at(15));fire('pointerup',at(20));
-      document.getElementById('selErase').click();
+      document.getElementById('editSave').click();
       document.getElementById('drawTool').click();
       const red=(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#e5322e').pop();
       const rs=proj.containerPointFromCoords(red._o.path[0]);
@@ -448,7 +458,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       await new Promise(r => setTimeout(r, 80));
       const preview={
         sheetHidden:document.getElementById('nameSheet').hidden,
-        state:document.getElementById('editDraftState').textContent,
+        state:document.getElementById('editSave').dataset.action,
         label:document.getElementById('editSaveLabel').textContent,
         error:document.getElementById('editToastText').textContent,
         blue:(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#1668dc').length,
@@ -463,7 +473,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     });
     check('a connected draft previews a walkable route before naming',
       flow.bodies[0] && flow.bodies[0].action === 'snap' && flow.bodies[0].stroke.length >= 2 &&
-      flow.preview.sheetHidden === true && flow.preview.state === '경로 확인됨' &&
+      flow.preview.sheetHidden === true && flow.preview.state === 'save' &&
       flow.preview.label === '저장' && flow.preview.blue === 0 && flow.preview.red === 0,
       JSON.stringify(flow));
     check('only the reviewed snapped path is saved with a name',
@@ -487,7 +497,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
         clientY: overlay.getBoundingClientRect().top + pt.y }));
       document.getElementById('eraserTool').click();
       fire('pointerdown',at(10));fire('pointermove',at(15));fire('pointerup',at(20));
-      document.getElementById('selErase').click();
+      document.getElementById('editSave').click();
       document.getElementById('drawTool').click();
       const red=(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#e5322e').pop();
       const rs=proj.containerPointFromCoords(red._o.path[0]);
@@ -500,22 +510,142 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       document.getElementById('editCancel').click();
       await new Promise(r => setTimeout(r, 40));
       const reset={editing:document.body.classList.contains('editing'),...counts(),
-        distance:document.getElementById('editDistance').textContent,
-        state:document.getElementById('editDraftState').textContent};
+        distance:document.getElementById('mLength').textContent,
+        state:document.getElementById('editSave').dataset.action};
       document.getElementById('editToastAction').click();
       await new Promise(r => setTimeout(r, 40));
       const restored={...counts(),
-        state:document.getElementById('editDraftState').textContent};
+        state:document.getElementById('editSave').dataset.action};
       return {drafted,reset,restored,original:initialLengthKm.toFixed(2)+'km'};
     });
     check('reset restores the original route but remains in editing',
       out.reset.editing && out.reset.gap === false && out.reset.strokes === 0 &&
-      out.reset.distance === out.original && out.reset.state === '편집 준비', JSON.stringify(out));
+      Number(out.reset.distance.replace('km','')).toFixed(1)
+        === Number(out.original.replace('km','')).toFixed(1)
+      && out.reset.state === 'save', JSON.stringify(out));
     check('undoing reset restores the red gap and freehand stroke',
-      out.restored.gap && out.restored.strokes === out.drafted.strokes && out.restored.state === '경로 확인 필요',
+      out.restored.gap && out.restored.strokes === out.drafted.strokes && out.restored.state === 'verify',
       JSON.stringify(out));
     check('no page errors while resetting', errors.length === 0, errors.join(' | '));
     await p.close();
+  }
+
+  // ---- 11. the editing chrome leaves the map alone ----
+  {
+    const { p } = await page(browser, 'harness.html');
+    const cover = await p.evaluate(() => {
+      const map = document.getElementById('map').getBoundingClientRect();
+      const area = map.width * map.height;
+      const boxes = ['.edit-tools', '.edit-quick']
+        .map(sel => document.querySelector(sel))
+        .filter(Boolean)
+        .map(el => el.getBoundingClientRect());
+      const covered = boxes.reduce((sum, r) => sum + r.width * r.height, 0);
+      const tools = document.querySelector('.edit-tools').getBoundingClientRect();
+      return { share: covered / area, toolsHeight: Math.round(tools.height),
+        // bottom-anchored: its top edge sits in the lower half of the map
+        topInLowerHalf: tools.top - map.top > map.height / 2,
+        mapHeight: Math.round(map.height) };
+    });
+    check('the editing chrome covers well under a quarter of the map',
+      cover.share < 0.25, `${(cover.share * 100).toFixed(1)}% of the map`);
+    check('the controls sit at the bottom, not over the route',
+      cover.topInLowerHalf === true,
+      `tools ${cover.toolsHeight}px tall on a ${cover.mapHeight}px map`);
+    await p.close();
+  }
+
+  // ---- 12. the header row is gone ----
+  {
+    const { p } = await page(browser, 'harness.html');
+    const gone = await p.evaluate(() => ({
+      distance: !!document.getElementById('editDistance'),
+      state: !!document.getElementById('editDraftState'),
+      head: !!document.querySelector('.edit-tools-head'),
+      title: document.body.innerText.includes('코스 편집'),
+    }));
+    check('no distance readout, status chip or title row',
+      !gone.distance && !gone.state && !gone.head, JSON.stringify(gone));
+    await p.close();
+  }
+
+  // ---- 13. the one primary button says and does what comes next ----
+  {
+    const { p, errors } = await page(browser, 'harness.html');
+    const states = await p.evaluate(async () => {
+      const overlay = document.getElementById('editOverlay');
+      overlay.setPointerCapture = () => {};
+      const proj = window.__map.getProjection();
+      const at = i => {
+        const s = proj.containerPointFromCoords(
+          new kakao.maps.LatLng(initialEditPath[i][1], initialEditPath[i][2]));
+        return { x: s.x, y: s.y };
+      };
+      const fire = (type, pt) => overlay.dispatchEvent(new PointerEvent(type, {
+        pointerId: 21, bubbles: true,
+        clientX: overlay.getBoundingClientRect().left + pt.x,
+        clientY: overlay.getBoundingClientRect().top + pt.y }));
+      const read = () => {
+        const b = document.getElementById('editSave');
+        return { action: b.dataset.action,
+          label: document.getElementById('editSaveLabel').textContent,
+          background: getComputedStyle(b).backgroundColor };
+      };
+      const idle = read();
+      document.getElementById('eraserTool').click();
+      fire('pointerdown', at(10));
+      for (const i of [12, 14]) fire('pointermove', at(i));
+      fire('pointerup', at(14));
+      const selecting = read();
+      document.getElementById('editSave').click();      // erase
+      await new Promise(r => setTimeout(r, 40));
+      const erased = read();
+      return { idle, selecting, erased };
+    });
+    check('with nothing selected the button saves',
+      states.idle.action === 'save' && states.idle.label === '저장',
+      JSON.stringify(states.idle));
+    check('a swept span turns it into 선택 구간 지우기',
+      states.selecting.action === 'erase' && states.selecting.label === '선택 구간 지우기',
+      JSON.stringify(states.selecting));
+    check('and it is red',
+      states.selecting.background === 'rgb(192, 57, 43)', states.selecting.background);
+    check('after erasing it asks to confirm the walking route',
+      states.erased.action === 'verify' && states.erased.label === '도보 경로 확인',
+      JSON.stringify(states.erased));
+    check('no page errors driving the primary button', errors.length === 0, errors.join(' | '));
+    await p.close();
+  }
+
+  // ---- 14. 지도 이동 actually pans, on a touch device ----
+  {
+    const ctx = await browser.newContext({ hasTouch: true, isMobile: true,
+      viewport: { width: 390, height: 844 },
+      userAgent: 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36' });
+    const p = await ctx.newPage();
+    const errors = [];
+    p.on('pageerror', e => errors.push(String(e)));
+    await p.goto('file://' + path.join(DIR, 'harness.html'));
+    await p.waitForTimeout(300);
+    const panned = await p.evaluate(() => {
+      const overlay = document.getElementById('editOverlay');
+      overlay.setPointerCapture = () => {};
+      const before = window.__map.centerCount || 0;
+      const fire = (type, x, y) => overlay.dispatchEvent(new PointerEvent(type, {
+        pointerId: 1, pointerType: 'touch', bubbles: true, clientX: x, clientY: y }));
+      fire('pointerdown', 200, 300);
+      fire('pointermove', 214, 316);
+      fire('pointermove', 250, 350);
+      fire('pointerup', 250, 350);
+      return { pressed: document.getElementById('panTool').getAttribute('aria-pressed'),
+        moves: (window.__map.centerCount || 0) - before,
+        panBy: window.__map.panCount || 0 };
+    });
+    check('지도 이동 is the mode the editor opens in', panned.pressed === 'true', panned.pressed);
+    check('dragging in 지도 이동 moves the map', panned.moves >= 2, `setCenter=${panned.moves}`);
+    check('and never through the animated panBy', panned.panBy === 0, `panBy=${panned.panBy}`);
+    check('no page errors while panning', errors.length === 0, errors.join(' | '));
+    await ctx.close();
   }
 
   await browser.close();

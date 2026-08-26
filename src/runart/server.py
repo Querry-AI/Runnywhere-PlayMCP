@@ -1630,11 +1630,20 @@ def _unchanged_note(before: list[int], after: list[int]) -> str:
             "다른 곳을 경유점으로 짚어 주세요.")
 
 
-def _save_drawn_draft(params, path: list[int], from_index: int, to_index: int,
-                      stroke: list[CourseWaypoint], name: str) -> Course:
-    """Validate/snap a freehand draft only at the moment it is saved."""
+def _save_drawn_draft(params, from_index: int | None, to_index: int | None,
+                      path: list[int], stroke: list[CourseWaypoint],
+                      name: str) -> Course:
+    """Snap a freehand draft to walkable roads at the moment it is saved.
+
+    snap_drawn_segment does not refuse: it degrades to the best course it can
+    still build and explains the shortfall in ``note``. That note has to travel
+    with the saved course, or the runner is shown a route they did not draw
+    with no idea why.
+    """
     snapped = snap_drawn_segment(params, path, from_index, to_index, stroke)
-    return course_from_path(params, snapped.path, name)
+    saved = course_from_path(params, snapped.path, name)
+    saved.note = snapped.note
+    return saved
 
 
 class _CourseEditPayload(BaseModel):
@@ -1740,16 +1749,13 @@ async def edit_course_route(request: Request) -> Response:
                     abandon_on_cancel=True,
                 )
             elif payload.action == "save_draft":
-                if payload.from_index is None or payload.to_index is None:
-                    return JSONResponse(
-                        {"error": "붉게 지운 구간의 양 끝을 확인해 주세요."},
-                        status_code=400,
-                    )
+                # Missing indexes are not an error any more: where the stroke
+                # meets the course is enough to know what to replace.
                 course = await anyio.to_thread.run_sync(
                     functools.partial(
-                        _save_drawn_draft, edited, payload.path,
-                        payload.from_index, payload.to_index, payload.stroke,
-                        payload.name,
+                        _save_drawn_draft, edited,
+                        payload.from_index, payload.to_index,
+                        payload.path, payload.stroke, payload.name,
                     ),
                     abandon_on_cancel=True,
                 )
@@ -1800,6 +1806,8 @@ async def edit_course_route(request: Request) -> Response:
             "length_km": round(course.length_km, 2),
             "ascent_m": round(course.ascent_m),
             "rfs": course.rfs["score"],
+            # What the drawing could not be given, if anything.
+            "note": course.note,
         },
         headers={"Cache-Control": "no-store"},
     )

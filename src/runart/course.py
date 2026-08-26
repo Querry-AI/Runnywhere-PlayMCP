@@ -602,102 +602,163 @@ def route_via_points(params: CourseParams, path: list[int], from_index: int,
     return course
 
 
-def snap_drawn_segment(params: CourseParams, path: list[int], from_index: int,
-                       to_index: int, stroke: list[CourseWaypoint]) -> Course:
-    """Replace only one route section with the pedestrian path under a finger stroke."""
-    course_from_path(params, path)
-    if not (0 <= from_index < to_index < len(path) - 1):
-        raise CourseError(
-            "지울 구간의 양 끝이 코스 선 위에 있어야 해요. "
-            "지우개로 다시 구간을 고른 뒤 그려 주세요.")
-    # Sweeping with the eraser routinely marks more than 80 nodes; the old cap
-    # rejected ordinary edits. The real limit is how much walking the server
-    # has to re-route, which the stroke-length check below already bounds.
-    if to_index - from_index > max(400, (len(path) - 1) * 3 // 4):
-        raise CourseError(
-            f"한 번에 바꾸려는 구간이 {to_index - from_index}개로 너무 길어요. "
-            "절반쯤씩 나눠서 수정해 주세요.")
-    if len(stroke) < 2:
-        raise CourseError("연필로 지운 구간의 한쪽 끝에서 다른 쪽 끝까지 이어 그려 주세요.")
+def nearest_route_index(g, path: list[int], lat: float, lon: float) -> tuple[int, float]:
+    """Which node index of ``path`` the drawn line touched, and how far away.
 
-    walked = sum(
-        haversine_m(a.lat, a.lon, b.lat, b.lon)
-        for a, b in zip(stroke, stroke[1:])
-    )
-    if walked < 8:
-        raise CourseError(
-            f"그린 선이 {walked:.0f}m로 너무 짧아요. "
-            "지운 구간의 한쪽 끝에서 다른 쪽 끝까지 이어 그려 주세요.")
-    if walked > 6000:
-        raise CourseError(
-            f"한 번에 그린 선이 {walked / 1000:.1f}km로 너무 길어요. "
-            "6km보다 짧게 나눠 그려 주세요.")
+    Measured against the *drawn* geometry, not the graph nodes: the green line
+    on screen follows the OSM way shapes, so a finger that lands on it may be
+    a long way from either end of that edge.
+    """
+    best_index, best_d = 0, math.inf
+    for index, (u, v) in enumerate(zip(path, path[1:])):
+        points = graphmod.edge_points(g, u, v)
+        for (alat, alon), (blat, blon) in zip(points, points[1:]):
+            d = _perpendicular_m((lat, lon), (alat, alon), (blat, blon))
+            if d < best_d:
+                best_index, best_d = index, d
+    return best_index, best_d
 
-    g = graphmod.get_graph()
-    # Saving must never bridge an unfinished sketch on the runner's behalf.
-    # The freehand draft has to actually touch both red ends; reverse drawing
-    # is accepted and normalised before it is snapped to walkable roads.
-    start = g.nodes[path[from_index]]
-    finish = g.nodes[path[to_index]]
-    forward = (
-        haversine_m(start["lat"], start["lon"], stroke[0].lat, stroke[0].lon),
-        haversine_m(finish["lat"], finish["lon"], stroke[-1].lat, stroke[-1].lon),
-    )
-    reverse = (
-        haversine_m(start["lat"], start["lon"], stroke[-1].lat, stroke[-1].lon),
-        haversine_m(finish["lat"], finish["lon"], stroke[0].lat, stroke[0].lon),
-    )
-    endpoint_limit_m = 60.0
-    if max(reverse) < max(forward):
-        stroke = list(reversed(stroke))
-        forward = reverse
-    if forward[0] > endpoint_limit_m or forward[1] > endpoint_limit_m:
-        raise CourseError(
-            "코스 선이 이어지지 않았어요. 붉은 구간의 양 끝까지 선을 연결해야 저장할 수 있어요."
-        )
-    drawn_nodes = []
-    far_from_road = 0
-    for point in stroke_waypoints(stroke):
-        node, snap_m = graphmod.nearest_node(point[0], point[1])
-        # A waypoint that lands nowhere near a walkable way is dropped rather
-        # than fatal: the drawn line says roughly where to go, and one stray
-        # sample should not refuse the whole edit.
-        if node is None or snap_m > STROKE_SNAP_MAX_M:
-            far_from_road += 1
+
+def _connect_through(g, weight, start: int, waypoints: list[int],
+                     finish: int) -> list[int] | None:
+    """Walk start -> waypoints -> finish, skipping any stop that cannot be
+    reached. ``None`` only when even start -> finish has no walkable path."""
+    route: list[int] = []
+    cursor = start
+    for stop in [*waypoints, finish]:
+        if stop == cursor:
             continue
-        if not drawn_nodes or drawn_nodes[-1] != node:
-            drawn_nodes.append(node)
-    if far_from_road and not drawn_nodes:
-        raise CourseError(
-            "그린 선이 걸을 수 있는 길에서 너무 멀어요. "
-            "지도에 보이는 도로나 보도를 따라 그려 주세요.")
-
-    stops = [path[from_index], *drawn_nodes, path[to_index]]
-    weight = easy_route_weight(_routing_weight_for(params), prefer_named_walkways=True)
-    replacement: list[int] = []
-    # A waypoint can land on a node that no walkable way reaches -- a courtyard
-    # inside a building complex, say. Skipping it and carrying on to the next
-    # one costs a little of the drawn shape; failing the whole edit costs the
-    # runner everything they drew.
-    cursor = stops[0]
-    unreachable = 0
-    for stop in stops[1:]:
         try:
             segment = _route(g, weight, cursor, stop)
         except (nx.NetworkXNoPath, nx.NodeNotFound):
-            if stop is stops[-1]:
-                raise CourseError(
-                    "그린 선의 끝을 기존 코스로 잇는 보행로를 찾지 못했어요. "
-                    "지운 구간의 양 끝 가까이에서 시작하고 끝내 주세요.")
-            unreachable += 1
-            continue
-        replacement.extend(segment if not replacement else segment[1:])
+            continue          # this stop is unreachable; carry on to the next
+        route.extend(segment if not route else segment[1:])
         cursor = stop
-    if not stroke_is_doubled(stroke):
-        replacement = drop_backtracking(
-            replacement, _detour_nodes(g, drawn_nodes, path[from_index], path[to_index]))
-    edited_path = path[:from_index] + replacement + path[to_index + 1:]
-    return course_from_path(params, edited_path)
+    if cursor != finish:
+        return None
+    return route or [start]
+
+
+def snap_drawn_segment(params: CourseParams, path: list[int],
+                       from_index: int | None, to_index: int | None,
+                       stroke: list[CourseWaypoint]) -> Course:
+    """Rebuild the stretch of route the runner drew over.
+
+    Two rules, both learned the hard way:
+
+    *The drawn line only has to touch the course.* It used to have to land
+    within 60m of both ends of the erased gap, which made rubbing out a spur
+    and redrawing past it fail over and over -- the gap ends are exactly the
+    place a runner is trying to get away from. The span that gets replaced is
+    now read off wherever the stroke meets the green line, and the erased gap
+    is folded in so it cannot survive the edit.
+
+    *It does not refuse.* Editing is the whole point of the screen, so every
+    failure below degrades to the best course it can still build, and says what
+    it could not honour in ``course.note``.
+    """
+    course_from_path(params, path)
+    g = graphmod.get_graph()
+    last = len(path) - 2
+    gap = None
+    if from_index is not None and to_index is not None and 0 <= from_index < to_index <= last + 1:
+        gap = (from_index, min(to_index, last + 1))
+
+    note = ""
+    points = [(point.lat, point.lon) for point in stroke]
+    walked = sum(haversine_m(a[0], a[1], b[0], b[1])
+                 for a, b in zip(points, points[1:]))
+    if walked > STROKE_MAX_LENGTH_M:
+        # Trim rather than refuse: the head of the stroke is what the runner
+        # drew first and meant most.
+        kept, run = [points[0]], 0.0
+        for a, b in zip(points, points[1:]):
+            run += haversine_m(a[0], a[1], b[0], b[1])
+            if run > STROKE_MAX_LENGTH_M:
+                break
+            kept.append(b)
+        points = kept
+        note = (f"그린 선이 {walked / 1000:.1f}km로 너무 길어 "
+                f"앞쪽 {STROKE_MAX_LENGTH_M / 1000:.0f}km만 반영했어요.")
+
+    # Where the stroke meets the course decides what gets replaced.
+    span = gap
+    if len(points) >= 2:
+        head, head_d = nearest_route_index(g, path, *points[0])
+        tail, tail_d = nearest_route_index(g, path, *points[-1])
+        if head > tail:
+            points.reverse()
+            head, tail = tail, head
+            head_d, tail_d = tail_d, head_d
+        lo, hi = head, max(tail, head + 1)
+        if gap:
+            lo, hi = min(lo, gap[0]), max(hi, gap[1])
+        span = (lo, hi)
+        if min(head_d, tail_d) > STROKE_TOUCH_M:
+            note = note or (
+                "그린 선이 코스 선에서 조금 떨어져 있어 가장 가까운 지점에 이었어요.")
+    if not span:
+        raise CourseError(
+            "바꿀 구간을 찾지 못했어요. 지우개로 구간을 고르거나 코스 선 위에 그려 주세요.")
+
+    lo, hi = max(0, span[0]), min(last + 1, span[1])
+    if lo >= hi:
+        lo, hi = max(0, min(lo, last - 1)), min(last + 1, max(hi, lo + 1))
+    if hi - lo > max(400, (len(path) - 1) * 3 // 4):
+        hi = lo + max(400, (len(path) - 1) * 3 // 4)
+        note = note or "한 번에 바꿀 수 있는 만큼만 반영했어요."
+
+    drawn_nodes: list[int] = []
+    if len(points) >= 2:
+        for point in stroke_waypoints(
+                [CourseWaypoint(lat=lat, lon=lon) for lat, lon in points]):
+            node, snap_m = graphmod.nearest_node(point[0], point[1])
+            if node is None or snap_m > STROKE_SNAP_MAX_M:
+                continue
+            if not drawn_nodes or drawn_nodes[-1] != node:
+                drawn_nodes.append(node)
+
+    weight = easy_route_weight(_routing_weight_for(params), prefer_named_walkways=True)
+    replacement = _connect_through(g, weight, path[lo], drawn_nodes, path[hi])
+    if replacement is None:
+        # The drawn line cannot be honoured at all. Close the gap the eraser
+        # opened rather than hand back a broken route.
+        try:
+            closed = reroute_segment(params, path, lo, hi)
+            closed.note = ("그린 길로는 이을 수 없어 지운 자리를 다른 보행로로 "
+                           "이었어요.")
+            return closed
+        except CourseError:
+            unchanged = course_from_path(params, path)
+            unchanged.note = ("이 구간을 대신할 보행로가 없어 원래 코스를 그대로 "
+                              "두었어요. 다른 구간을 지워 보세요.")
+            return unchanged
+
+    # Trimming the router's own there-and-back is an improvement, not a
+    # requirement: on a route that already doubles back on itself it can cut a
+    # junction the rest of the path needs. Prefer the trimmed line, fall back
+    # to the untrimmed one, and only then give up on the drawing.
+    candidates = [replacement]
+    if drawn_nodes and not stroke_is_doubled(
+            [CourseWaypoint(lat=lat, lon=lon) for lat, lon in points]):
+        candidates.insert(0, drop_backtracking(
+            replacement, _detour_nodes(g, drawn_nodes, path[lo], path[hi])))
+    for candidate in candidates:
+        try:
+            course = course_from_path(params, path[:lo] + candidate + path[hi + 1:])
+        except CourseError:
+            continue
+        course.note = note or unreached_point_note(
+            g, course.path, points[:1] + points[-1:] if len(points) >= 2 else [])
+        return course
+    try:
+        closed = reroute_segment(params, path, lo, hi)
+        closed.note = "그린 길로는 이을 수 없어 지운 자리를 다른 보행로로 이었어요."
+        return closed
+    except CourseError:
+        unchanged = course_from_path(params, path)
+        unchanged.note = "그린 선을 코스로 만들지 못해 원래 코스를 그대로 두었어요."
+        return unchanged
 
 
 # A drawn line says where to go, not which junction to touch. Waypoints closer
@@ -713,6 +774,12 @@ STROKE_WAYPOINT_MIN_M = 140.0
 # Perpendicular deviation below which a drawn line counts as straight.
 STROKE_SIMPLIFY_TOLERANCE_M = 45.0
 STROKE_WAYPOINT_MAX = 8
+# A stroke longer than this is trimmed, never refused.
+STROKE_MAX_LENGTH_M = 6000.0
+# How close a drawn line has to come to the course before it counts
+# as having touched it. Beyond this it is still joined -- to the
+# nearest point -- and the runner is told that is what happened.
+STROKE_TOUCH_M = 45.0
 # How far a drawn waypoint may sit from a walkable way before it is ignored.
 # A finger is not a surveyor and a phone's GPS-free tap has real slop.
 STROKE_SNAP_MAX_M = 220.0

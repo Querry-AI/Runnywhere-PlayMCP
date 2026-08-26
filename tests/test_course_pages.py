@@ -140,12 +140,12 @@ def test_erasing_keeps_a_red_local_gap_without_rerouting():
     """The erased geometry stays as guidance until the runner draws and saves."""
     edit = _page(_course(), "edit")
 
-    assert 'id="selErase"' in edit and "지우기</button>" in edit
-    assert 'id="selBar"' not in edit
+    assert 'id="selErase"' not in edit and 'id="selBar"' not in edit
     assert "const replaceSelected" not in edit
     assert "const eraseSelection" in edit
     assert "action:'reroute'" not in edit
-    assert "selErase.addEventListener('click',eraseSelection)" in edit
+    # Erasing is what the one primary button does while a span is selected.
+    assert "if(action==='erase'){eraseSelection();return;}" in edit
     assert "gapRange=[...selectedRange];selectedRange=null" in edit
     assert "strokeColor:'#e5322e',strokeWeight:10,strokeOpacity:.32" in edit
 
@@ -206,8 +206,8 @@ def test_the_drawing_tool_keeps_freehand_local_until_walkable_preview():
     assert "action:'via'" not in edit and "action:'reroute'" not in edit
     assert "const previewDrawnRoute" in edit
     assert "action:'snap'" in edit
-    assert "if(gapRange){await previewDrawnRoute();return;}" in edit
-    assert "action:'save_draft'" not in edit
+    assert "if(action==='verify'){await previewDrawnRoute();return;}" in edit
+    assert "action:'save_draft'" in edit
     assert "const eraseAt" in edit
     assert "coordsFromContainerPoint" in edit
 
@@ -219,7 +219,7 @@ def test_each_freehand_stroke_is_one_undo_step_and_never_a_request():
     assert "undoStack.push(snapshot())" in edit
     assert "activeStroke=[coordsAt(point)];draftStrokes.push(activeStroke)" in edit
     assert "activeStroke.push(coordsAt(point))" in edit
-    assert "postEdit(" not in edit.split("const beginFreeDraw")[1].split("if(selErase)")[0]
+    assert "postEdit(" not in edit.split("const beginFreeDraw")[1].split("if(panTool)")[0]
 
 
 def test_editor_can_step_forward_again_after_stepping_back():

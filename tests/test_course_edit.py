@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from starlette.requests import Request
 
 from runart.course import CourseError, generate_course
+from runart.geo import haversine_m
 from runart.models import CourseParams, CourseWaypoint, decode_course_id, encode_course_id
 from runart.naming import course_title
 from runart.render import preview_html
@@ -193,7 +194,11 @@ def test_edit_endpoint_snaps_and_saves_a_connected_draft_only_on_save():
     assert saved.custom_name == "자유 드로잉런"
 
 
-def test_edit_endpoint_rejects_a_draft_that_does_not_touch_both_gap_ends():
+def test_a_draft_only_has_to_touch_the_course_not_the_erased_ends():
+    """Requiring the stroke to land within 60m of both ends of the erased gap
+    made the commonest edit impossible: rubbing out a spur and redrawing past
+    it, where the gap ends are exactly the place you are getting away from.
+    What gets replaced is read off wherever the stroke meets the green line."""
     source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
     cid = encode_course_id(source.params)
     response = asyncio.run(server.edit_course_route(_json_request(cid, {
@@ -201,16 +206,83 @@ def test_edit_endpoint_rejects_a_draft_that_does_not_touch_both_gap_ends():
         "path": source.path,
         "from_index": 10,
         "to_index": 40,
+        # Both ends land on the course, nowhere near index 10 or 40, and the
+        # middle bulges away from it.
         "stroke": [
             {"lat": source.points[20][0], "lon": source.points[20][1]},
+            {"lat": source.points[22][0] + 0.0012, "lon": source.points[22][1] + 0.0012},
             {"lat": source.points[25][0], "lon": source.points[25][1]},
         ],
     })))
     payload = json.loads(response.body)
 
-    assert response.status_code == 422
-    assert "이어지지 않았어요" in payload["error"]
-    assert "preview_url" not in payload
+    assert response.status_code == 200
+    assert "preview_url" in payload
+    saved = decode_course_id(payload["course_id"])
+    assert saved.manual_path[0] == saved.manual_path[-1]
+    # The erased gap is folded into the replaced span, so it cannot survive.
+    assert saved.manual_path != source.path
+    assert source.path[10:40] != saved.manual_path[10:40]
+
+
+def test_a_draft_saves_even_with_no_erased_span_at_all():
+    """A drawn line on its own is a complete instruction."""
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    cid = encode_course_id(source.params)
+    response = asyncio.run(server.edit_course_route(_json_request(cid, {
+        "action": "save_draft",
+        "path": source.path,
+        "stroke": [
+            {"lat": source.points[i][0], "lon": source.points[i][1]}
+            for i in (12, 16, 20, 24)
+        ],
+    })))
+    assert response.status_code == 200
+    assert "preview_url" in json.loads(response.body)
+
+
+def test_editing_never_refuses_the_runner():
+    """Free editing is the point of the screen. Every shortfall degrades to
+    the best course still buildable and explains itself in `note`; none of
+    them comes back as a refusal."""
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    cid = encode_course_id(source.params)
+    lat, lon = source.points[20]
+    strokes = {
+        "far from any road": [{"lat": lat + 0.004, "lon": lon + 0.004},
+                              {"lat": lat + 0.005, "lon": lon + 0.005}],
+        "a single repeated point": [{"lat": lat, "lon": lon},
+                                    {"lat": lat, "lon": lon}],
+        "drawn backwards": [{"lat": source.points[i][0], "lon": source.points[i][1]}
+                            for i in (30, 26, 22, 18)],
+        "wandering off and back": [{"lat": lat, "lon": lon},
+                                   {"lat": lat + 0.003, "lon": lon},
+                                   {"lat": source.points[28][0], "lon": source.points[28][1]}],
+    }
+    for label, stroke in strokes.items():
+        response = asyncio.run(server.edit_course_route(_json_request(cid, {
+            "action": "save_draft", "path": source.path,
+            "from_index": 10, "to_index": 40, "stroke": stroke,
+        })))
+        payload = json.loads(response.body)
+        assert response.status_code == 200, f"{label}: {payload.get('error')}"
+        assert "preview_url" in payload, label
+        # A no-op still has to say so rather than pretend it drew something.
+        assert "note" in payload, label
+
+
+def test_a_drawn_stroke_is_trimmed_rather_than_refused_for_being_long():
+    from runart.course import STROKE_MAX_LENGTH_M, snap_drawn_segment
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    # A stroke that walks the whole loop several times over.
+    stroke = [CourseWaypoint(lat=la, lon=lo)
+              for _ in range(4) for la, lo in source.points[::3]]
+    walked = sum(
+        haversine_m(a.lat, a.lon, b.lat, b.lon) for a, b in zip(stroke, stroke[1:]))
+    assert walked > STROKE_MAX_LENGTH_M
+    course = snap_drawn_segment(source.params, source.path, None, None, stroke)
+    assert course.path[0] == course.path[-1]
+    assert "너무 길어" in course.note
 
 
 def test_edit_endpoint_detaches_one_edge_and_reconnects_an_alternate_walkway():
@@ -275,7 +347,11 @@ def test_mobile_preview_uses_compact_summary_and_accessible_edit_controls():
     assert 'id="editUndo"' in page
     assert 'id="editRedo"' in page      # stepping back is reversible too
     assert 'class="edit-tool mode"' in page
-    assert '.edit-tools{position:absolute;z-index:950;left:12px;top:12px' in page
+    # Bottom-anchored, not a card over the top half of the map.
+    assert '.edit-tools{position:absolute;z-index:950;left:10px;right:10px' in page
+    assert 'bottom:calc(10px + env(safe-area-inset-bottom))' in page
+    assert 'id="editDistance"' not in page          # no readout row at all
+    assert 'edit-tools-head' not in page
     assert 'min-height:44px' in page
     assert 'edit-overlay' in page
     assert 'body.editing .view-toggle' in page
@@ -286,6 +362,10 @@ def test_mobile_preview_uses_compact_summary_and_accessible_edit_controls():
     # pointermove restarts the animation every frame and the map barely moves.
     assert "panByPixels(panCenter.x-next.x,panCenter.y-next.y)" in page
     assert "map.setCenter(projection.coordsFromContainerPoint(" in page
+    # Kakao's MapProjection snapshots the map when it is fetched, so it has to
+    # be read fresh or every conversion after the first pan is wrong.
+    assert "containerPointFromCoords:latlng=>map.getProjection()" in page
+    assert "coordsFromContainerPoint:point=>map.getProjection()" in page
     assert 'class="edit-bar"' not in page
     assert 'body.editing .edit-bar' not in page
 
@@ -357,45 +437,42 @@ def test_edit_toast_distinguishes_blocking_errors_from_transient_hints():
     assert "label:'닫기'" in page
 
 
-def test_edit_marks_the_distance_as_incomplete_until_save():
-    """A freehand draft is not a generated route and must not claim a new distance."""
+def test_the_editor_shows_no_distance_readout_of_its_own():
+    """The header row -- 코스 편집, a status chip, 거리 · 미완성 -- was the top
+    third of a card that already covered half the map, and the distance it
+    showed is on the card below the map anyway."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
-    assert 'id="editDistance"' in page
-    assert "gapRange ? ' · 미완성' : ''" in page
-    assert "editDistance.dataset.state = gapRange ? 'open' : 'complete'" in page
-    assert "body.editing .edit-distance{display:flex}" in page
-    # Undo restores the original route distance together with the local draft.
+    assert 'id="editDistance"' not in page
+    assert 'id="editDraftState"' not in page
+    assert "' · 미완성'" not in page
+    assert "'연결 필요'" not in page and "'경로 확인 필요'" not in page
+    assert "edit-tools-head" not in page
+    assert '<strong>코스 편집</strong>' not in page
+    # The distance still lives where a runner reads the course: under the map.
+    assert 'id="mLength"' in page
+    # Undo restores the route distance together with the local draft.
     assert "km:editLengthKm" in page
 
 
-def test_edit_blocks_duplicate_requests_while_one_is_in_flight():
-    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    page = preview_html(course, [], "https://runnywhere.example", page="edit")
-
-    assert "setEditBusy" in page
-    assert "editBusy" in page
-    # every entry point guards on the busy flag
-    assert "if(editBusy)return" in page                        # setMode
-    assert "if(editBusy||!selectedRange)return" in page       # replaceSelected
-    assert "if(!editing||editBusy)return" in page              # save
-    # Pointerdown also powers the mobile 지도 이동 surface now; it still
-    # rejects every gesture while a save request is in flight.
-    assert "if(!editing||editBusy)return" in page              # pointerdown
-
-
-def test_edit_toolbar_groups_labelled_modes_and_actions():
-    """Editing modes and result actions are visibly named and separated."""
+def test_edit_toolbar_names_its_modes_and_keeps_the_map(monkeypatch=None):
+    """Three named modes in a segmented pill at the bottom, undo/redo/reset as
+    icon-only buttons in the corner stack -- AllTrails' route editor, where the
+    map keeps the screen and one primary button carries the decision."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     assert 'class="edit-mode-group" role="group" aria-label="편집 방식"' in page
-    assert 'class="edit-action-group" role="group" aria-label="편집 작업"' in page
-    for label in ("지도 이동", "지우기", "선 그리기", "실행 취소",
-                  "다시 실행", "초기화", "저장"):
+    assert 'class="edit-action-group"' not in page
+    for label in ("지도 이동", "지우기", "그리기"):
         assert f'<span>{label}</span>' in page
-    assert '.edit-tool.save{border-color:#087b59;background:#087b59;color:#fff}' in page
+    # The three quiet actions carry no visible label, only an accessible one.
+    assert 'class="edit-quick" role="group" aria-label="편집 되돌리기"' in page
+    for aria in ("마지막 수정 실행 취소", "되돌린 수정 다시 실행", "모든 수정 초기화"):
+        assert f'aria-label="{aria}"' in page
+    assert "<span>실행 취소</span>" not in page
+    assert ".edit-primary{" in page
 
 
 def test_edit_tools_have_visible_44px_tap_targets():
@@ -427,6 +504,10 @@ def test_mobile_map_gestures_and_facility_taps_do_not_conflict():
     # pointermove restarts the animation every frame and the map barely moves.
     assert "panByPixels(panCenter.x-next.x,panCenter.y-next.y)" in page
     assert "map.setCenter(projection.coordsFromContainerPoint(" in page
+    # Kakao's MapProjection snapshots the map when it is fetched, so it has to
+    # be read fresh or every conversion after the first pan is wrong.
+    assert "containerPointFromCoords:latlng=>map.getProjection()" in page
+    assert "coordsFromContainerPoint:point=>map.getProjection()" in page
     # Facility markers distinguish a short tap from a drag and use Kakao's own
     # propagation guard rather than relying on DOM bubbling alone.
     assert "const FACILITY_TAP_SLOP = 8" in page
@@ -458,7 +539,11 @@ def test_editor_erases_a_swept_range_and_draws_its_replacement():
     assert "const eraseAt" in page
     # The prompt became a hint and the action became a button beside it.
     assert "지울 구간을 골랐어요. 선택 구간 지우기를 누르세요." in page
-    assert 'id="selErase"' in page
+    # The action moved into the one primary button, the way 저장 becomes
+    # 도보 경로 확인. A separate pill floating over the map was a second place
+    # to look for the decision.
+    assert 'id="selErase"' not in page
+    assert "action==='erase'?'선택 구간 지우기'" in page
     assert "strokeColor:'#e0522d'" in page
     assert 'class="edit-anchor" data-end=' in page
     # Erasing leaves the exact old geometry as translucent red guidance.
@@ -470,7 +555,8 @@ def test_editor_erases_a_swept_range_and_draws_its_replacement():
     assert "const appendFreeDraw" in page
     assert "const previewDrawnRoute" in page
     assert "action:'snap'" in page
-    assert "action:'save_draft'" not in page
+    # Saving an unconfirmed sketch snaps it on the way rather than refusing.
+    assert "action:'save_draft'" in page
 
 
 def test_revert_is_undoable_and_separated_from_save():
@@ -484,9 +570,9 @@ def test_revert_is_undoable_and_separated_from_save():
     assert "setEditDistance(initialLengthKm)" in page
     assert "clearDraft();undoStack=[];redoStack=[];editMode=null;applyMode();" in page
     assert "setEditing(false)" not in page
-    # Save is the only filled action; reset remains a quieter warning action.
-    assert ".edit-tool.reset{color:#8b3a31}" in page
-    assert ".edit-tool.save{border-color:#087b59;background:#087b59;color:#fff}" in page
+    # Save is the only filled action; reset is a quiet icon in the corner stack.
+    assert ".edit-quick-btn.reset{color:#a23c31}" in page
+    assert ".edit-primary{" in page and "background:#087b59" in page
     # and no confirmation dialog was introduced
     assert "confirm(" not in page
 
@@ -523,8 +609,7 @@ def test_detail_panels_remain_on_the_last_valid_route_while_drafting():
     page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
     # every element the summary rewrites has to be addressable
-    for element_id in ("courseTitle", "courseBadges", "mLength", "mDuration", "mAscent",
-                       "editDistance"):
+    for element_id in ("courseTitle", "courseBadges", "mLength", "mDuration", "mAscent"):
         assert f'id="{element_id}"' in page, element_id
     assert "const initialSummary =" in page
     # Undo and reset restore the last valid summary together with the line.
@@ -988,14 +1073,35 @@ def test_a_replacement_that_cannot_differ_says_why():
     assert _unchanged_note(same, [1, 5, 4]) == ""
 
 
-def test_the_editor_blocks_an_unconnected_draft_before_naming_or_saving():
+def test_the_editor_never_blocks_a_draft_for_where_it_was_drawn():
+    """Free editing is the point of the screen. A sketch that does not reach
+    the ends of the erased gap is joined to the course where it does touch,
+    and one that was never confirmed is snapped on the way to being saved."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
-    assert "const connection=draftConnection()" in page
-    assert "if(!gapRange||!connection.ok)" in page
-    assert "코스 선이 이어지지 않았어요" in page
-    assert "if(gapRange){await previewDrawnRoute();return;}" in page
+    assert "draftConnection" not in page
+    assert "코스 선이 이어지지 않았어요" not in page
+    assert "먼저 도보 경로를 확인해 주세요" not in page
+    assert "먼저 지우기로 바꿀 구간을 붉게 표시해 주세요" not in page
+    # The gap travels as a hint; the span comes from where the stroke landed.
+    assert "if(gapRange){body.from_index=gapRange[0];body.to_index=gapRange[1];}" in page
+    assert "const draftStroke" in page
+
+
+def test_the_primary_button_is_whatever_the_editor_is_in_the_middle_of():
+    """One decision at a time, in one place, coloured by what it does:
+    red to erase, blue to confirm a sketch, green to save."""
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example", page="edit")
+
+    assert 'id="editSave" class="edit-primary"' in page
+    assert "const syncPrimary" in page
+    assert "selectedRange?'erase':(gapRange||drawn)?'verify':'save'" in page
+    assert "action==='erase'?'선택 구간 지우기':action==='verify'?'도보 경로 확인':'저장'" in page
+    assert '.edit-primary[data-action="erase"]{background:#c0392b' in page
+    assert '.edit-primary[data-action="verify"]{background:#1668dc' in page
+    assert "if(action==='erase'){eraseSelection();return;}" in page
 
 
 # ---------------------------------------------------------------------------
