@@ -380,7 +380,9 @@ def test_edit_blocks_duplicate_requests_while_one_is_in_flight():
     assert "if(editBusy)return" in page                        # setMode
     assert "if(editBusy||!selectedRange)return" in page       # replaceSelected
     assert "if(!editing||editBusy)return" in page              # save
-    assert "!editing||!editMode||editMode==='pan'||editBusy" in page  # pointerdown
+    # Pointerdown also powers the mobile 지도 이동 surface now; it still
+    # rejects every gesture while a save request is in flight.
+    assert "if(!editing||editBusy)return" in page              # pointerdown
 
 
 def test_edit_toolbar_groups_labelled_modes_and_actions():
@@ -463,10 +465,12 @@ def test_editor_erases_a_swept_range_and_draws_its_replacement():
     assert "strokeColor:'#e5322e',strokeWeight:10,strokeOpacity:.32" in page
     assert "const eraseSelection" in page
     assert "action:'reroute'" not in page and "action:'via'" not in page
-    # Drawing is local freehand and only the save request carries the stroke.
+    # Drawing is local freehand until an explicit walkable preview request.
     assert "const beginFreeDraw" in page
     assert "const appendFreeDraw" in page
-    assert "action:'save_draft'" in page
+    assert "const previewDrawnRoute" in page
+    assert "action:'snap'" in page
+    assert "action:'save_draft'" not in page
 
 
 def test_revert_is_undoable_and_separated_from_save():
@@ -526,7 +530,10 @@ def test_detail_panels_remain_on_the_last_valid_route_while_drafting():
     # Undo and reset restore the last valid summary together with the line.
     assert "applySummary(state.summary)" in page
     assert "applySummary(initialSummary)" in page
-    assert "applySummary(payload.summary)" not in page
+    # The unfinished guide does not touch the metrics; only the server-snapped
+    # walkable preview becomes the new valid route summary.
+    assert "const previewDrawnRoute" in page
+    assert "setEditDistance(payload.length_km);applySummary(payload.summary)" in page
 
 
 def test_edit_summary_matches_what_a_full_page_load_shows():
@@ -985,9 +992,10 @@ def test_the_editor_blocks_an_unconnected_draft_before_naming_or_saving():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
-    assert "if(gapRange&&!connection.ok)" in page
+    assert "const connection=draftConnection()" in page
+    assert "if(!gapRange||!connection.ok)" in page
     assert "코스 선이 이어지지 않았어요" in page
-    assert "action:'save_draft'" in page
+    assert "if(gapRange){await previewDrawnRoute();return;}" in page
 
 
 # ---------------------------------------------------------------------------

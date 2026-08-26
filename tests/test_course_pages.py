@@ -192,7 +192,7 @@ def test_info_page_does_not_carry_the_other_apps_box():
     assert "다른 앱으로 달리기" in _page(_course(), "run")
 
 
-def test_the_drawing_tool_keeps_freehand_local_until_save():
+def test_the_drawing_tool_keeps_freehand_local_until_walkable_preview():
     """Drawing may remain incomplete and must not generate a route mid-gesture."""
     edit = _page(_course(), "edit")
 
@@ -204,7 +204,10 @@ def test_the_drawing_tool_keeps_freehand_local_until_save():
     assert "const appendFreeDraw" in edit
     assert "const endFreeDraw" in edit
     assert "action:'via'" not in edit and "action:'reroute'" not in edit
-    assert "action:'save_draft'" in edit
+    assert "const previewDrawnRoute" in edit
+    assert "action:'snap'" in edit
+    assert "if(gapRange){await previewDrawnRoute();return;}" in edit
+    assert "action:'save_draft'" not in edit
     assert "const eraseAt" in edit
     assert "coordsFromContainerPoint" in edit
 
@@ -247,6 +250,17 @@ def test_tools_take_the_map_out_of_drag_while_they_are_active():
 
     assert "editMode === 'erase' || editMode === 'draw'" in edit
     assert "editMode === 'segment'" not in edit
+
+
+def test_mobile_editor_has_a_dedicated_one_finger_pan_surface():
+    """Kakao can lose its internal drag target after editor overlays mount on
+    mobile, so 지도 이동 must not depend on the SDK receiving the gesture."""
+    edit = _page(_course(), "edit")
+
+    assert "mobile-edit-pan:not(.tool-active) .edit-overlay" in edit
+    assert "navigator.maxTouchPoints>0" in edit
+    assert "if(!editMode){" in edit
+    assert "panByPixels(previous.x-point.x,previous.y-point.y)" in edit
 
 
 @pytest.mark.parametrize("page", COURSE_PAGES)

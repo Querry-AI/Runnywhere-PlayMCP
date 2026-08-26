@@ -123,6 +123,32 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
 
   // ---- 5. the editor draws the real street geometry ----
   {
+    const { p, errors } = await page(browser, 'harness.html');
+    const moved = await p.evaluate(() => {
+      const overlay = document.getElementById('editOverlay');
+      overlay.setPointerCapture = () => {};
+      const before = window.__map.centerCount || 0;
+      const fire = (type, x, y) => overlay.dispatchEvent(new PointerEvent(type, {
+        pointerId: 2, pointerType: 'touch', bubbles: true, clientX: x, clientY: y }));
+      fire('pointerdown', 180, 260);
+      fire('pointermove', 210, 285);
+      fire('pointermove', 245, 310);
+      fire('pointerup', 245, 310);
+      return {
+        centers: (window.__map.centerCount || 0) - before,
+        panPressed: document.getElementById('panTool').getAttribute('aria-pressed'),
+        toolActive: document.body.classList.contains('tool-active')
+      };
+    });
+    check('edit: one-finger drag pans in map-move mode',
+      moved.centers >= 2 && moved.panPressed === 'true' && moved.toolActive === false,
+      JSON.stringify(moved));
+    check('edit: mobile map drag has no page errors', errors.length === 0, errors.join(' | '));
+    await p.close();
+  }
+
+  // ---- 6. the editor draws the real street geometry ----
+  {
     const { p } = await page(browser, 'harness.html');
     const info = await p.evaluate(() => ({
       nodes: initialEditPath.length,
@@ -268,7 +294,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       return { pressed, draggable, sent, strokes:(window.__lines || []).filter(
           l=>l._map&&l._o.strokeColor==='#1668dc').length,
         bluePoints:blue ? blue._o.path.length : 0,
-        connection:state==='저장 가능',
+        connection:state==='경로 확인 필요',
         joins:bp&&rp?[metres(bp[0],rp[0]),metres(bp[bp.length-1],rp[rp.length-1])]:[],
         distance:document.getElementById('editDistance').textContent,
         state };
@@ -280,8 +306,8 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     check('drawing makes no request before save', out.sent.length === 0, JSON.stringify(out.sent));
     check('the exact freehand stroke remains visible',
       out.strokes === 1 && out.bluePoints >= 5, JSON.stringify(out));
-    check('a stroke touching both red ends becomes save-ready',
-      out.connection === true && out.state === '저장 가능', JSON.stringify(out));
+    check('a stroke touching both red ends becomes preview-ready',
+      out.connection === true && out.state === '경로 확인 필요', JSON.stringify(out));
     check('drafting never invents a new distance', /미완성/.test(out.distance), out.distance);
     check('no page errors while drawing', errors.length === 0, errors.join(' | '));
     await p.close();
@@ -317,11 +343,11 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       const state=()=>document.getElementById('editDraftState').textContent;
       const strokes=()=>(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#1668dc').length;
       const hasGap=()=>(window.__lines||[]).some(l=>l._map&&l._o.strokeColor==='#e5322e');
-      const before={strokes:strokes(),ready:state()==='저장 가능'};
+      const before={strokes:strokes(),ready:state()==='경로 확인 필요'};
       document.getElementById('editUndo').click();
-      const afterOne={strokes:strokes(),ready:state()==='저장 가능'};
+      const afterOne={strokes:strokes(),ready:state()==='경로 확인 필요'};
       document.getElementById('editUndo').click();
-      const afterTwo={strokes:strokes(),ready:state()==='저장 가능',gap:hasGap()};
+      const afterTwo={strokes:strokes(),ready:state()==='경로 확인 필요',gap:hasGap()};
       return {before,afterOne,afterTwo};
     });
     check('separate strokes can complete one route draft',
@@ -390,14 +416,23 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   }
   {
     const { p } = await page(browser, 'harness.html');
-    const sent = await p.evaluate(async () => {
+    const flow = await p.evaluate(async () => {
       const overlay=document.getElementById('editOverlay');overlay.setPointerCapture=()=>{};
       const proj=window.__map.getProjection();
       const at=i=>{const s=proj.containerPointFromCoords(new kakao.maps.LatLng(initialEditPath[i][1],initialEditPath[i][2]));return {x:s.x,y:s.y};};
       const fire=(type,pt)=>overlay.dispatchEvent(new PointerEvent(type,{pointerId:12,bubbles:true,
         clientX:overlay.getBoundingClientRect().left+pt.x,clientY:overlay.getBoundingClientRect().top+pt.y}));
-      let body=null;
-      window.fetch=async(url,opts)=>{body=JSON.parse(opts.body);return {ok:true,json:async()=>({preview_url:'#saved'})};};
+      const bodies=[];
+      window.fetch=async(url,opts)=>{
+        const body=JSON.parse(opts.body);bodies.push(body);
+        if(body.action==='snap')return {ok:true,json:async()=>({
+          path:initialEditPath,geometry:initialEditGeometry,length_km:5.31,summary:{
+            course_id:'preview',title:'5.3km 도보 미리보기',name_placeholder:'도보 미리보기런',
+            length_km:5.31,ascent_m:40,elev_range:[10,30],signals:5,
+            facility_counts:{convenience_store:3,restroom:1},facility_rows:[],
+            traits:[],highlights:[],cautions:[],badges:[]}})};
+        return {ok:true,json:async()=>({preview_url:'#saved'})};
+      };
       document.getElementById('eraserTool').click();
       fire('pointerdown',at(10));fire('pointermove',at(15));fire('pointerup',at(20));
       document.getElementById('selErase').click();
@@ -410,15 +445,30 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       fire('pointermove',{x:(start.x+end.x)/2,y:(start.y+end.y)/2});
       fire('pointerup',end);
       document.getElementById('editSave').click();
+      await new Promise(r => setTimeout(r, 80));
+      const preview={
+        sheetHidden:document.getElementById('nameSheet').hidden,
+        state:document.getElementById('editDraftState').textContent,
+        label:document.getElementById('editSaveLabel').textContent,
+        error:document.getElementById('editToastText').textContent,
+        blue:(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#1668dc').length,
+        red:(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#e5322e').length
+      };
+      document.getElementById('editSave').click();
       const input = document.getElementById('nameSheetInput');
       input.value = 'AA런';
       document.getElementById('nameSheetSave').click();
       await new Promise(r => setTimeout(r, 120));
-      return body;
+      return {bodies,preview};
     });
-    check('a connected draft is generated only in the save request',
-      sent && sent.action === 'save_draft' && sent.stroke.length >= 2 && sent.name === 'AA런',
-      JSON.stringify(sent));
+    check('a connected draft previews a walkable route before naming',
+      flow.bodies[0] && flow.bodies[0].action === 'snap' && flow.bodies[0].stroke.length >= 2 &&
+      flow.preview.sheetHidden === true && flow.preview.state === '경로 확인됨' &&
+      flow.preview.label === '저장' && flow.preview.blue === 0 && flow.preview.red === 0,
+      JSON.stringify(flow));
+    check('only the reviewed snapped path is saved with a name',
+      flow.bodies[1] && flow.bodies[1].action === 'save' &&
+      !('stroke' in flow.bodies[1]) && flow.bodies[1].name === 'AA런', JSON.stringify(flow.bodies));
     await p.close();
   }
 
@@ -462,7 +512,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       out.reset.editing && out.reset.gap === false && out.reset.strokes === 0 &&
       out.reset.distance === out.original && out.reset.state === '편집 준비', JSON.stringify(out));
     check('undoing reset restores the red gap and freehand stroke',
-      out.restored.gap && out.restored.strokes === out.drafted.strokes && out.restored.state === '저장 가능',
+      out.restored.gap && out.restored.strokes === out.drafted.strokes && out.restored.state === '경로 확인 필요',
       JSON.stringify(out));
     check('no page errors while resetting', errors.length === 0, errors.join(' | '));
     await p.close();

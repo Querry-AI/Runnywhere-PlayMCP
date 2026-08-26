@@ -450,7 +450,7 @@ def _edit_chrome_html() -> str:
     "코스 편집" button pinned to the map, which is how the map came to hold an
     edit toolbar, a tracking control and a view switch at the same time.
     """
-    return """<svg id="editOverlay" class="edit-overlay" aria-hidden="true"></svg><div class="edit-tools" role="toolbar" aria-label="코스 편집 도구"><div class="edit-tools-head"><div class="edit-tools-title"><strong>코스 편집</strong><span id="editDraftState" class="edit-draft-state">편집 준비</span></div><div id="editDistance" class="edit-distance" aria-label="수정 중인 코스 거리"></div></div><div class="edit-mode-group" role="group" aria-label="편집 방식"><button id="panTool" class="edit-tool mode" type="button" aria-label="지도 이동" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 11V6.5a1.5 1.5 0 0 1 3 0V10 5.5a1.5 1.5 0 0 1 3 0V10 7a1.5 1.5 0 0 1 3 0v4-2a1.5 1.5 0 0 1 3 0v4.5c0 4.4-3 7.5-7.3 7.5H12c-2.4 0-4.1-1-5.5-2.8L3.8 15a1.7 1.7 0 0 1 2.6-2.2L8.5 15"/></svg><span>지도 이동</span></button><button id="eraserTool" class="edit-tool mode" type="button" aria-label="지우개 · 코스 선을 문질러 지우기" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15.5 4.5 4 4a2 2 0 0 1 0 2.8l-7.7 7.7H7.5l-3-3a2 2 0 0 1 0-2.8l8.2-8.7a2 2 0 0 1 2.8 0Z"/><path d="m9 9 6 6M12 19h8"/></svg><span>지우기</span></button><button id="drawTool" class="edit-tool mode" type="button" aria-label="그리기 · 지운 구간을 자유롭게 이어 그리기" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5.5 4 4M4 20l3.8-.8L19 8a2.1 2.1 0 0 0-3-3L4.8 16.2 4 20Z"/><path d="M12.5 7.5l4 4"/></svg><span>선 그리기</span></button></div><div class="edit-action-group" role="group" aria-label="편집 작업"><button id="editUndo" class="edit-tool action" type="button" aria-label="마지막 수정 실행 취소" title="한 번 되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 7-4 4 4 4"/><path d="M5 11h8a6 6 0 0 1 6 6v1"/></svg><span>실행 취소</span></button><button id="editRedo" class="edit-tool action" type="button" aria-label="되돌린 수정 다시 실행" title="다시 실행"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 7 4 4-4 4"/><path d="M19 11h-8a6 6 0 0 0-6 6v1"/></svg><span>다시 실행</span></button><button id="editCancel" class="edit-tool action reset" type="button" aria-label="모든 수정 초기화" title="전체 초기화"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"/><path d="M4 4v4.6h4.6"/></svg><span>초기화</span></button><button id="editSave" class="edit-tool action save" type="button" aria-label="수정한 코스를 새 코스로 저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><span>저장</span></button></div></div><button class="sel-erase" id="selErase" type="button" hidden>선택 구간 지우기</button><div id="editToast" class="edit-toast" role="status" aria-live="polite" data-tone="info" hidden><span class="edit-toast-spin" aria-hidden="true"></span><span id="editToastText" class="edit-toast-text"></span><button id="editToastAction" class="edit-toast-action" type="button" hidden></button></div><div id="nameSheet" class="name-sheet" role="dialog" aria-modal="true" aria-labelledby="nameSheetTitle" hidden><div class="name-sheet-card"><h2 id="nameSheetTitle">코스 이름을 지어 주세요</h2><p id="nameSheetHint">비워 두면 지금 이름 그대로 저장돼요.</p><input id="nameSheetInput" class="name-sheet-input" type="text" maxlength="24" autocomplete="off" enterkeyhint="done" aria-labelledby="nameSheetTitle" aria-describedby="nameSheetHint"><div class="name-sheet-actions"><button id="nameSheetCancel" class="name-sheet-btn ghost" type="button">취소</button><button id="nameSheetSave" class="name-sheet-btn" type="button">저장</button></div></div></div></div>"""
+    return """<svg id="editOverlay" class="edit-overlay" aria-hidden="true"></svg><div class="edit-tools" role="toolbar" aria-label="코스 편집 도구"><div class="edit-tools-head"><div class="edit-tools-title"><strong>코스 편집</strong><span id="editDraftState" class="edit-draft-state">편집 준비</span></div><div id="editDistance" class="edit-distance" aria-label="수정 중인 코스 거리"></div></div><div class="edit-mode-group" role="group" aria-label="편집 방식"><button id="panTool" class="edit-tool mode" type="button" aria-label="지도 이동" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 11V6.5a1.5 1.5 0 0 1 3 0V10 5.5a1.5 1.5 0 0 1 3 0V10 7a1.5 1.5 0 0 1 3 0v4-2a1.5 1.5 0 0 1 3 0v4.5c0 4.4-3 7.5-7.3 7.5H12c-2.4 0-4.1-1-5.5-2.8L3.8 15a1.7 1.7 0 0 1 2.6-2.2L8.5 15"/></svg><span>지도 이동</span></button><button id="eraserTool" class="edit-tool mode" type="button" aria-label="지우개 · 코스 선을 문질러 지우기" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15.5 4.5 4 4a2 2 0 0 1 0 2.8l-7.7 7.7H7.5l-3-3a2 2 0 0 1 0-2.8l8.2-8.7a2 2 0 0 1 2.8 0Z"/><path d="m9 9 6 6M12 19h8"/></svg><span>지우기</span></button><button id="drawTool" class="edit-tool mode" type="button" aria-label="그리기 · 지운 구간을 도보 경로로 이어 그리기" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5.5 4 4M4 20l3.8-.8L19 8a2.1 2.1 0 0 0-3-3L4.8 16.2 4 20Z"/><path d="M12.5 7.5l4 4"/></svg><span>선 그리기</span></button></div><div class="edit-action-group" role="group" aria-label="편집 작업"><button id="editUndo" class="edit-tool action" type="button" aria-label="마지막 수정 실행 취소" title="한 번 되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 7-4 4 4 4"/><path d="M5 11h8a6 6 0 0 1 6 6v1"/></svg><span>실행 취소</span></button><button id="editRedo" class="edit-tool action" type="button" aria-label="되돌린 수정 다시 실행" title="다시 실행"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 7 4 4-4 4"/><path d="M19 11h-8a6 6 0 0 0-6 6v1"/></svg><span>다시 실행</span></button><button id="editCancel" class="edit-tool action reset" type="button" aria-label="모든 수정 초기화" title="전체 초기화"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"/><path d="M4 4v4.6h4.6"/></svg><span>초기화</span></button><button id="editSave" class="edit-tool action save" type="button" aria-label="도보 경로를 확인하거나 코스를 저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><span id="editSaveLabel">저장</span></button></div></div><button class="sel-erase" id="selErase" type="button" hidden>선택 구간 지우기</button><div id="editToast" class="edit-toast" role="status" aria-live="polite" data-tone="info" hidden><span class="edit-toast-spin" aria-hidden="true"></span><span id="editToastText" class="edit-toast-text"></span><button id="editToastAction" class="edit-toast-action" type="button" hidden></button></div><div id="nameSheet" class="name-sheet" role="dialog" aria-modal="true" aria-labelledby="nameSheetTitle" hidden><div class="name-sheet-card"><h2 id="nameSheetTitle">코스 이름을 지어 주세요</h2><p id="nameSheetHint">비워 두면 지금 이름 그대로 저장돼요.</p><input id="nameSheetInput" class="name-sheet-input" type="text" maxlength="24" autocomplete="off" enterkeyhint="done" aria-labelledby="nameSheetTitle" aria-describedby="nameSheetHint"><div class="name-sheet-actions"><button id="nameSheetCancel" class="name-sheet-btn ghost" type="button">취소</button><button id="nameSheetSave" class="name-sheet-btn" type="button">저장</button></div></div></div></div>"""
 
 
 def _tab_bar_html(base_url: str, cid: str, page: str) -> str:
@@ -832,7 +832,8 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .edit-draft-state{{padding:3px 7px;border-radius:999px;background:#f0f3f0;color:#657168;
       font-size:10.5px;font-weight:750;line-height:1.3;word-break:keep-all}}
  .edit-draft-state[data-state="open"]{{background:#fff0ee;color:#a23c31}}
- .edit-draft-state[data-state="ready"]{{background:#e9f6ef;color:#087b59}}
+ .edit-draft-state[data-state="ready"]{{background:#eef4ff;color:#205ca8}}
+ .edit-draft-state[data-state="verified"]{{background:#e9f6ef;color:#087b59}}
  .edit-mode-group,.edit-action-group{{display:grid;gap:6px}}
  .edit-mode-group{{grid-template-columns:repeat(3,minmax(0,1fr));padding:4px;border-radius:12px;background:#eef2ed}}
  .edit-action-group{{grid-template-columns:repeat(4,minmax(0,1fr));margin-top:8px}}
@@ -853,6 +854,11 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
     unless the segment tool is actually selected. */
  .edit-overlay{{position:absolute;z-index:930;inset:0;width:100%;height:100%;touch-action:none;pointer-events:none;display:none}}
  body.editing.tool-active .edit-overlay{{display:block}}
+ /* Kakao's internal drag target intermittently loses one-finger pointer
+    movement on mobile once the editor layers are mounted.  On coarse-pointer
+    devices the same SVG becomes a dedicated pan surface while 지도 이동 is
+    selected; the script below moves the map centre directly under the finger. */
+ body.editing.mobile-edit-pan:not(.tool-active) .edit-overlay{{display:block;pointer-events:auto}}
  /* Non-blocking edit feedback: one line pinned to the map's bottom edge so the
     route area stays clear (the large overlay panel was removed in f69e246). */
  .edit-toast{{position:absolute;z-index:960;left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));
@@ -1053,6 +1059,16 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  @media (max-width:760px){{.brand{{height:48px;padding:0 16px}}
       .facts{{gap:6px}}.fact{{padding:11px 8px}}.fact b{{font-size:17px}}.fact span{{font-size:12px}}
       #map{{height:clamp(280px,42svh,380px);min-height:0}}
+      .edit-tools{{left:8px;top:8px;width:calc(100% - 16px);padding:8px;border-radius:12px}}
+      .edit-tools-head{{min-height:22px;margin-bottom:5px;gap:6px}}
+      .edit-tools-head strong{{display:none}}
+      .edit-tools-title{{gap:4px}}.edit-draft-state{{padding:2px 6px;font-size:10px}}
+      .edit-mode-group{{gap:2px;padding:2px;border-radius:10px}}
+      .edit-action-group{{grid-template-columns:44px 44px 44px minmax(0,1fr);gap:4px;margin-top:5px}}
+      .edit-tool{{min-height:44px;padding:0 6px;font-size:11px;gap:4px}}
+      .edit-action-group .edit-tool:not(.save) span{{display:none}}
+      .edit-action-group .edit-tool:not(.save){{padding:0}}
+      .edit-distance{{min-height:24px;padding:0 7px;font-size:11px}}
       .view-toggle{{right:10px;top:10px}}
       .course-head{{gap:8px}}.badge{{width:28px;height:28px;font-size:15px}}
       .badge-tip{{max-width:calc(100vw - 52px)}}
@@ -1109,6 +1125,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const editOverlay = document.getElementById('editOverlay');
  const editCancel = document.getElementById('editCancel');
  const editSave = document.getElementById('editSave');
+ const editSaveLabel = document.getElementById('editSaveLabel');
  const panTool = document.getElementById('panTool');
  const eraserTool = document.getElementById('eraserTool');
  const drawTool = document.getElementById('drawTool');
@@ -1316,11 +1333,12 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  // Per-edge OSM shape points, parallel to the edges of editNodes.
  let editGeom = initialEditGeometry.slice();
  let selectedRange = null, gapRange = null;
- // Freehand strokes stay local until save. Lifting a finger starts another
- // stroke rather than asking the server to invent a route immediately.
+ // Freehand strokes stay local until the runner explicitly asks to preview a
+ // walkable route. Lifting a finger merely starts another guide stroke.
  let draftStrokes = [], activeStroke = null;
+ let routePreviewReady = false;
  const clearDraft = () => {{
-   selectedRange=null;gapRange=null;draftStrokes=[];activeStroke=null;
+   selectedRange=null;gapRange=null;draftStrokes=[];activeStroke=null;routePreviewReady=false;
  }};
  let undoStack = [], redoStack = [];
  let draftLines = [];
@@ -1593,10 +1611,12 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const snapshot = () => ({{nodes:editNodes.map(point=>[...point]),geom:editGeom.slice(),
    km:editLengthKm,summary:currentSummary,
    selected:selectedRange?[...selectedRange]:null,gap:gapRange?[...gapRange]:null,
-   strokes:draftStrokes.map(stroke=>stroke.map(point=>({{...point}})) )}});
+   strokes:draftStrokes.map(stroke=>stroke.map(point=>({{...point}})) ),
+   previewReady:routePreviewReady}});
  const restore = state => {{editNodes=state.nodes.map(point=>[...point]);editGeom=state.geom.slice();
    selectedRange=state.selected?[...state.selected]:null;gapRange=state.gap?[...state.gap]:null;
    draftStrokes=(state.strokes||[]).map(stroke=>stroke.map(point=>({{...point}})) );activeStroke=null;
+   routePreviewReady=Boolean(state.previewReady);
    setEditDistance(state.km);applySummary(state.summary);renderDraft();}};
  const metresBetween = (a,b) => {{
    const dy=(b.lat-a.lat)*111320;
@@ -1625,9 +1645,10 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const syncDraftState = () => {{
    if(!editDraftState)return;
    const connection=draftConnection();
-   const state=selectedRange?'selecting':gapRange?(connection.ok?'ready':'open'):'idle';
+   const state=routePreviewReady?'verified':selectedRange?'selecting':gapRange?(connection.ok?'ready':'open'):'idle';
    editDraftState.dataset.state=state;
-   editDraftState.textContent=state==='selecting'?'구간 선택 중':state==='ready'?'저장 가능':state==='open'?'연결 필요':'편집 준비';
+   editDraftState.textContent=state==='verified'?'경로 확인됨':state==='selecting'?'구간 선택 중':state==='ready'?'경로 확인 필요':state==='open'?'연결 필요':'편집 준비';
+   if(editSaveLabel)editSaveLabel.textContent=gapRange?'도보 경로 확인':'저장';
    setEditDistance();
  }};
  const selErase=document.getElementById('selErase');
@@ -1708,7 +1729,10 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
        if(stroke.length<2)continue;
        const path=stroke.map(point=>new kakao.maps.LatLng(point.lat,point.lon));
        draftLines.push(new kakao.maps.Polyline({{map,path,strokeColor:'#fff',strokeWeight:9,strokeOpacity:.86,strokeStyle:'solid'}}));
-       draftLines.push(new kakao.maps.Polyline({{map,path,strokeColor:'#1668dc',strokeWeight:5,strokeOpacity:.96,strokeStyle:'solid'}}));
+       // The blue stroke is input guidance, not a claim that the runner can
+       // walk through every pixel it crosses.  경로 확인 replaces it with the
+       // solid route snapped to the pedestrian graph.
+       draftLines.push(new kakao.maps.Polyline({{map,path,strokeColor:'#1668dc',strokeWeight:5,strokeOpacity:.72,strokeStyle:'shortdash'}}));
      }}
      if(selectedRange){{
        const selected=editNodes.slice(selectedRange[0],selectedRange[1]+1);
@@ -1759,6 +1783,9 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  }};
  const setEditing = value => {{
    editing=value;document.body.classList.toggle('editing',value);
+   const coarsePointer=(window.matchMedia&&window.matchMedia('(pointer: coarse)').matches)
+     || navigator.maxTouchPoints>0;
+   document.body.classList.toggle('mobile-edit-pan',value&&coarsePointer);
    setLayers(routeLayers,!value);setLayers(shapeLayers,false);setLayers(guideLayers,!value);
    showZoomControl(!value);
    if(!value){{editMode=null;clearDraft();document.body.classList.remove('tool-active');}}
@@ -1872,7 +1899,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const eraseSelection = () => {{
    if(editBusy||!selectedRange)return;
    undoStack.push(snapshot());if(undoStack.length>40)undoStack.shift();redoStack=[];
-   gapRange=[...selectedRange];selectedRange=null;draftStrokes=[];activeStroke=null;
+   gapRange=[...selectedRange];selectedRange=null;draftStrokes=[];activeStroke=null;routePreviewReady=false;
    releaseTool();renderDraft();
  }};
  // ---- 그리기: preserve the freehand draft until save -------------------
@@ -1921,6 +1948,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      }}
      if(event.pointerId===selectPointer){{
        selectPointer=null;
+       if(!editMode)return;
        if(dragEnd!==null){{
          dragEnd=null;
          document.body.classList.remove('handle-drag');
@@ -1938,7 +1966,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      }}
    }};
    editOverlay.addEventListener('pointerdown',event=>{{
-     if(!editing||!editMode||editMode==='pan'||editBusy)return;
+     if(!editing||editBusy)return;
      const point=overlayPoint(event);editPointers.set(event.pointerId,{{start:point,current:point}});
      editOverlay.setPointerCapture(event.pointerId);
      if(event.pointerType==='touch'&&editPointers.size>=2){{
@@ -1946,6 +1974,10 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      }}
      if(twoFingerPan)return;
      selectPointer=event.pointerId;
+     // On a phone the overlay is also the reliable map-drag surface while no
+     // edit tool is selected.  Keeping this branch ahead of hit testing makes
+     // 지도 이동 immune to route lines and editor markers under the finger.
+     if(!editMode)return;
      if(editMode==='erase'&&handleAt(point)!==null){{
        // Grabbing an end of the swept range adjusts it -- in either
        // direction. Dragging inward is how you take back an over-sweep.
@@ -1958,7 +1990,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    }});
    editOverlay.addEventListener('pointermove',event=>{{
      if(!editPointers.has(event.pointerId))return;
-     const point=overlayPoint(event),info=editPointers.get(event.pointerId);info.current=point;
+     const point=overlayPoint(event),info=editPointers.get(event.pointerId),previous=info.current;info.current=point;
      if(twoFingerPan){{
        if(editPointers.size<2)return;
        const next=centerOfPointers();
@@ -1966,6 +1998,10 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
        panCenter=next;return;
      }}
      if(event.pointerId!==selectPointer)return;
+     if(!editMode){{
+       panByPixels(previous.x-point.x,previous.y-point.y);
+       return;
+     }}
      if(dragEnd!==null){{moveHandle(point);return;}}
      if(editMode==='erase')eraseAt(point);
      else if(editMode==='draw'&&dragActive)appendFreeDraw(point,false);
@@ -2003,9 +2039,36 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      undoStack=discarded.stack;redoStack=discarded.redo;restore(discarded);
    }}}});
  }});
- // Saving asks for a name first. The field is empty and the name the course
- // already has sits behind it in grey, so pressing 저장 straight away keeps
- // that name -- typing is an option, not a step.
+ // A finger stroke is only intent. Before naming or creating anything, snap
+ // it to the pedestrian graph and paint that real walkable route on the map
+ // so the runner can inspect exactly what will be saved.
+ const previewDrawnRoute = async () => {{
+   const connection=draftConnection();
+   if(!gapRange||!connection.ok){{
+     if(gapRange)setEditStatus(connection.reason,'error',{{label:'닫기',run:()=>{{}}}});
+     return false;
+   }}
+   const fromIndex=gapRange[0],toIndex=gapRange[1];
+   setEditBusy(true);setEditStatus('도보 가능한 길로 경로를 확인하고 있어요…','busy');
+   try{{
+     const payload=await postEdit({{action:'snap',path:editNodes.map(point=>point[0]),
+       from_index:fromIndex,to_index:toIndex,stroke:connection.stroke}});
+     editNodes=payload.path.map(point=>[...point]);
+     editGeom=(payload.geometry||[]).slice();
+     selectedRange=null;gapRange=null;draftStrokes=[];activeStroke=null;
+     routePreviewReady=true;editMode=null;applyMode();
+     setEditDistance(payload.length_km);applySummary(payload.summary);renderDraft();
+     setEditBusy(false);
+     setEditStatus('도보 경로를 지도에 표시했어요. 확인한 뒤 저장해 주세요.','success');
+     return true;
+   }}
+   catch(error){{
+     setEditStatus(error.name==='AbortError'?'경로 확인 시간이 초과됐어요. 그린 선은 그대로 남아 있어요.':(error.message||'도보 경로를 만들지 못했어요. 지도에 보이는 길을 따라 다시 그려 주세요.'),'error',{{label:'닫기',run:()=>{{}}}});
+     setEditBusy(false);return false;
+   }}
+ }};
+ // Naming is deliberately after the walkable preview. The field is empty and
+ // the current name sits behind it in grey, so typing remains optional.
  const nameSheet = document.getElementById('nameSheet');
  const nameSheetInput = document.getElementById('nameSheetInput');
  const nameSheetSave = document.getElementById('nameSheetSave');
@@ -2024,21 +2087,16 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  }};
  const commitSave = async () => {{
    if(!editing||editBusy)return;
-   const connection=draftConnection();
-   if(gapRange&&!connection.ok){{
+   if(gapRange){{
      closeNameSheet();
-     setEditStatus(connection.reason,'error',{{label:'닫기',run:()=>{{}}}});
+     setEditStatus('먼저 도보 경로를 확인해 주세요.','error',{{label:'닫기',run:()=>{{}}}});
      return;
    }}
    const name=nameSheetInput?nameSheetInput.value.trim():'';
    closeNameSheet();
    setEditBusy(true);setEditStatus('수정한 코스를 저장 중…','busy');
    try{{
-     const body=gapRange
-       ? {{action:'save_draft',path:editNodes.map(point=>point[0]),
-          from_index:gapRange[0],to_index:gapRange[1],stroke:connection.stroke,name}}
-       : {{action:'save',path:editNodes.map(point=>point[0]),name}};
-     const payload=await postEdit(body);
+     const payload=await postEdit({{action:'save',path:editNodes.map(point=>point[0]),name}});
      setEditStatus('저장했어요. 새 코스로 이동합니다…','success');
      location.assign(payload.preview_url);
    }}
@@ -2047,13 +2105,9 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      setEditBusy(false);
    }}
  }};
- if(editSave)editSave.addEventListener('click',()=>{{
+ if(editSave)editSave.addEventListener('click',async()=>{{
    if(!editing||editBusy)return;
-   const connection=draftConnection();
-   if(gapRange&&!connection.ok){{
-     setEditStatus(connection.reason,'error',{{label:'닫기',run:()=>{{}}}});
-     return;
-   }}
+   if(gapRange){{await previewDrawnRoute();return;}}
    openNameSheet();
  }});
  if(nameSheetSave)nameSheetSave.addEventListener('click',commitSave);
