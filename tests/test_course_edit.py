@@ -231,9 +231,9 @@ def test_mobile_preview_uses_compact_summary_and_accessible_edit_controls():
     assert 'id="eraseTool"' not in page
     assert 'id="editUndo"' in page
     assert 'id="editRedo"' in page      # stepping back is reversible too
-    assert 'class="edit-tool-circle"' in page
-    assert '.edit-tools{position:absolute;z-index:950;left:10px;top:10px' in page
-    assert 'width:40px;height:40px' in page
+    assert 'class="edit-tool mode"' in page
+    assert '.edit-tools{position:absolute;z-index:950;left:12px;top:12px' in page
+    assert 'min-height:44px' in page
     assert 'edit-overlay' in page
     assert 'body.editing .view-toggle' in page
     assert 'body.editing.tool-active .facility-marker' in page
@@ -339,28 +339,26 @@ def test_edit_blocks_duplicate_requests_while_one_is_in_flight():
     assert "!editing||!editMode||editMode==='pan'||editBusy" in page  # pointerdown
 
 
-def test_edit_toolbar_keeps_small_icon_only_buttons():
-    """Product requirement: small top-left icons, no text labels."""
+def test_edit_toolbar_groups_labelled_modes_and_actions():
+    """Editing modes and result actions are visibly named and separated."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
-    assert "width:40px;height:40px" in page
-    assert '.edit-tools{position:absolute;z-index:950;left:10px;top:10px' in page
-    # Icon-only: labels stay in aria-label/title, never as visible text nodes.
-    for label in ("바꿀 코스 구간 선택", "마지막 수정 실행 취소",
-                  "모든 수정 초기화", "수정한 코스를 새 코스로 저장"):
-        assert f'aria-label="{label}"' in page
+    assert 'class="edit-mode-group" role="group" aria-label="편집 방식"' in page
+    assert 'class="edit-action-group" role="group" aria-label="편집 작업"' in page
+    for label in ("지도 이동", "지우기", "선 그리기", "실행 취소",
+                  "다시 실행", "초기화", "저장"):
+        assert f'<span>{label}</span>' in page
+    assert '.edit-tool.save{border-color:#087b59;background:#087b59;color:#fff}' in page
 
 
-def test_edit_tools_have_44px_tap_targets_without_growing():
-    """F-07: the icons stay 40px by product requirement, so the touch area is
-    widened invisibly instead of enlarging the buttons."""
+def test_edit_tools_have_visible_44px_tap_targets():
+    """F-07: every labelled control is visibly finger-sized."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
-    assert "width:40px;height:40px" in page                      # visual size unchanged
-    assert ".edit-tool-circle::before" in page
-    assert "top:-2px;right:-2px;bottom:-2px;left:-2px" in page   # 40 + 2 + 2 = 44
+    assert ".edit-tool{" in page
+    assert "min-height:44px" in page
     # 12px facility dots are unhittable by finger, but only widen them on touch:
     # a 44px box under a mouse would swallow map drags near a marker.
     assert "@media (pointer:coarse)" in page
@@ -437,14 +435,15 @@ def test_revert_is_undoable_and_separated_from_save():
     assert "원본 코스로 되돌렸어요." in page
     assert "const hadEdits=" in page          # no undo offer when nothing was discarded
     assert "setEditDistance(initialLengthKm)" in page
-    # mis-tap guard: extra room between revert and the confirming action
-    assert ".edit-tool-circle.save{margin-left:8px" in page
+    # Save is the only filled action; reset remains a quieter warning action.
+    assert ".edit-tool.reset{color:#8b3a31}" in page
+    assert ".edit-tool.save{border-color:#087b59;background:#087b59;color:#fff}" in page
     # and no confirmation dialog was introduced
     assert "confirm(" not in page
 
 
 def test_undo_once_and_reset_all_use_unmistakably_different_icons():
-    """A curved arrow and a trash can cannot be mistaken for each other."""
+    """A directional undo and full-reset arrow cannot be mistaken for each other."""
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
@@ -453,8 +452,8 @@ def test_undo_once_and_reset_all_use_unmistakably_different_icons():
     assert 'aria-label="모든 수정 초기화"' in page
     assert 'title="전체 초기화"' in page
     assert "M6.5 10v9h11v-9" not in page       # old roof/door house path
-    assert "M9 7H4V2" in page                   # one-step curved arrow
-    assert "M4 7h16M9 7V4h6v3" in page         # reset-all trash can
+    assert "m8 7-4 4 4 4" in page               # one-step directional undo
+    assert "M4 12a8 8 0 1 0 2.3-5.7" in page   # reset-all circular arrow
     assert "M12 7v5l4 2" not in page            # old history glyph
 
 
@@ -521,7 +520,7 @@ def test_editing_offers_an_explicit_map_pan_tool():
     assert 'aria-label="지도 이동"' in page
     assert "setMode('pan')" in page
     # pan is the default on entering edit mode, and it leaves the map draggable
-    assert 'id="panTool" class="edit-tool-circle" type="button" aria-label="지도 이동" title="지도 이동" aria-pressed="true"' in page
+    assert 'id="panTool" class="edit-tool mode" type="button" aria-label="지도 이동" aria-pressed="true"' in page
     assert "syncMapInteraction();" in page
     assert "map.setDraggable(!selecting)" in page
 

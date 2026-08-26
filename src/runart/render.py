@@ -450,7 +450,7 @@ def _edit_chrome_html() -> str:
     "코스 편집" button pinned to the map, which is how the map came to hold an
     edit toolbar, a tracking control and a view switch at the same time.
     """
-    return """<svg id="editOverlay" class="edit-overlay" aria-hidden="true"></svg><div class="edit-tools" role="toolbar" aria-label="코스 편집 도구"><button id="panTool" class="edit-tool-circle" type="button" aria-label="지도 이동" title="지도 이동" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/><path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/></svg></button><button id="eraserTool" class="edit-tool-circle" type="button" aria-label="지우개 · 코스 선을 문질러 지우기" title="지우개" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 4 6 6-8 8H6l-3-3Z"/><path d="M9 20h11"/><path d="m10 8 6 6"/></svg></button><button id="drawTool" class="edit-tool-circle" type="button" aria-label="그리기 · 코스 선을 잡고 끌어 도보 길 따라 늘이고 줄이기" title="그리기" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c4 0 5-9 9-9s5 5 9 5"/><circle cx="12" cy="8" r="3.1" fill="currentColor" stroke="none"/><circle cx="12" cy="8" r="3.1"/></svg></button><button id="editUndo" class="edit-tool-circle" type="button" aria-label="마지막 수정 실행 취소" title="한 번 되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7H4V2"/><path d="M4 7c2.2-2.4 5-3.4 8-3 4.6.6 8 4.5 8 9"/></svg></button><button id="editRedo" class="edit-tool-circle" type="button" aria-label="되돌린 수정 다시 실행" title="다시 실행"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7h5V2"/><path d="M20 7c-2.2-2.4-5-3.4-8-3-4.6.6-8 4.5-8 9"/></svg></button><button id="editCancel" class="edit-tool-circle" type="button" aria-label="모든 수정 초기화" title="전체 초기화"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/><path d="M10 11v5M14 11v5"/></svg></button><button id="editSave" class="edit-tool-circle save" type="button" aria-label="수정한 코스를 새 코스로 저장" title="저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></svg></button></div><div id="editDistance" class="edit-distance" aria-label="수정 중인 코스 거리"></div><button class="sel-erase" id="selErase" type="button" hidden>지우기</button><div id="editToast" class="edit-toast" role="status" aria-live="polite" data-tone="info" hidden><span class="edit-toast-spin" aria-hidden="true"></span><span id="editToastText" class="edit-toast-text"></span><button id="editToastAction" class="edit-toast-action" type="button" hidden></button></div><div id="nameSheet" class="name-sheet" role="dialog" aria-modal="true" aria-labelledby="nameSheetTitle" hidden><div class="name-sheet-card"><h2 id="nameSheetTitle">코스 이름을 지어 주세요</h2><p id="nameSheetHint">비워 두면 지금 이름 그대로 저장돼요.</p><input id="nameSheetInput" class="name-sheet-input" type="text" maxlength="24" autocomplete="off" enterkeyhint="done" aria-labelledby="nameSheetTitle" aria-describedby="nameSheetHint"><div class="name-sheet-actions"><button id="nameSheetCancel" class="name-sheet-btn ghost" type="button">취소</button><button id="nameSheetSave" class="name-sheet-btn" type="button">저장</button></div></div></div></div>"""
+    return """<svg id="editOverlay" class="edit-overlay" aria-hidden="true"></svg><div class="edit-tools" role="toolbar" aria-label="코스 편집 도구"><div class="edit-tools-head"><strong>코스 편집</strong><div id="editDistance" class="edit-distance" aria-label="수정 중인 코스 거리"></div></div><div class="edit-mode-group" role="group" aria-label="편집 방식"><button id="panTool" class="edit-tool mode" type="button" aria-label="지도 이동" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 11V6.5a1.5 1.5 0 0 1 3 0V10 5.5a1.5 1.5 0 0 1 3 0V10 7a1.5 1.5 0 0 1 3 0v4-2a1.5 1.5 0 0 1 3 0v4.5c0 4.4-3 7.5-7.3 7.5H12c-2.4 0-4.1-1-5.5-2.8L3.8 15a1.7 1.7 0 0 1 2.6-2.2L8.5 15"/></svg><span>지도 이동</span></button><button id="eraserTool" class="edit-tool mode" type="button" aria-label="지우개 · 코스 선을 문질러 지우기" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15.5 4.5 4 4a2 2 0 0 1 0 2.8l-7.7 7.7H7.5l-3-3a2 2 0 0 1 0-2.8l8.2-8.7a2 2 0 0 1 2.8 0Z"/><path d="m9 9 6 6M12 19h8"/></svg><span>지우기</span></button><button id="drawTool" class="edit-tool mode" type="button" aria-label="그리기 · 코스 선을 잡고 끌어 도보 길 따라 늘이고 줄이기" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5.5 4 4M4 20l3.8-.8L19 8a2.1 2.1 0 0 0-3-3L4.8 16.2 4 20Z"/><path d="M12.5 7.5l4 4"/></svg><span>선 그리기</span></button></div><div class="edit-action-group" role="group" aria-label="편집 작업"><button id="editUndo" class="edit-tool action" type="button" aria-label="마지막 수정 실행 취소" title="한 번 되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 7-4 4 4 4"/><path d="M5 11h8a6 6 0 0 1 6 6v1"/></svg><span>실행 취소</span></button><button id="editRedo" class="edit-tool action" type="button" aria-label="되돌린 수정 다시 실행" title="다시 실행"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 7 4 4-4 4"/><path d="M19 11h-8a6 6 0 0 0-6 6v1"/></svg><span>다시 실행</span></button><button id="editCancel" class="edit-tool action reset" type="button" aria-label="모든 수정 초기화" title="전체 초기화"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"/><path d="M4 4v4.6h4.6"/></svg><span>초기화</span></button><button id="editSave" class="edit-tool action save" type="button" aria-label="수정한 코스를 새 코스로 저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><span>저장</span></button></div></div><button class="sel-erase" id="selErase" type="button" hidden>선택 구간 지우기</button><div id="editToast" class="edit-toast" role="status" aria-live="polite" data-tone="info" hidden><span class="edit-toast-spin" aria-hidden="true"></span><span id="editToastText" class="edit-toast-text"></span><button id="editToastAction" class="edit-toast-action" type="button" hidden></button></div><div id="nameSheet" class="name-sheet" role="dialog" aria-modal="true" aria-labelledby="nameSheetTitle" hidden><div class="name-sheet-card"><h2 id="nameSheetTitle">코스 이름을 지어 주세요</h2><p id="nameSheetHint">비워 두면 지금 이름 그대로 저장돼요.</p><input id="nameSheetInput" class="name-sheet-input" type="text" maxlength="24" autocomplete="off" enterkeyhint="done" aria-labelledby="nameSheetTitle" aria-describedby="nameSheetHint"><div class="name-sheet-actions"><button id="nameSheetCancel" class="name-sheet-btn ghost" type="button">취소</button><button id="nameSheetSave" class="name-sheet-btn" type="button">저장</button></div></div></div></div>"""
 
 
 def _tab_bar_html(base_url: str, cid: str, page: str) -> str:
@@ -683,10 +683,13 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .local-editor-actions button{{min-height:46px;padding:0 13px;border:0;border-radius:12px;background:#fff;color:#142018;box-shadow:0 4px 18px rgba(0,0,0,.14);font:700 14px inherit}}
  .local-editor-actions .local-primary{{background:#087b59;color:#fff}}
  #localEditRoute{{position:absolute;left:14px;bottom:14px;pointer-events:auto}}
- .local-editor-actions .local-edit-tools{{display:none;position:absolute;left:10px;top:10px;gap:6px;pointer-events:auto}}
- .local-course-editor.editing .local-edit-tools{{display:flex}}
+ .local-editor-actions .local-edit-tools{{display:none;position:absolute;left:12px;right:12px;top:12px;
+      grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;padding:10px;border-radius:14px;
+      border:1px solid rgba(20,35,25,.12);background:rgba(255,255,255,.97);
+      box-shadow:0 8px 24px rgba(10,28,19,.16);pointer-events:auto}}
+ .local-course-editor.editing .local-edit-tools{{display:grid}}
  .local-course-editor.editing #localEditRoute{{display:none}}
- .local-course-editor.editing .local-course-hint{{top:60px;left:10px;right:auto;max-width:calc(100% - 20px);padding:7px 9px;box-shadow:none}}
+ .local-course-editor.editing .local-course-hint{{top:84px;left:12px;right:12px;padding:7px 9px;box-shadow:none}}
  .map-error{{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;
       box-sizing:border-box;text-align:center;color:#44514a;font-size:14px;line-height:1.5;background:#eef2ec}}
  .map-error strong{{font-size:16px;color:#142018}}
@@ -820,17 +823,25 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
       overflow:hidden;text-overflow:ellipsis}}
  .poi-pop span{{font-size:13px;color:#5c675e;line-height:1.4;word-break:keep-all}}
  .sr-only{{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}}
- .edit-tools{{position:absolute;z-index:950;left:10px;top:10px;display:none;gap:6px}}
- .edit-tool-circle{{position:relative;display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;min-height:40px!important;padding:0!important;border:0;border-radius:50%!important;background:#fff!important;color:#142018!important;box-shadow:0 2px 8px rgba(10,28,19,.18)!important;cursor:pointer}}
- /* 44x44 tap target without growing the 40px button: the icons stay small by
-    product requirement, so the touch area is widened invisibly instead. The
-    6px gap leaves 2px clear between neighbouring hit areas. */
- .edit-tool-circle::before{{content:"";position:absolute;top:-2px;right:-2px;bottom:-2px;left:-2px;border-radius:50%}}
- .edit-tool-circle svg{{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}}
- .edit-tool-circle:disabled{{opacity:.42;cursor:not-allowed}}
- /* Extra room before the confirming action so a mis-tap does not discard work. */
- .edit-tool-circle.save{{margin-left:8px;background:#087b59!important;color:#fff!important}}
- .edit-tool-circle[aria-pressed="true"]{{background:#142018!important;color:#fff!important;outline:3px solid #8ee0bb;outline-offset:2px}}
+ .edit-tools{{position:absolute;z-index:950;left:12px;top:12px;width:min(500px,calc(100% - 24px));
+      display:none;padding:12px;border:1px solid rgba(20,35,25,.12);border-radius:16px;
+      background:rgba(255,255,255,.97);box-shadow:0 8px 24px rgba(10,28,19,.16)}}
+ .edit-tools-head{{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}}
+ .edit-tools-head strong{{font-size:15px;font-weight:800;color:#142018}}
+ .edit-mode-group,.edit-action-group{{display:grid;gap:6px}}
+ .edit-mode-group{{grid-template-columns:repeat(3,minmax(0,1fr));padding:4px;border-radius:12px;background:#eef2ed}}
+ .edit-action-group{{grid-template-columns:repeat(4,minmax(0,1fr));margin-top:8px}}
+ .edit-tool{{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:0;min-height:44px;
+      padding:0 9px;border:1px solid transparent;border-radius:10px;background:transparent;color:#405048;
+      font-family:inherit;font-size:12px;font-weight:750;line-height:1.15;word-break:keep-all;cursor:pointer}}
+ .edit-tool svg{{flex:0 0 auto;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.9;
+      stroke-linecap:round;stroke-linejoin:round;pointer-events:none}}
+ .edit-tool.mode[aria-pressed="true"]{{background:#fff;color:#142018;border-color:#dce4dd;box-shadow:0 1px 3px rgba(10,28,19,.12)}}
+ .edit-tool.action{{border-color:#dfe6e0;background:#fff;color:#35433b}}
+ .edit-tool.reset{{color:#8b3a31}}
+ .edit-tool.save{{border-color:#087b59;background:#087b59;color:#fff}}
+ .edit-tool:focus-visible{{outline:3px solid #8ee0bb;outline-offset:2px}}
+ .edit-tool:disabled{{opacity:.42;cursor:not-allowed}}
  /* display:none when not selecting. pointer-events:none alone was enough in
     theory, but a full-bleed touch-action:none layer over the map is exactly
     the kind of thing that eats a drag on mobile -- keep it out of the tree
@@ -862,8 +873,8 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  /* The selection's own controls, on the map beside it. */
  /* The two tools read as what they do, and the active one stays obvious
     while a finger is on the map. */
- #eraserTool[aria-pressed="true"]{{background:#c0392b;color:#fff}}
- #drawTool[aria-pressed="true"]{{background:#1668dc;color:#fff}}
+ #eraserTool[aria-pressed="true"]{{color:#9d3025}}
+ #drawTool[aria-pressed="true"]{{color:#0c5fca}}
  /* The grip: where the finger currently has hold of the line. It leads the
     route, which catches up as the graph answers. */
  .via-dot{{display:block;width:14px;height:14px;border-radius:50%;border:3px solid #1668dc;
@@ -908,12 +919,11 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .edit-anchor:focus-visible{{outline:3px solid #8ee0bb;outline-offset:2px}}
  body.handle-drag .edit-anchor{{cursor:grabbing}}
  body.handle-drag{{touch-action:none}}
- .edit-distance{{position:absolute;z-index:950;right:10px;top:58px;display:none;align-items:center;
-      min-height:40px;padding:0 13px;border-radius:999px;background:rgba(255,255,255,.96);
-      color:#142018;font-size:14px;font-weight:800;box-shadow:0 2px 8px rgba(10,28,19,.18)}}
+ .edit-distance{{display:none;align-items:center;min-height:28px;padding:0 9px;border-radius:999px;
+      background:#edf5f0;color:#17613e;font-size:12px;font-weight:800}}
  body.editing .edit-distance{{display:flex}}
- .edit-tools[aria-busy="true"] .edit-tool-circle{{opacity:.45}}
- body.editing .edit-tools{{display:flex}}
+ .edit-tools[aria-busy="true"] .edit-tool{{opacity:.45}}
+ body.editing .edit-tools{{display:block}}
  body.editing .view-toggle{{display:none!important}}
  body.editing.tool-active .facility-marker{{pointer-events:none;opacity:.2}}
  body.editing.tool-active .edit-overlay{{pointer-events:auto}}
@@ -932,10 +942,13 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
       letter-spacing:0}}
  .headline-stats>div>span{{display:block;margin-top:6px;font-size:12px;color:#8a958d;
       letter-spacing:.01em;word-break:keep-all}}
- .trait-chips{{display:flex;flex-wrap:wrap;gap:6px}}
- .trait{{display:inline-flex;align-items:center;gap:5px;padding:7px 11px;border-radius:999px;
-      background:#edf5f0;color:#17613e;font-size:13px;font-weight:700;word-break:keep-all}}
- .trait i{{font-style:normal;font-size:13px}}
+ .trait-chips{{display:flex;flex-wrap:wrap;gap:8px}}
+ .trait{{display:inline-flex;align-items:center;gap:7px;min-height:34px;padding:4px 10px 4px 5px;
+      border:1px solid #dfe6e0;border-radius:10px;background:#f7f9f7;color:#344238;
+      font-size:13px;font-weight:700;word-break:keep-all}}
+ .trait i{{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;
+      border-radius:7px;background:#fff;font-style:normal;font-size:14px;line-height:1;
+      box-shadow:0 1px 2px rgba(10,28,19,.1)}}
  /* komoot tints its route alerts and skips the outline: with a fill already
     separating the group, the border is a second boundary doing the same job. */
  .note-box{{border:0;border-radius:14px;padding:14px 16px;margin-top:14px}}
@@ -1146,7 +1159,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    const toSvg=([lat,lon]) => [70+(lon-lonMin)/lonSpan*860, 650-(lat-latMin)/latSpan*580];
    const pathFor=points => points.map((point,index) => `${{index?'L':'M'}} ${{toSvg(point).map(value=>value.toFixed(1)).join(' ')}}`).join(' ');
    const arrowsFor=points=>{{let markup='',target=24,cum=0,prev=toSvg(points[0]);for(const point of points.slice(1)){{const next=toSvg(point),dx=next[0]-prev[0],dy=next[1]-prev[1],length=Math.hypot(dx,dy);while(length&&cum+length>=target){{const t=(target-cum)/length,x=prev[0]+dx*t,y=prev[1]+dy*t,angle=Math.atan2(dy,dx)*180/Math.PI;markup+=`<path d="M -6 -3.7 5.2 0 -6 3.7 -2.4 0Z" transform="translate(${{x.toFixed(1)}} ${{y.toFixed(1)}}) rotate(${{angle.toFixed(1)}})" fill="#fff" stroke="#064f38" stroke-width="1" stroke-linejoin="round"/>`;target+=36;}}cum+=length;prev=next;}}return markup;}};
-   mapNode.innerHTML='<div class="local-course-editor"><div class="local-course-hint"><strong>지도를 불러오지 못했어요 · 로컬 코스 편집 체험</strong><span id="localCourseHint" role="status" aria-live="polite">구간 선택을 누른 뒤 바꿀 코스 선을 탭하세요.</span></div><svg id="localCourseCanvas" viewBox="0 0 1000 720" role="application" aria-label="로컬 코스 구간 선택 캔버스"></svg><div class="local-editor-actions"><button id="localEditRoute" class="local-primary" type="button">코스 편집</button><div class="local-edit-tools" role="toolbar" aria-label="로컬 코스 편집 도구"><button id="localSegment" class="edit-tool-circle" type="button" aria-label="바꿀 코스 구간 선택" title="구간 선택" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h5M14 7h5M10 7h4"/><circle cx="5" cy="7" r="2"/><circle cx="19" cy="7" r="2"/><path d="M5 17h14" stroke-dasharray="2.5 2.5"/></svg></button><button id="localEditUndo" class="edit-tool-circle" type="button" aria-label="마지막 수정 실행 취소" title="한 번 되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7H4V2"/><path d="M4 7c2.2-2.4 5-3.4 8-3 4.6.6 8 4.5 8 9"/></svg></button><button id="localEditCancel" class="edit-tool-circle" type="button" aria-label="모든 수정 초기화" title="전체 초기화"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13"/><path d="M10 11v5M14 11v5"/></svg></button><button id="localEditSave" class="edit-tool-circle save" type="button" aria-label="수정한 코스를 새 코스로 저장" title="저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></svg></button></div></div></div>';
+   mapNode.innerHTML='<div class="local-course-editor"><div class="local-course-hint"><strong>지도를 불러오지 못했어요 · 로컬 코스 편집 체험</strong><span id="localCourseHint" role="status" aria-live="polite">구간 선택을 누른 뒤 바꿀 코스 선을 탭하세요.</span></div><svg id="localCourseCanvas" viewBox="0 0 1000 720" role="application" aria-label="로컬 코스 구간 선택 캔버스"></svg><div class="local-editor-actions"><button id="localEditRoute" class="local-primary" type="button">코스 편집</button><div class="local-edit-tools" role="toolbar" aria-label="로컬 코스 편집 도구"><button id="localSegment" class="edit-tool mode" type="button" aria-label="바꿀 코스 구간 선택" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5.5 4 4M4 20l3.8-.8L19 8a2.1 2.1 0 0 0-3-3L4.8 16.2 4 20Z"/><path d="M12.5 7.5l4 4"/></svg><span>구간 선택</span></button><button id="localEditUndo" class="edit-tool action" type="button" aria-label="마지막 수정 실행 취소" title="한 번 되돌리기"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 7-4 4 4 4"/><path d="M5 11h8a6 6 0 0 1 6 6v1"/></svg><span>실행 취소</span></button><button id="localEditCancel" class="edit-tool action reset" type="button" aria-label="모든 수정 초기화" title="전체 초기화"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"/><path d="M4 4v4.6h4.6"/></svg><span>초기화</span></button><button id="localEditSave" class="edit-tool action save" type="button" aria-label="수정한 코스를 새 코스로 저장"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><span>저장</span></button></div></div></div>';
    const canvas=document.getElementById('localCourseCanvas');
    const hint=document.getElementById('localCourseHint');
    const localShell=mapNode.querySelector('.local-course-editor');
