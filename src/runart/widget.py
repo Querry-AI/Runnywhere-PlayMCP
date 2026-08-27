@@ -26,6 +26,7 @@ WIDGET_MAX_BYTES = 12_000
 LABEL_MAX_CHARS = 60
 _COURSE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,4096}$")
 _COPY_MARKUP_RE = re.compile(r"[\\`*_{}\[\]<>#|]")
+_PAREN_SUFFIX_RE = re.compile(r"\([^()]*\)")
 
 
 class WidgetBuildError(ValueError):
@@ -48,6 +49,12 @@ def _plain_text(value: object, max_chars: int) -> str:
 def _copy_value(value: object, max_chars: int) -> str:
     """Remove tokens that could turn a data value into Kakao share markup."""
     return _COPY_MARKUP_RE.sub("", _plain_text(value, max_chars)).strip()
+
+
+def _title_place(location_name: str) -> str:
+    """Keep station titles compact by dropping parenthetical aliases."""
+    place = short_place(location_name)
+    return _PAREN_SUFFIX_RE.sub("", place).strip()
 
 
 def _origin(base_url: str) -> str:
@@ -185,10 +192,10 @@ def _choice_label(choice: CourseChoice) -> str:
 
 def _widget_title(course: Course) -> str:
     shape = SHAPES.get(course.params.shape or "")
-    place = short_place(course.params.location_name or "")
+    place = _title_place(course.params.location_name or "")
     if shape:
         return _plain_text(
-            f"{shape.emoji} {place + RUN_NAMES_KO[shape.key] if place else RUN_NAMES_KO[shape.key]}",
+            f"{shape.emoji} {place + ' ' + RUN_NAMES_KO[shape.key] if place else RUN_NAMES_KO[shape.key]}",
             40,
         )
     return _plain_text(f"{TRACK_EMOJI} {place + '런' if place else '러닝 코스'}", 40)
@@ -257,49 +264,44 @@ def _ascent_line(course: Course) -> str:
 
 def _course_card_row(course: Course, course_id: str, origin: str,
                      match_note: str = "") -> dict:
-    """One course as a listing row: thumbnail, facts, action.
-
-    Three columns, like every travel or commerce listing: the picture on the
-    left, a dense stack of dot-separated facts in the middle, and the action
-    on the right where the thumb reaches it. The action used to sit inside
-    the text column, which pushed every row taller than its content and left
-    a ragged right edge down the card.
-    """
+    """One spacious reference-inspired card: map, hierarchy, then action."""
     preview_url = f"{origin}/c/{course_id}"
     title = _widget_title(course)
     facts = course_facts(course)
-    button = _button("코스 보기", preview_url)
-    button.update({"style": "primary", "variant": "solid", "size": "sm"})
+    # Mobbin's route cards make the map the visual anchor and use one clear
+    # action at the end of the information stack. Keep the CTA short enough
+    # for Kakao's compact button while making its destination explicit.
+    button = _button("지도에서 보기", preview_url)
+    button.update({"style": "primary", "variant": "solid", "size": "md"})
     return {
-        "type": "Row",
-        "gap": "md",
-        "align": "center",
+        "type": "Col",
+        "gap": "sm",
         "children": [
             {
                 "type": "Image",
                 "src": f"{preview_url}/thumb.svg",
                 "alt": _plain_text(f"{title} 실제 지도 코스", 120),
-                "width": 88,
-                "height": 88,
-                "fit": "contain",
+                "width": 280,
+                "height": 156,
+                "fit": "cover",
                 "radius": "lg",
                 "frame": True,
             },
             {
-                "type": "Col",
-                "gap": "xs",
-                "flex": 1,
+                "type": "Row", "gap": "md", "align": "center",
                 "children": [
-                    {"type": "Title", "value": title, "size": "lg", "weight": "bold", "maxLines": 1},
-                    {"type": "Text", "value": _effort_line(course), "size": "md", "weight": "bold", "maxLines": 1},
-                    {"type": "Caption", "value": _ascent_line(course), "size": "sm", "maxLines": 1},
                     {
-                        "type": "Caption", "value": _character_line(facts),
-                        "size": "sm", "maxLines": 1,
+                        "type": "Col", "gap": "xs", "flex": 1,
+                        "children": [
+                            {"type": "Title", "value": title, "size": "lg", "weight": "bold", "maxLines": 1},
+                            {"type": "Text", "value": _effort_line(course), "size": "md", "weight": "bold", "maxLines": 1},
+                            {"type": "Caption", "value": _ascent_line(course), "size": "sm", "color": "#6b7280", "maxLines": 1},
+                            {"type": "Caption", "value": _character_line(facts), "size": "sm", "color": "#6b7280", "maxLines": 1},
+                        ],
                     },
+                    button,
                 ],
             },
-            button,
         ],
     }
 
@@ -326,7 +328,7 @@ def build_course_widget(
             raise WidgetBuildError("invalid course id")
     origin = _origin(base_url)
     title = _widget_title(course)
-    location = _plain_text(course.params.location_name or "지정한 출발점", 120)
+    location = _title_place(course.params.location_name or "지정한 출발점")
     preview_url = f"{origin}/c/{course_id}"
     # Without a heading the cards read as an undifferentiated list and the
     # runner cannot tell which one answered their request.

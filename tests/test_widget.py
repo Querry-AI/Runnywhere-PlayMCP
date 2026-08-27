@@ -79,17 +79,18 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     header = card["children"][0]
     assert header["type"] == "Title" and header["value"] == "추천 코스"
     row = card["children"][1]
-    assert row["type"] == "Row" and row["align"] == "center"
-    # Three columns, as in any listing: picture, facts, action.
-    image, overview, action = row["children"]
+    assert row["type"] == "Col"
+    image = _components(row, "Image")[0]
+    overview = _components(row, "Col")[1]
+    action = _components(row, "Button")[0]
     assert action["type"] == "Button" and "block" not in action
     assert image == {
         "type": "Image",
         "src": f"https://runnywhere.example/c/{course_id}/thumb.svg",
-            "alt": "🐶 강남역댕댕런 실제 지도 코스",
-        "width": 88,
-        "height": 88,
-        "fit": "contain",
+                "alt": "🐶 강남역 댕댕런 실제 지도 코스",
+            "width": 280,
+            "height": 156,
+            "fit": "cover",
         "radius": "lg",
         "frame": True,
     }
@@ -97,13 +98,13 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     assert [child["type"] for child in overview["children"]] == [
         "Title", "Text", "Caption", "Caption",
     ]
-    assert overview["children"][0]["value"] == "🐶 강남역댕댕런"
+    assert overview["children"][0]["value"] == "🐶 강남역 댕댕런"
     assert overview["children"][1]["value"] == "9.0km · 약 63분"
     assert overview["children"][2]["value"] == f"오르막 {course.ascent_m:.0f}m"
     assert "평지 위주" in overview["children"][3]["value"]
     # Distance pairs with time, not ascent: time is what a runner plans around.
     buttons = _components(card, "Button")
-    assert [button["label"] for button in buttons] == ["코스 보기"]
+    assert [button["label"] for button in buttons] == ["지도에서 보기"]
     target = buttons[0]["onClickAction"]["payload"]["target"]
     assert target == {
         "url": f"https://runnywhere.example/c/{course_id}",
@@ -300,7 +301,7 @@ def test_mcp_widget_falls_back_to_original_markdown(monkeypatch):
     best_choices_payload = json.loads(best_with_choices.content[0].text)
     primary_button = next(
         child for child in _components(best_choices_payload["widget"], "Button")
-        if child.get("label") == "코스 보기"
+        if child.get("label") == "지도에서 보기"
     )
     assert primary_button["onClickAction"]["payload"]["target"]["url"] == (
         f"{server.BASE_URL}/c/{course_id}"
@@ -361,17 +362,17 @@ def test_course_widget_offers_every_alternative_as_a_full_matching_card():
 
     assert payload["widget"]["type"] == "Card"
     assert not _contains_key(payload, "status")
-    assert labels == ["코스 보기"] * 3
+    assert labels == ["지도에서 보기"] * 3
     assert len(rows) == len(images) == 3
     # Alternatives are introduced, not silently appended under the winner.
     assert any(child.get("value") == "다른 코스도 있어요"
                for child in _components(children, "Text"))
     course_titles = [value for value in titles if value != "추천 코스"]
     assert "야옹런" in course_titles[1]
-    assert "낙성대(강감찬)역" in titles[1]
+    assert "낙성대역" in titles[1]
     assert "봉천역" in titles[2]
     assert "서울대입구역" in titles[3]
-    assert all(image["width"] == image["height"] == 88 for image in images)
+    assert all(image["width"] == 280 and image["height"] == 156 for image in images)
     targets = [button["onClickAction"]["payload"]["target"]["url"]
                for button in buttons]
     assert targets[1] == f"https://runnywhere.example/c/{other_id}"
@@ -392,7 +393,7 @@ def test_widget_primary_link_decodes_to_the_same_detail_start_and_course():
     ))
     primary = next(
         child for child in _components(payload["widget"], "Button")
-        if child.get("label") == "코스 보기"
+        if child.get("label") == "지도에서 보기"
     )
     linked_id = primary["onClickAction"]["payload"]["target"]["url"].rsplit(
         "/", 1
@@ -410,7 +411,16 @@ def test_course_widget_without_alternatives_keeps_one_primary_action():
     payload = json.loads(
         build_course_widget(course, course_id, "https://runnywhere.example"))
     buttons = _components(payload["widget"], "Button")
-    assert [button["label"] for button in buttons] == ["코스 보기"]
+    assert [button["label"] for button in buttons] == ["지도에서 보기"]
+
+
+def test_widget_title_removes_parenthetical_station_aliases():
+    course = _course(location_name="서울대입구(abx)역", shape="cat")
+    payload = json.loads(build_course_widget(
+        course, encode_course_id(course.params), "https://runnywhere.example"))
+    titles = [item["value"] for item in _components(payload["widget"], "Title")]
+    assert "🐱 서울대입구역 야옹런" in titles
+    assert "abx" not in json.dumps(payload, ensure_ascii=False)
 
 
 def test_course_card_reads_like_a_recommendation_not_a_data_dump():
@@ -494,8 +504,8 @@ def test_card_rows_read_as_a_listing_not_a_stack_of_paragraphs():
 
     for row in rows:
         kinds = [child["type"] for child in row["children"]]
-        assert kinds == ["Image", "Col", "Button"]
-        column = row["children"][1]
+        assert kinds == ["Col", "Button"]
+        column = row["children"][0]
         # Identity, distance/time, ascent, then the hashtag-like traits.
         assert [child["type"] for child in column["children"]] == [
             "Title", "Text", "Caption", "Caption",

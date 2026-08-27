@@ -87,7 +87,7 @@ def test_case1_exact_course_here_also_offers_another_animal_and_a_plain_course()
 
     assert result.structuredContent["result_code"] == "course_ready"
     assert result.isError is False
-    assert labels[0] == "코스 보기"
+    assert labels[0] == "지도에서 보기"
     assert len(labels) == 3
     assert "댕댕런" in json.dumps(payload, ensure_ascii=False)
     # (b) a different animal, (c) a plain course — both at the requested start.
@@ -188,7 +188,7 @@ def test_a_plain_course_asked_for_by_time_still_answers_with_a_card(location):
     assert result.isError is False, result.content[0].text[:200]
     assert result.structuredContent["result_code"] == "course_ready"
     payload = _card(result)
-    assert _labels(payload)[0] == "코스 보기"
+    assert _labels(payload)[0] == "지도에서 보기"
 
 
 @pytest.mark.parametrize("location", ["강남역", "서울숲"])
@@ -324,7 +324,7 @@ def test_every_answerable_course_request_comes_back_as_a_card(request_kwargs):
 
     assert result.isError is False, result.content[0].text[:200]
     payload = _card(result)
-    assert _labels(payload)[0] == "코스 보기"
+    assert _labels(payload)[0] == "지도에서 보기"
 
 
 def test_a_follow_up_question_stays_markdown():
