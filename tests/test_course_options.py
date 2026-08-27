@@ -367,6 +367,114 @@ def test_single_standard_call_returns_three_distinct_routes_with_restorable_ids(
         assert course.params.distance_km == 5
 
 
+def test_park_request_without_start_samples_three_of_five_without_route_calls(monkeypatch):
+    from runart import park_presets
+
+    draws = []
+    def sample(population, count):
+        draws.append((len(population), count))
+        return population[-count:]
+    def unexpected(*args, **kwargs):
+        pytest.fail("Registered park recommendations must not generate another route")
+    monkeypatch.setattr(park_presets.random, "sample", sample)
+    monkeypatch.setattr(server, "generate_running_course", unexpected)
+    monkeypatch.setattr(server, "_animal_text_for_cards", unexpected)
+    result = server.create_seoul_running_course(course_type="standard", need_facilities=["park"])
+
+    assert draws == [(5, 3)]
+    assert result.structuredContent["course_selection"]["returned_count"] == 3
+    assert result.structuredContent["park_selection"]["origin"] is None
+    assert result.structuredContent["park_selection"]["mode"] == "random"
+    assert len(set(_urls(_card(result)))) == 3
+    assert len(result.model_dump_json().encode()) < 24_000
+    assert "무작위" in _lead(result)
+
+
+@pytest.mark.parametrize("origin", ["강남역", "홍대", "서울숲"])
+def test_park_request_with_start_orders_by_distance_to_real_course_start(origin):
+    from runart.park_presets import park_courses
+    from runart.geo import haversine_m
+
+    lat, lon, _ = server.resolve_location(origin, None, None)
+    expected = sorted(park_courses(), key=lambda item: (
+        haversine_m(lat, lon, item[1].params.lat, item[1].params.lon), item[0].id))[:3]
+    result = server.create_seoul_running_course(
+        course_type="standard", location=origin, need_facilities=["park"])
+    selection = result.structuredContent["park_selection"]
+    assert selection["mode"] == "nearest"
+    assert [d["id"] for d in selection["destinations"]] == [s.id for s, _ in expected]
+    assert "직선거리" in _lead(result)
+    assert "이동 경로는 포함하지 않아요" in _lead(result)
+    facts = result.structuredContent["course_selection"]
+    assert [c["start"] for c in [facts["primary"], *facts["alternatives"]]] == [s.name for s, _ in expected]
+    assert len(_urls(_card(result))) == 3
+
+
+def test_park_recommendations_accept_coordinates_and_preserve_night_lighting():
+    from runart.rfs import has_sufficient_night_lighting
+
+    result = server.create_seoul_running_course(
+        course_type="standard", lat=37.4986, lon=127.0281,
+        need_facilities=["park"], night_mode=True)
+    assert result.structuredContent["park_selection"]["mode"] == "nearest"
+    courses = [server._cached_course(url.rsplit("/", 1)[1]) for url in _urls(_card(result))]
+    assert len(courses) == 3
+    assert all(c.params.night_mode and has_sufficient_night_lighting(c.rfs) for c in courses)
+    assert "조명 조건을 만족" in _lead(result)
+
+
+def test_park_catalogue_does_not_fill_a_night_shortage_with_dark_routes(monkeypatch):
+    from copy import deepcopy
+    from runart import park_presets
+
+    courses = deepcopy(park_presets.park_courses())
+    for i, (_, course) in enumerate(courses):
+        course.rfs["components"]["lighting"] = .9 if i < 2 else .3
+    monkeypatch.setattr(park_presets, "park_courses", lambda: courses)
+    result = server.create_seoul_running_course(
+        course_type="standard", need_facilities=["park"], night_mode=True)
+    assert result.isError
+    assert result.structuredContent["available_count"] == 2
+    assert result.structuredContent["result_code"] == "insufficient_courses"
+    assert not result.content[0].text.startswith("{")
+
+
+@pytest.mark.parametrize("kwargs", [{"lat": 37.5}, {"location": "부산역"}, {"distance_km": -1}])
+def test_invalid_park_input_never_silently_becomes_random_recommendations(kwargs):
+    result = server.create_seoul_running_course(course_type="standard", need_facilities=["park"], **kwargs)
+    assert result.isError
+    assert "park_selection" not in result.structuredContent
+
+
+def test_park_widget_fallback_preserves_actual_destinations_and_effort_disclaimer(monkeypatch):
+    monkeypatch.setattr(server, "KAKAO_WIDGETS_ENABLED", False)
+    result = server.create_seoul_running_course(
+        course_type="dog", location="강남역", duration_min=60, need_facilities=["park"])
+    assert not result.isError
+    assert "요청 조건(60분)과 실제 거리·시간이 다를 수" in result.content[0].text
+    assert "동물 모양이 아닌" in result.content[0].text
+    selection = result.structuredContent["course_selection"]
+    for course in [selection["primary"], *selection["alternatives"]]:
+        assert course["course_type"] == "standard"
+        assert course["map_url"] in result.content[0].text
+        assert course["start"] in result.content[0].text
+
+
+@pytest.mark.parametrize("legacy", [server._legacy_generate_running_course, server._legacy_generate_animal_course])
+def test_legacy_park_calls_also_return_one_three_destination_widget(legacy):
+    result = legacy(need_facilities=["park"])
+    assert len(_urls(_card(result))) == 3
+    assert result.structuredContent["park_selection"]["mode"] == "random"
+
+
+def test_drinking_water_does_not_dispatch_to_the_park_catalogue(monkeypatch):
+    def unexpected(*args, **kwargs):
+        pytest.fail("Drinking water is a facility request, not waterside scenery")
+    monkeypatch.setattr(server, "_park_course_result", unexpected)
+    result = server.create_seoul_running_course(course_type="standard", need_facilities=["water"])
+    assert result.isError  # An ordinary run still requires an explicit start.
+
+
 def test_incomplete_recommendation_does_not_emit_one_card_or_request_repeat_calls():
     result = server._mcp_result("한 코스", code="course_ready", course_selection={"returned_count": 1})
     result = server._complete_recommendation(result, night_mode=True)

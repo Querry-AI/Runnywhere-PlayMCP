@@ -18,6 +18,7 @@ EXPECTED_SHA256 = {
     "facilities.pkl": "a577f9e39012d2d70827e8ade0f969bf7d12794a83555d7db62eef328f4b2e7f",
     "infra_points.pkl": "cedaed2e22a3860f6d1d29239eb428cb7382ec782861041d29a56921e638f453",
     "animal_station_presets.json.gz": "8560997ba7c5db0268f5fbe0aeb0da55963993e41a50d66553206a7181fd0eec",
+    "park_course_presets.json": "092a2d974d01ee795ab5f6ee7612d02a16ecc3210d6906d9e88dda75ab463eeb",
 }
 
 

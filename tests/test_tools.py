@@ -501,6 +501,10 @@ def test_primary_course_tool_schema_and_description_drive_selection():
     park_description = tool.inputSchema["properties"]["need_facilities"]["description"]
     assert "명시한 경우에만" in park_description
     assert "추론하지 마세요" in park_description
+    for term in ("하천", "물가", "물 보면서", "마실 물·음수대", "무작위 3곳", "가까운 3곳"):
+        assert term in park_description
+    assert "출발지 없이 바로 호출" in location_description
+    assert "Only park requests may omit" in tool.description
 
 
 def test_followup_tool_descriptions_make_facility_routing_unambiguous():

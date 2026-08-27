@@ -41,7 +41,7 @@ from .course import (MAX_VIA_POINTS, Course, CourseAccessError, CourseError,
                      ensure_course_runnable, generate_course, reroute_segment,
                      route_via_points, snap_drawn_segment, snap_drawn_strokes)
 from .courseplan import (CASE_EXACT, RECOMMENDATION_COUNT, SAME_START_M,
-                         CoursePlan, build_course_plan, requested_distance,
+                         CourseChoice, CoursePlan, build_course_plan, requested_distance,
                          route_signature)
 from .facilities import LABELS_KO, facilities_along
 from .geocode import resolve_location
@@ -60,6 +60,7 @@ from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
                      generate_shape_course, list_shapes)
 from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
 from .rfs import has_sufficient_night_lighting
+from .park_presets import PARK_SPOTS, park_courses, select_park_courses
 from .widget import WidgetTooLargeError, build_course_widget, course_response_facts
 
 DEFAULT_BASE_URL = (
@@ -78,14 +79,17 @@ LOCATION_FIELD_KO = (
     f"{LOCATION_FORMS_KO}를 모두 지원합니다. "
     "사용자가 상호명이나 주소를 말했다면 가까운 역 이름으로 바꾸지 말고 말한 그대로 넘기세요. "
     "대화에 출발지가 없으면 임의 위치를 만들지 말고 사용자에게 물어보며, 이 툴을 "
-    "호출하지 마세요. lat/lon을 모두 전달한 경우에만 생략할 수 있습니다."
+    "호출하지 마세요. 단, 공원·강변·하천·물가 추천(need_facilities에 park)은 "
+    "출발지 없이 바로 호출하세요: 등록된 5곳 중 무작위 3곳을 반환합니다. "
+    "출발지가 있으면 그 위치에서 가까운 3곳을 고릅니다. lat/lon을 모두 전달해도 생략 가능합니다."
 )
 LOCATION_FIELD_EN = (
     "Exact Seoul start place stated by the user: a subway station, a shop or "
     "building name, a road-name address, or a lot-number address. Pass it "
     "verbatim -- do not substitute a nearby station for a shop name or "
     "address. Never infer, invent, or default a missing location; ask the "
-    "user instead."
+    "user instead. Exception: park/waterside recommendations with need_facilities=['park'] "
+    "may omit a start for three random registered destinations; an explicit start ranks them by proximity."
 )
 
 
@@ -127,18 +131,22 @@ mcp = FastMCP(
         "substitute poorly lit or unknown-lighting routes. Do not claim safety "
         "merely because night_mode was requested. "
         "Use this tool for 러닝 코스/달리기 코스/그려줘/짜줘/만들어줘/추천해줘/GPS 아트 "
-        "only when the conversation contains an explicit Seoul start place "
-        "or both coordinates. Copy that start exactly; never invent, infer, "
+        "with an explicit Seoul start place or both coordinates for ordinary runs. "
+        "Exception: park/waterside requests set need_facilities=['park'] and may omit "
+        "a start: the server picks 3 of 5 registered destinations randomly. With a "
+        "start, it picks the nearest 3; do not preselect destinations or call 3 times. "
+        "Copy an explicit start exactly; never invent, infer, "
         "or substitute a location. If it is missing, ask the user for the "
-        "start and do not call a course tool. A location-only reply is valid "
+        "start and do not call a course tool, except the park/waterside case above. A location-only reply is valid "
         "only immediately after the user established course-creation intent "
         "or was asked for the missing start. Use standard for ordinary runs, "
         "best_animal only for animal/GPS-art requests without a named animal, "
         "never infer animal art from 그려줘 alone, and dog/cat/rabbit/whale for "
         "강아지·댕댕이/고양이·야옹이/토끼/고래. "
         "For a new course, include need_facilities=park only when the user "
-        "explicitly asks to run in or through a park, riverside park, or "
-        "green trail; never infer park mode merely from nearby green space. "
+        "explicitly asks for 공원, 강변, 한강, 하천, 호수, 물가, 수변 or 물 보면서 running. "
+        "These all use the same five-destination catalogue. Drinking water/음수대 "
+        "uses water, not park. Never infer park mode merely from nearby green space. "
         "(2) Existing-course changes use refine_course. (3) Questions about 화장실, 편의점, 물, "
         "공원, or facilities near the current course use "
         "find_facilities_near_course with its most recent course_id. (4) "
@@ -792,6 +800,10 @@ def _planned_course_result(text: str, *, course_type: str, request: dict,
     plan = _animal_course_plan(request, course_type, text, timeout_s)
     if plan is None:
         return None
+    return _plan_result(plan, course_type)
+
+
+def _plan_result(plan: CoursePlan, course_type: str) -> CallToolResult:
     # The plan owns one short spoken sentence for every case. Generator copy
     # can contain scoring rationale that belongs on the detail page, not in a
     # concise chat handoff beside the widget.
@@ -819,6 +831,76 @@ def _planned_course_result(text: str, *, course_type: str, request: dict,
         assistant_text=lead, assistant_text_in_widget=plan.case != CASE_EXACT,
         assistant_final_text=final_text, course_selection=selection,
     )
+
+
+def _park_course_result(request: dict, course_type: str = "standard") -> CallToolResult:
+    """Serve three destinations from the researched catalogue, without routing."""
+    location = request.get("location")
+    has_coordinates = request.get("lat") is not None or request.get("lon") is not None
+    # A theme is not a secretly defaulted departure at 여의도.
+    generic = {"공원", "한강", "한강공원", "강변", "하천", "물", "물가", "수변", "호수", "서울"}
+    named_start = bool(location and location.strip() and location.replace(" ", "") not in generic)
+    origin = None
+    origin_name = None
+    if named_start or has_coordinates:
+        try:
+            lat, lon, origin_name = resolve_location(
+                location, request.get("lat"), request.get("lon"), timeout_s=ADDRESS_TRY_BUDGET_S)
+            origin = (lat, lon)
+        except CourseError as exc:
+            return _mcp_result(f"⚠️ {exc}", code="location_not_found", is_error=True)
+    distance = request.get("distance_km")
+    duration = request.get("duration_min")
+    if ((distance is not None and not 1 <= distance <= 42.195)
+            or (duration is not None and not 10 <= duration <= 360)):
+        return _mcp_result("거리는 1~42.195km, 시간은 10~360분 범위로 알려주세요.",
+                           code="invalid_request", is_error=True)
+    night = bool(request.get("night_mode"))
+    try:
+        selected = select_park_courses(origin, night_mode=night)
+    except (CourseError, OSError, ValueError, RuntimeError, KeyError) as exc:
+        log.warning("park catalogue unavailable: %s", exc)
+        return _mcp_result("등록된 공원·강변 코스 데이터를 확인하지 못했어요. 잠시 후 다시 요청해 주세요.",
+                           code="park_catalog_unavailable", is_error=True, retryable=False)
+    if len(selected) != RECOMMENDATION_COUNT:
+        return _recommendation_shortage(len(selected), night_mode=night)
+    choices = []
+    destinations = []
+    for spot, template in selected:
+        # Recompute facts for the requested night profile; never change the
+        # stored path or overwrite the catalogue's measured lighting values.
+        course = course_from_path(template.params.model_copy(update={"night_mode": night}), template.path)
+        cid = encode_course_id(course.params)
+        _cache_put(cid, course)
+        moved = haversine_m(*origin, course.params.lat, course.params.lon) if origin else 0.0
+        choices.append(CourseChoice(course, cid, "standard", moved))
+        destinations.append({"id": spot.id, "name": spot.name,
+                             "origin_distance_m": round(moved) if origin else None,
+                             "source_url": spot.source_url})
+    if origin:
+        distances = ", ".join(f"{d['name']} {d['origin_distance_m'] / 1000:.1f}km" for d in destinations)
+        eligible = "조명 조건을 만족하며 " if night else ""
+        lead = (f"{origin_name} 기준으로 등록된 5곳 중 {eligible}코스 시작점이 가까운 3곳을 골랐어요 "
+                f"(직선거리: {distances}). 각 코스는 해당 공원·강변에서 출발하며, 이동 경로는 포함하지 않아요.")
+    else:
+        eligible = "조명 조건을 만족하는 곳에서 " if night else ""
+        lead = f"미리 등록한 서울 공원·강변 5곳 중 {eligible}서로 다른 3곳을 무작위로 골랐어요. 각 코스는 해당 장소에서 출발해요."
+    if night:
+        lead += " 가로등이 충분하다고 확인된 코스만 포함했어요."
+    if distance is not None or duration is not None:
+        requested = f"{distance:g}km" if distance is not None else f"{duration:g}분"
+        lead += f" 등록된 고정 코스라 요청 조건({requested})과 실제 거리·시간이 다를 수 있어요."
+    if course_type != "standard":
+        lead += " 이번 추천은 동물 모양이 아닌 공원·강변 일반 코스예요."
+    if request.get("include_hills") or set(request.get("need_facilities") or []) - {"park"}:
+        lead += " 추가 오르막·시설 조건의 충족 여부는 각 코스 정보에서 확인해 주세요."
+    result = _plan_result(CoursePlan("park_catalog", lead, choices[0], tuple(choices[1:])), course_type)
+    result.structuredContent["park_selection"] = {
+        "mode": "nearest" if origin else "random", "distance_basis": "straight_line_to_course_start",
+        "origin": {"name": origin_name, "lat": origin[0], "lon": origin[1]} if origin else None,
+        "catalog_size": len(PARK_SPOTS), "destinations": destinations,
+    }
+    return _complete_recommendation(result, night_mode=night)
 
 
 def _course_tool_result(text: str, *, course_type: str,
@@ -1533,7 +1615,8 @@ def create_seoul_running_course(
     ))] = None,
     distance_km: Annotated[float | None, Field(description=(
         "사용자가 명시한 목표 거리(km), 1-42.195. 생략 시 standard는 기본 5km, "
-        "동물 코스는 가장 선명한 검증 거리를 서버가 선택합니다."
+        "동물 코스는 가장 선명한 검증 거리를 서버가 선택합니다. "
+        "park 추천은 등록된 고정 경로이며 실제 거리가 요청과 다르면 안내합니다."
     ))] = None,
     duration_min: Annotated[float | None, Field(description=(
         "사용자가 명시한 목표 시간(분), 10-360. 말하지 않았으면 생략하며, "
@@ -1547,20 +1630,21 @@ def create_seoul_running_course(
         "true이면 가로등이 충분한 코스만 반환하며 조명 미확인·부족 코스로 대체하지 않습니다."
     ))] = False,
     need_facilities: Annotated[list[str] | None, Field(description=(
-        "요청한 경유 시설만 전달: convenience_store, restroom, water, park. "
-        "park는 사용자가 공원·한강공원·강변·녹지 산책로에서 달리고 싶다고 "
-        "명시한 경우에만 전달하고, 단순히 주변에 공원이 있다는 이유로 추론하지 마세요."
+        "convenience_store=편의점, restroom=화장실, water=마실 물·음수대. "
+        "공원·강변·한강·하천·호수·수변·물가·물 보면서 달리는 코스를 명시한 경우에만 "
+        "park를 전달하세요. 등록된 5곳 중 무작위 3곳, 출발지가 있으면 가까운 3곳을 반환합니다. "
+        "일반 코스 주변에 공원이 있다는 이유로 park를 추론하지 마세요."
     ))] = None,
 ) -> CallToolResult:
     """Creates three distinct running course recommendations (standard or
     animal-shaped GPS art) in ONE call with Runnywhere(러니웨어).
     Call EXACTLY ONCE for 러닝 코스/그려줘/추천해줘, including '야간 코스 3개'.
-    Never call once per course or repeat to fill the list. If insufficient_courses,
-    explain the shortage; do not retry automatically. Never invent a start:
-    ask if missing. Use standard for ordinary runs; best_animal for unnamed
-    animal art; dog/cat/rabbit/whale for the named animal. '그려줘' alone is standard.
-    Night requests require good lighting; never substitute dark/unknown routes.
-    Preserve start/effort before shape and optional preferences.
+    Never call once per course; do not repeat on insufficient_courses.
+    Parks/rivers/streams/물가: set need_facilities=['park']. One call picks 3 of
+    5 registered places, randomly without a start or nearest with a start.
+    Never invent a start. Only park requests may omit it; otherwise ask.
+    standard=ordinary runs; best_animal=unnamed animal art; dog/cat/rabbit/whale
+    =named animal. '그려줘' alone is standard. Night requires good lighting.
     Existing-course changes, 이 코스 근처 화장실, map/GPX and relays use other tools.
     course_selection records ACTUAL courses; never call a rabbit a dog.
     Begin with assistant_text unless assistant_text_in_widget is true.
@@ -1571,6 +1655,8 @@ def create_seoul_running_course(
         night_mode=night_mode, need_facilities=need_facilities,
     )
     started = time.monotonic()
+    if "park" in (need_facilities or []):
+        return _park_course_result(common, course_type)
     if course_type == "standard":
         return _course_tool_result(
             generate_running_course(**common), course_type=course_type,
@@ -1588,6 +1674,8 @@ def _legacy_generate_running_course(*args, **kwargs) -> CallToolResult:
     keys = ("location", "lat", "lon", "distance_km", "duration_min",
             "include_hills", "night_mode", "need_facilities")
     request = {**dict(zip(keys, args)), **kwargs}
+    if "park" in (request.get("need_facilities") or []):
+        return _park_course_result(request)
     return _course_tool_result(
         generate_running_course(*args, **kwargs), course_type="standard",
         request=request, timeout_s=_budget_left(started),
@@ -1602,11 +1690,13 @@ def _legacy_generate_animal_course(*args, **kwargs) -> CallToolResult:
         shape = args[0]
     course_type = shape if shape in SHAPES else "best_animal"
     started = time.monotonic()
-    text = _animal_text_for_cards(*args, **kwargs)
     # Positional calls only ever carry the shape, so the start is in kwargs.
     request = {key: kwargs.get(key) for key in (
         "location", "lat", "lon", "distance_km", "duration_min", "include_hills",
         "night_mode", "need_facilities")}
+    if "park" in (request.get("need_facilities") or []):
+        return _park_course_result(request, course_type)
+    text = _animal_text_for_cards(*args, **kwargs)
     if request["location"] is None and request["lat"] is None:
         return _course_tool_result(text, course_type=course_type)
     return _course_tool_result(
@@ -2472,6 +2562,7 @@ def _warm() -> None:
         from . import graph as graphmod
         graphmod.get_graph()
         graphmod._node_index()
+        park_courses()
         # Pre-load the graph inside each pool worker so the first real animal
         # request is not stuck behind a cold ~2.5s graph load per process.
         pool = _get_pool()

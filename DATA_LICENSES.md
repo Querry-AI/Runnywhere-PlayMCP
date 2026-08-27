@@ -7,7 +7,8 @@ not to third-party data. Snapshot details are recorded in `data/snapshot.json`.
 ## OpenStreetMap-derived databases — ODbL 1.0
 
 `seoul_graph.pkl`, `facilities.pkl`, `infra_points.pkl`, and
-`animal_station_presets.json.gz` contain or are derived from OpenStreetMap data.
+`animal_station_presets.json.gz` and `park_course_presets.json` contain or are
+derived from OpenStreetMap data.
 They are offered under the Open Data Commons Open Database License 1.0 (ODbL):
 
 - © OpenStreetMap contributors
@@ -16,7 +17,8 @@ They are offered under the Open Data Commons Open Database License 1.0 (ODbL):
 
 The public copy of this repository provides the derivative databases themselves
 and the corresponding transformation code in `etl/` and
-`scripts/build_animal_presets.py`. A recipient may copy, modify, and redistribute
+`scripts/build_animal_presets.py` and `scripts/build_park_presets.py`.
+A recipient may copy, modify, and redistribute
 the databases under ODbL 1.0. Any public use must retain OpenStreetMap attribution
 and make the applicable derivative database, or a compliant method of producing
 it, available under ODbL. Non-OSM inputs listed below retain their own terms.
