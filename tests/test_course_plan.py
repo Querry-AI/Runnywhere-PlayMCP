@@ -229,6 +229,15 @@ def test_full_match_wins_and_optional_features_break_shape_ties():
     assert plan.primary.match_note == "요청 조건 일치"
 
 
+def test_ordinary_night_lighting_is_not_reported_as_an_unmet_preference():
+    plain = _course(location_name="시청", shape=None, km=5)
+    plain.rfs = {"components": {"lighting": .4, "cctv": .3}}
+    plan = build_course_plan(requested_name="시청", shape="standard", exact=None,
+        shape_matches=[], animal_matches=[], standard=plain, distance_km=5, night_mode=True)
+    assert plan.primary.course is plain
+    assert plan.primary.match_note == "요청 조건 일치"
+
+
 def test_night_bundle_excludes_dark_and_unknown_routes_from_every_position():
     courses = [_course(location_name="강남역", shape=None, km=km) for km in (4.8, 4.9, 5, 5.1, 5.2)]
     for course, lighting in zip(courses, (None, .3, .6, .8, .9)):

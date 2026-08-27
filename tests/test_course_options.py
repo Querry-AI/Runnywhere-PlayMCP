@@ -420,6 +420,9 @@ def test_park_recommendations_accept_coordinates_and_preserve_night_lighting():
     courses = [server._cached_course(url.rsplit("/", 1)[1]) for url in _urls(_card(result))]
     assert len(courses) == 3
     assert all(c.params.night_mode and has_sufficient_night_lighting(c.rfs) for c in courses)
+    # The real Yangjae preset (.34) used to be excluded by the bright-only .60 gate.
+    assert "양재천" in {c.params.location_name for c in courses}
+    assert any(.33 <= c.rfs["components"]["lighting"] < .6 for c in courses)
     assert "조명 조건을 만족" in _lead(result)
 
 
@@ -482,7 +485,7 @@ def test_incomplete_recommendation_does_not_emit_one_card_or_request_repeat_call
     assert result.structuredContent["repeat_tool_call"] is False
     assert result.structuredContent["retryable"] is False
     assert result.isError
-    assert "가로등이 충분" in result.content[0].text
+    assert "야간 최소 기준" in result.content[0].text
     assert '"widget"' not in result.content[0].text
 
 
@@ -501,7 +504,7 @@ def test_night_preferences_are_never_relaxed_to_daytime(monkeypatch):
     assert all(p.night_mode for p in calls)
 
 
-@pytest.mark.parametrize("lighting", [None, .3, .8])
+@pytest.mark.parametrize("lighting", [None, .3, .32, .33, .4, .8])
 def test_night_request_returns_three_lit_routes_or_no_recommendation(monkeypatch, lighting):
     from runart import course as course_module
     from runart.courseplan import route_signature
@@ -523,7 +526,7 @@ def test_night_request_returns_three_lit_routes_or_no_recommendation(monkeypatch
     result = server.create_seoul_running_course(
         course_type="standard", location="강남역", night_mode=True)
 
-    if lighting != .8:
+    if lighting is None or lighting < .33:
         assert result.isError
         assert "가로등" in result.content[0].text
         assert '"widget"' not in result.content[0].text
@@ -532,7 +535,7 @@ def test_night_request_returns_three_lit_routes_or_no_recommendation(monkeypatch
     courses = [server._cached_course(url.rsplit("/", 1)[1]) for url in _urls(_card(result))]
     assert len(courses) == 3
     assert len({route_signature(c) for c in courses}) == 3
-    assert all(c.params.night_mode and c.rfs["components"]["lighting"] == .8 for c in courses)
+    assert all(c.params.night_mode and c.rfs["components"]["lighting"] == lighting for c in courses)
     assert result.structuredContent["course_selection"]["returned_count"] == 3
 
 

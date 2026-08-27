@@ -108,6 +108,37 @@ def test_night_generation_rejects_poor_lighting_even_with_high_overall_score(mon
     assert night.rfs["components"]["lighting"] == .9
 
 
+@pytest.mark.parametrize("score,observed,expected", [
+    (None, None, False), (.30, None, False), (.32, None, False),
+    (.33, None, True), (.4, None, True), (.5, None, False),
+    (.5, 0, False), (.5, 1, True), (.6, 0, False), (.6, None, True),
+    (float("nan"), None, False), (True, None, False), (1.1, None, False),
+])
+def test_night_threshold_accepts_ordinary_but_not_dark_or_unknown_lighting(score, observed, expected):
+    from runart.rfs import has_sufficient_night_lighting
+    summary = {"components": {"lighting": score}}
+    if observed is not None:
+        summary["lighting_observed_ratio"] = observed
+    assert has_sufficient_night_lighting(summary) is expected
+
+
+def test_unknown_edge_defaults_cannot_pass_as_ordinary_lighting(monkeypatch):
+    import networkx as nx
+    from runart import rfs
+    monkeypatch.setattr(rfs, "citywide_top_percent", lambda score: 50)
+    graph = nx.Graph()
+    graph.add_edges_from([(1, 2), (2, 3), (3, 1)], length=100)
+    summary = rfs.route_rfs_summary(graph, [1, 2, 3, 1], night_mode=True)
+    assert summary["components"]["lighting"] == .5
+    assert summary["lighting_observed_ratio"] == 0
+    assert not rfs.has_sufficient_night_lighting(summary)
+    graph.edges[1, 2]["lighting_score"] = .4
+    graph.edges[2, 3]["lighting_score"] = .6
+    measured = rfs.route_rfs_summary(graph, [1, 2, 3, 1], night_mode=True)
+    assert measured["components"]["lighting"] == .5
+    assert rfs.has_sufficient_night_lighting(measured)
+
+
 def test_out_of_area_raises_guidance():
     with pytest.raises(CourseError):
         generate_course(CourseParams(lat=37.41, lon=127.10, distance_km=5.0))

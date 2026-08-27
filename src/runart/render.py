@@ -17,7 +17,7 @@ from .insights import CourseFacts, course_facts, is_loop
 from .models import encode_course_id
 from .naming import course_badges, course_name_placeholder, course_title
 from .pace import DEFAULT_PACE_S, PACE_MODEL, effort
-from .rfs import edge_rfs, has_sufficient_night_lighting
+from .rfs import edge_rfs, has_sufficient_night_lighting, night_lighting_label
 from .shapes import SHAPES
 
 PREVIEW_FACILITY_TYPES = {"convenience_store", "restroom"}
@@ -82,7 +82,7 @@ def course_markdown(course: Course, base_url: str, facilities: list[dict]) -> st
             lines.append(f"- 요청 시설 중 {', '.join(missing)}은 코스 10m 반경에서 찾지 못했어요")
     if p.night_mode:
         if has_sufficient_night_lighting(course.rfs):
-            lines.append("- 💡 야간 조명 양호: 가로등 데이터가 조명 양호 기준을 통과했어요")
+            lines.append(f"- 💡 {night_lighting_label(course.rfs)}: 가로등 데이터가 야간 추천 최소 기준을 통과했어요")
         else:
             lines.append("- ⚠️ 가로등이 충분한지 확인되지 않아 야간 러닝에는 추천하지 않아요")
     lines.extend([

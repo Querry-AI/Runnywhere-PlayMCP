@@ -81,9 +81,9 @@ def _preference_misses(course: Course, *, include_hills: bool,
     misses = wanted - hits
     if include_hills and course.is_flat:
         misses += 1
-    # Use the same 0.6 threshold as RFS highlights; absent data is unverified.
-    if night_mode and any(course.rfs.get("components", {}).get(key, 0) < 0.60
-                          for key in ("lighting", "cctv")):
+    # Night eligibility is ordinary measured lighting, not the bright band
+    # or a separate CCTV quota. CCTV remains a soft routing weight.
+    if night_mode and not has_sufficient_night_lighting(course.rfs):
         misses += 1
     return misses
 

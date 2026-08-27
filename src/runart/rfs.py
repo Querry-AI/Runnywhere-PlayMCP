@@ -28,14 +28,33 @@ WEIGHTS_NIGHT = {
 FLAT_MAX_SLOPE_PCT = 3.0
 HILL_SWEET_LO, HILL_SWEET_HI = 3.0, 8.0
 SCORE_FLOOR = 0.25
-NIGHT_LIGHTING_MIN = 0.60
+# The presentation's "good" band is not the minimum for a usable night run.
+# Components are rounded to two decimals; .33 is the first non-poor band
+# above the existing <= .32 dark-course cutoff (citywide median is .33).
+NIGHT_LIGHTING_MIN = 0.33
+GOOD_LIGHTING_MIN = 0.60
 
 
 def has_sufficient_night_lighting(summary: dict) -> bool:
-    """Require measured good lighting; a night request is not proof of it."""
+    """Allow ordinary lighting, but never treat an unknown .5 prior as data."""
     value = (summary.get("components") or {}).get("lighting")
-    return (isinstance(value, (int, float)) and not isinstance(value, bool)
-            and NIGHT_LIGHTING_MIN <= value <= 1)
+    if not (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and NIGHT_LIGHTING_MIN <= value <= 1):
+        return False
+    observed = summary.get("lighting_observed_ratio")
+    if observed is not None:
+        return (isinstance(observed, (int, float)) and not isinstance(observed, bool)
+                and 0 < observed <= 1)
+    # Older preset summaries have no observation field. Any non-neutral
+    # aggregate proves some measured input, but .5 alone could be all defaults.
+    return value != .5
+
+
+def night_lighting_label(summary: dict) -> str:
+    if not has_sufficient_night_lighting(summary):
+        return ""
+    return ("야간 조명 양호" if summary["components"]["lighting"] >= GOOD_LIGHTING_MIN
+            else "야간 조명 보통")
 
 
 COMPONENT_LABELS_KO = {
@@ -85,6 +104,7 @@ def route_rfs_summary(
     score_len = 0.0
     comp_len: dict[str, float] = {k: 0.0 for k in w}
     park_len = 0.0
+    lighting_observed_len = 0.0
     for u, v in zip(path, path[1:]):
         attrs = graph.edges[u, v]
         length = attrs["length"]
@@ -98,6 +118,13 @@ def route_rfs_summary(
         comp_len["crossing"] += attrs.get("crossing_score", 0.5) * length
         if attrs.get("park_score", 0.0) >= 0.8:
             park_len += length
+        # Missing/untagged graph inputs use .5. A measured .5 can be known
+        # from the raw OSM tag; other non-neutral scores include ETL evidence.
+        lighting = attrs.get("lighting_score")
+        if (isinstance(lighting, (int, float)) and not isinstance(lighting, bool)
+                and 0 <= lighting <= 1
+                and (lighting != .5 or attrs.get("lit") in ("yes", "no"))):
+            lighting_observed_len += length
     if total_len == 0:
         return {"score": 0, "highlights": [], "park_ratio": 0.0}
     comps = {k: v / total_len for k, v in comp_len.items()}
@@ -114,6 +141,7 @@ def route_rfs_summary(
         "highlights": highlights[:3],
         "park_ratio": park_ratio,
         "components": {k: round(v, 2) for k, v in comps.items()},
+        "lighting_observed_ratio": lighting_observed_len / total_len,
         "weights": w,
     }
 

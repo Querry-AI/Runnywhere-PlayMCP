@@ -18,7 +18,7 @@ from .facilities import facilities_along
 from .geo import haversine_m
 from .infrastructure import pedestrian_signals_crossed
 from .naming import GREEN_SHARE_MIN, green_share
-from .rfs import NIGHT_LIGHTING_MIN, has_sufficient_night_lighting
+from .rfs import GOOD_LIGHTING_MIN, has_sufficient_night_lighting, night_lighting_label
 
 # Four chips is one comfortable line on a phone; past that they wrap into a
 # block that competes with the headline numbers.
@@ -48,7 +48,7 @@ FACILITY_SCAN_LIMIT = 80
 COMPONENT_BANDS = {
     "crossing": (0.57, 0.39, ("🚦", "신호 적음"), ("🚦", "신호 잦음")),
     "sidewalk": (0.60, 0.43, ("🚸", "보도 넓음"), ("🚸", "보도 좁음")),
-    "lighting": (NIGHT_LIGHTING_MIN, 0.32, ("🔦", "조명 좋음"), ("🌒", "조명 어두움")),
+    "lighting": (GOOD_LIGHTING_MIN, 0.32, ("🔦", "조명 좋음"), ("🌒", "조명 어두움")),
 }
 # Cumulative gain per km above which "오르막 포함" deserves a caveat sentence.
 CLIMB_NOTE_GAIN_PER_KM = 15.0
@@ -194,7 +194,7 @@ def course_traits(course: Course) -> tuple[dict, ...]:
         traits.append({"emoji": "🏙️", "label": "도심 위주"})
 
     if course.params.night_mode and has_sufficient_night_lighting(course.rfs):
-        traits.append({"emoji": "💡", "label": "야간 조명 양호"})
+        traits.append({"emoji": "💡", "label": night_lighting_label(course.rfs)})
 
     comps = _components(course)
     # Ordered by how much the quality changes the run, not by RFS weight.

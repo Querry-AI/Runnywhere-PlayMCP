@@ -127,7 +127,8 @@ mcp = FastMCP(
         "courses together, including '코스 3개' and night-run requests. Never "
         "call once per course or vary arguments to fill a list. If the result "
         "is insufficient_courses, explain it without automatic repeat calls. "
-        "Night recommendations require verified good lighting, never silently "
+        "Night recommendations allow measured ordinary lighting (>=0.33); good lighting "
+        "(>=0.60) is not required. Never silently "
         "substitute poorly lit or unknown-lighting routes. Do not claim safety "
         "merely because night_mode was requested. "
         "Use this tool for 러닝 코스/달리기 코스/그려줘/짜줘/만들어줘/추천해줘/GPS 아트 "
@@ -761,7 +762,7 @@ def _plan_final_text(selection: dict) -> str:
 
 
 def _recommendation_shortage(count: int, *, night_mode: bool = False) -> CallToolResult:
-    condition = "가로등이 충분하다고 확인된 " if night_mode else "서로 다른 "
+    condition = "가로등 데이터가 야간 최소 기준을 충족하는 " if night_mode else "서로 다른 "
     incomplete = _mcp_result(
         f"현재 조건에서 {condition}코스 3개를 모두 확보하지 못했어요. "
         + ("조명이 부족하거나 확인되지 않은 코스는 야간 추천에서 제외했어요. " if night_mode else "")
@@ -886,7 +887,7 @@ def _park_course_result(request: dict, course_type: str = "standard") -> CallToo
         eligible = "조명 조건을 만족하는 곳에서 " if night else ""
         lead = f"미리 등록한 서울 공원·강변 5곳 중 {eligible}서로 다른 3곳을 무작위로 골랐어요. 각 코스는 해당 장소에서 출발해요."
     if night:
-        lead += " 가로등이 충분하다고 확인된 코스만 포함했어요."
+        lead += " 조명 보통 이상으로 확인된 코스만 포함했어요."
     if distance is not None or duration is not None:
         requested = f"{distance:g}km" if distance is not None else f"{duration:g}분"
         lead += f" 등록된 고정 코스라 요청 조건({requested})과 실제 거리·시간이 다를 수 있어요."
@@ -1375,7 +1376,7 @@ def generate_running_course(
     distance_km: Annotated[float | None, Field(description="Target distance in km, 1-42.195")] = None,
     duration_min: Annotated[float | None, Field(description="Target duration in minutes, 10-360; converted to distance at 6:30/km if distance_km is absent")] = None,
     include_hills: Annotated[bool, Field(description="True to include uphill training segments (3-8% grade); False prefers flat routes")] = False,
-    night_mode: Annotated[bool, Field(description="Require good lighting for night runs; CCTV remains a preference")] = False,
+    night_mode: Annotated[bool, Field(description="Allow ordinary measured lighting for night runs; CCTV remains a preference")] = False,
     need_facilities: Annotated[list[str] | None, Field(description=(
         "Facility types the course should pass: convenience_store, restroom, "
         "water, park. Pass park only when the user explicitly asks to run in "
@@ -1417,7 +1418,7 @@ def generate_animal_course(
     distance_km: Annotated[float | None, Field(description="Target distance in km, 1-42.195")] = None,
     duration_min: Annotated[float | None, Field(description="Target duration in minutes, 10-360")] = None,
     include_hills: Annotated[bool, Field(description="Include uphill segments")] = False,
-    night_mode: Annotated[bool, Field(description="Require good lighting; never substitute dark or unknown-lighting routes")] = False,
+    night_mode: Annotated[bool, Field(description="Allow ordinary lighting; exclude dark or unknown-lighting routes")] = False,
     need_facilities: Annotated[list[str] | None, Field(description=(
         "Facility types to pass by. Pass park only for an explicit park, "
         "riverside park, or green-trail running request."
@@ -1627,7 +1628,8 @@ def create_seoul_running_course(
     ))] = False,
     night_mode: Annotated[bool, Field(description=(
         "야간·밤·가로등·CCTV·안전 경로를 요청했을 때 true; 언급이 없으면 false. "
-        "true이면 가로등이 충분한 코스만 반환하며 조명 미확인·부족 코스로 대체하지 않습니다."
+        "true이면 조명 보통(0.33) 이상을 허용하며 조명 좋음(0.60)을 필수로 요구하지 않습니다. "
+        "어두움(0.32 이하)·미확인 코스는 제외합니다."
     ))] = False,
     need_facilities: Annotated[list[str] | None, Field(description=(
         "convenience_store=편의점, restroom=화장실, water=마실 물·음수대. "
@@ -1644,7 +1646,7 @@ def create_seoul_running_course(
     5 registered places, randomly without a start or nearest with a start.
     Never invent a start. Only park requests may omit it; otherwise ask.
     standard=ordinary runs; best_animal=unnamed animal art; dog/cat/rabbit/whale
-    =named animal. '그려줘' alone is standard. Night requires good lighting.
+    =named animal. '그려줘' alone is standard. Night allows ordinary measured lighting.
     Existing-course changes, 이 코스 근처 화장실, map/GPX and relays use other tools.
     course_selection records ACTUAL courses; never call a rabbit a dog.
     Begin with assistant_text unless assistant_text_in_widget is true.

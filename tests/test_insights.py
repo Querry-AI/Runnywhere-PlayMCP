@@ -38,7 +38,7 @@ def test_traits_are_labelled_bounded_and_lead_with_terrain():
     assert all(len(label) <= 12 and "\n" not in label for label in labels)
 
 
-@pytest.mark.parametrize("lighting", [None, .30, .59, .60, .90])
+@pytest.mark.parametrize("lighting", [None, .30, .32, .33, .40, .50, .59, .60, .90])
 def test_night_label_depends_on_actual_lighting_not_request_flag(lighting):
     from runart.render import course_markdown
 
@@ -48,11 +48,14 @@ def test_night_label_depends_on_actual_lighting_not_request_flag(lighting):
     if lighting is not None:
         course.rfs["components"]["lighting"] = lighting
     facts = course_facts(course)
-    qualified = lighting is not None and lighting >= .6
+    qualified = lighting is not None and lighting >= .33
     assert any("야간" in trait["label"] for trait in facts.traits) is qualified
     assert any("야간 러닝에는 추천하지" in note for note in facts.cautions) is (not qualified)
     markdown = course_markdown(course, "https://runnywhere.example", [])
-    assert ("야간 조명 양호" in markdown) is qualified
+    assert ("야간 조명 양호" in markdown) is (qualified and lighting >= .6)
+    assert ("야간 조명 보통" in markdown) is (qualified and lighting < .6)
+    if qualified and lighting < .6:
+        assert not any(trait["label"] == "조명 좋음" for trait in facts.traits)
     assert ("야간 러닝에는 추천하지" in markdown) is (not qualified)
     assert "조명·안심 CCTV가 좋은 길" not in markdown
 

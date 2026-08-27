@@ -83,7 +83,8 @@ def test_p4_night_runner():
     if _is_course(out):
         cid = server._extract_single_course_id(out)
         course = server._cached_course(cid)
-        assert course.rfs["components"]["lighting"] >= .6
+        from runart.rfs import has_sufficient_night_lighting
+        assert has_sufficient_night_lighting(course.rfs)
     else:
         assert out.startswith("⚠️") and "가로등" in out
 
