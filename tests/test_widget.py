@@ -74,7 +74,7 @@ def test_course_widget_matches_kakao_unframed_contract_and_is_deterministic():
     assert len(first.encode("utf-8")) < WIDGET_MAX_BYTES
 
     card = payload["widget"]
-    assert card["direction"] == "col" and card["padding"] == 0
+    assert card["direction"] == "col" and card["padding"] == {"x": "12px"}
     assert not _components(card, "Card")
     assert not _contains_key(card, "border")
     assert not _components(card, "Divider")
@@ -83,6 +83,7 @@ def test_course_widget_matches_kakao_unframed_contract_and_is_deterministic():
     assert header["type"] == "Title" and header["value"] == "추천 코스"
     row = card["children"][1]
     assert row["type"] == "Row"
+    assert row["padding"] == {"top": "8px", "bottom": "8px"}
     image = _components(row, "Image")[0]
     overview = row["children"][1]
     action = _components(row, "Button")[0]
@@ -104,6 +105,7 @@ def test_course_widget_matches_kakao_unframed_contract_and_is_deterministic():
     assert "평지 위주" in _components(overview["children"][0], "Badge")[0]["label"]
     assert overview["children"][1]["value"] == "🐶 강남역 댕댕런"
     footer = overview["children"][2]
+    assert footer["gap"] == "12px"
     assert _components(footer, "Text")[0]["value"] == "9.0km · 약 63분"
     assert _components(footer, "Text")[0]["weight"] == "bold"
     assert _components(footer, "Caption")[0]["value"] == f"오르막 {course.ascent_m:.0f}m"
@@ -566,3 +568,27 @@ def test_bongcheon_reference_copy_uses_live_facts_and_keeps_map_action(monkeypat
     assert action["onClickAction"]["payload"]["target"]["url"] == (
         f"https://runnywhere.example/c/{course_id}"
     )
+
+
+def test_unavailable_animal_explanation_renders_before_recommendations(monkeypatch):
+    from runart.courseplan import build_course_plan
+
+    standard = _course(location_name="서울역", shape=None)
+    plan = build_course_plan(
+        requested_name="서울역", shape="dog", exact=None,
+        shape_matches=[], animal_matches=[], standard=standard,
+    )
+    monkeypatch.setattr(server, "_animal_course_plan", lambda *args: plan)
+    result = server._planned_course_result(
+        "", course_type="dog", request={"location": "서울역"}, timeout_s=5)
+    payload = json.loads(result.content[0].text)
+    intro, heading, row = payload["widget"]["children"]
+
+    assert intro == {"type": "Markdown", "value": plan.lead}
+    assert "서울역에서 출발하는 강아지 모양 코스를 찾지 못해" in intro["value"]
+    assert "다른 추천 코스를 준비했어요" in intro["value"]
+    assert heading["value"] == "추천 코스"
+    assert _components(row, "Button")[0]["label"] == "지도 보기"
+    assert result.structuredContent["assistant_text_in_widget"] is True
+    assert result.structuredContent["assistant_text_position"] == "widget_intro"
+    assert payload["copy_text"].startswith(plan.lead)

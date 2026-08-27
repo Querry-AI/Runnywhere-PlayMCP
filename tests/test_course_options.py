@@ -65,7 +65,13 @@ def _urls(payload) -> list[str]:
 def _lead(result) -> str:
     lead = result.structuredContent["assistant_text"]
     assert result.content[1].text == lead
-    assert result.structuredContent["assistant_text_position"] == "before_widget"
+    if result.structuredContent["assistant_text_in_widget"]:
+        assert result.structuredContent["assistant_text_position"] == "widget_intro"
+        assert _card(result)["widget"]["children"][0] == {
+            "type": "Markdown", "value": lead,
+        }
+    else:
+        assert result.structuredContent["assistant_text_position"] == "before_widget"
     assert result.structuredContent["assistant_text_verbatim"] is True
     return lead
 
@@ -110,7 +116,7 @@ def test_case2_nearby_course_names_the_real_start_and_still_offers_three():
     actual_start = "서울대입구역"
     assert actual_start == "서울대입구역"
     assert actual_start in lead
-    assert "장소·시간(거리)을 먼저" in lead
+    assert "다른 추천 코스를 준비했어요" in lead
     assert actual_start in json.dumps(payload, ensure_ascii=False)
 
 
@@ -123,7 +129,7 @@ def test_case3_no_animal_within_two_km_leads_with_the_plain_course_here():
     titles = _course_titles(payload)
 
     assert "도봉산역" in lead
-    assert "장소·시간(거리)을 먼저" in lead
+    assert "다른 추천 코스를 준비했어요" in lead
     # (a) the plain course at the requested start leads the card.
     title = titles[0]
     assert "도봉산" in title

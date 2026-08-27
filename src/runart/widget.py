@@ -114,8 +114,8 @@ def _validate_envelope(payload: dict) -> None:
         raise WidgetBuildError("course listings require an unframed Basic root")
     if set(listing) != {"type", "children", "direction", "gap", "padding"}:
         raise WidgetBuildError("unsupported Basic properties")
-    if listing["direction"] != "col" or listing["padding"] != 0:
-        raise WidgetBuildError("course listings must be vertical and flush")
+    if listing["direction"] != "col" or listing["padding"] != {"x": "12px"}:
+        raise WidgetBuildError("course listings require a small horizontal inset")
     children = listing.get("children")
     if not isinstance(children, list) or not children:
         raise WidgetBuildError("widget Basic must have children")
@@ -130,6 +130,10 @@ def _validate_component(component: object) -> None:
     if not isinstance(component, dict):
         raise WidgetBuildError("widget child must be an object")
     kind = component.get("type")
+    if kind == "Markdown":
+        if set(component) != {"type", "value"} or not component.get("value"):
+            raise WidgetBuildError("Markdown requires introductory text")
+        return
     if kind in {"Row", "Col"}:
         allowed = {
             "type", "children", "gap", "align", "flex", "wrap", "minWidth",
@@ -312,7 +316,7 @@ def _course_card_row(course: Course, course_id: str, origin: str,
         "type": "Row",
         "gap": "8px",
         "align": "center",
-        "padding": {"top": "12px", "bottom": "16px"},
+        "padding": {"top": "8px", "bottom": "8px"},
         "children": [
             {
                 "type": "Image",
@@ -332,7 +336,7 @@ def _course_card_row(course: Course, course_id: str, origin: str,
                     # reference listing's 14px title without a heading bump.
                     {"type": "Text", "value": title, "size": "sm", "weight": "semibold", "color": LISTING_TEXT, "maxLines": 1},
                     {
-                        "type": "Row", "gap": "8px", "align": "center",
+                        "type": "Row", "gap": "12px", "align": "center",
                         "children": [
                             {"type": "Col", "gap": "4px", "flex": 1, "minWidth": 0, "children": [
                                 {"type": "Text", "value": _effort_line(course), "size": "sm", "weight": "bold", "color": LISTING_TEXT, "maxLines": 2},
@@ -354,6 +358,7 @@ def build_course_widget(
     *,
     alternatives: tuple[CourseChoice, ...] = (),
     primary_note: str = "",
+    intro_text: str = "",
 ) -> str:
     """Return an unframed Kakao listing for one confirmed course.
 
@@ -377,6 +382,11 @@ def build_course_widget(
         _section_heading("추천 코스", lead=True),
         _course_card_row(course, course_id, origin, primary_note),
     ]
+    if intro_text:
+        # Kakao may render the tool widget before any assistant prose. A
+        # Markdown sibling before the listing guarantees the explanation
+        # appears first while preserving content[0]'s widget contract.
+        children.insert(0, {"type": "Markdown", "value": _copy_value(intro_text, 600)})
     if alternatives:
         children.append(_section_heading("다른 코스도 있어요", lead=False))
         for choice in alternatives:
@@ -402,12 +412,15 @@ def build_course_widget(
             for choice in alternatives
         )
     copy_text = "\n".join(copy_lines)
+    if intro_text:
+        copy_text = f"{_copy_value(intro_text, 600)}\n\n{copy_text}"
     return _serialize({
         "widget": {
             # Verified in Kakao Preview: Card ignores border=0 (including
             # Border objects) and retains its 1px stylesheet border. Basic
             # is ChatKit's unframed root; do not reintroduce a nested Card.
-            "type": "Basic", "direction": "col", "gap": 0, "padding": 0,
+            "type": "Basic", "direction": "col", "gap": 0,
+            "padding": {"x": "12px"},
             "children": children,
         },
         "copy_text": copy_text,

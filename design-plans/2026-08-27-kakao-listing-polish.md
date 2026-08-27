@@ -58,3 +58,28 @@ Follow-up change: replace Card with the documented
 preserving all listing children, and use Text sm for 14px course titles.
 Increase ascent to Caption lg. This new root must still be verified after
 deployment in Kakao; documentation support is not evidence of host parity.
+
+## Spacing and unavailable-course follow-up
+
+- Basic root now has 12px horizontal padding: section headings and thumbnails
+  share the same left inset, while map buttons no longer touch the right edge.
+- Course row vertical padding reduced from 12px/16px to 8px/8px; metric/action
+  gap increased from 8px to 12px.
+- Non-exact plans place their explanation in a Markdown sibling before
+  `추천 코스`, inside the unframed envelope. This preserves Kakao's requirement
+  that content[0] is widget JSON while fixing the visible order independently
+  of whether the assistant follows the before_widget metadata.
+- `assistant_text_in_widget` tells the assistant not to repeat that paragraph.
+  Exact matches retain the existing standalone assistant-text contract.
+- Missing local animal and distance/time mismatch use different explanations;
+  a known local animal with the wrong length is not described as nonexistent.
+- The share copy also starts with the same explanation. Candidate ranking,
+  route generation and per-course map URLs are unchanged.
+
+Verification note: the existing pool-unavailable animal-generation test returns
+no route in the current environment. The same failure was reproduced with
+pre-change HEAD versions of server.py, widget.py and courseplan.py in an isolated
+temporary package using the same data. No generation budget or route logic was
+changed to hide that unrelated failure. An initial focused run also exposed the
+existing hardcoded 73-minute nearest-route expectation returning 85 minutes;
+the subsequent full run passed that test.

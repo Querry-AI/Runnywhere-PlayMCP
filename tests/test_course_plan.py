@@ -64,7 +64,7 @@ def test_local_plain_course_precedes_nearby_animals_and_names_their_detours():
         "requested_animal", "other_animal"]
     assert plan.alternatives[0].course is near_dog
     assert "0.4km 이동" in plan.alternatives[0].match_note
-    assert "장소·시간(거리)을 먼저" in plan.lead
+    assert "서울대입구역에서 출발하는 강아지 모양 코스를 찾지 못해" in plan.lead
 
 
 def test_far_case_leads_with_the_plain_course_and_says_nothing_is_within_2km():
@@ -203,6 +203,8 @@ def test_actual_distance_beats_requested_shape_even_at_the_same_start():
         shape_matches=[], animal_matches=[], standard=plain, distance_km=5)
     assert plan.primary.course is plain
     assert "요청 5km → 12.0km" in plan.alternatives[0].match_note
+    assert "요청한 5km에 맞지 않아" in plan.lead
+    assert "출발하는 강아지 모양 코스를 찾지 못해" not in plan.lead
 
 
 def test_shape_beats_preferences_once_start_and_effort_match():

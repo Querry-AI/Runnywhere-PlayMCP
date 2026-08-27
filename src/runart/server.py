@@ -40,7 +40,7 @@ from .course import (MAX_VIA_POINTS, Course, CourseAccessError, CourseError,
                      DistanceMissError, course_from_path,
                      ensure_course_runnable, generate_course, reroute_segment,
                      route_via_points, snap_drawn_segment, snap_drawn_strokes)
-from .courseplan import (SAME_START_M, CoursePlan, build_course_plan,
+from .courseplan import (CASE_EXACT, SAME_START_M, CoursePlan, build_course_plan,
                          requested_distance)
 from .facilities import LABELS_KO, facilities_along
 from .geocode import resolve_location
@@ -135,6 +135,8 @@ mcp = FastMCP(
         "Requests to show the same summary, map, or GPX use get_course_status. "
         "Never regenerate a course for rules 2-4. Never claim that a Seoul "
         "course is unsupported before the appropriate new-course call. When "
+        "structuredContent.assistant_text_in_widget is true, the explanation "
+        "is already rendered above the course list; do not repeat it. Otherwise, when "
         "a result includes structuredContent.assistant_text, your response "
         "MUST begin with that exact sentence verbatim as normal conversational "
         "text before introducing the widget. Never paraphrase, replace, or "
@@ -385,19 +387,22 @@ def offloaded(fn):
 
 def _mcp_result(text: str, *, code: str, is_error: bool = False,
                 retryable: bool = False,
-                assistant_text: str | None = None) -> CallToolResult:
+                assistant_text: str | None = None,
+                assistant_text_in_widget: bool = False) -> CallToolResult:
     content = [TextContent(type="text", text=text)]
     structured = {
         "result_code": code,
         "retryable": retryable,
     }
     if assistant_text:
-        # Kakao reads the widget envelope from content[0]. The separate block
-        # and structured value let the host speak guidance as ordinary chat
-        # copy without placing a sentence inside the visual card.
+        # Kakao reads the widget envelope from content[0]. Keep that position;
+        # mark explanations already rendered by its leading Markdown so the
+        # assistant does not repeat them after the recommendations.
         content.append(TextContent(type="text", text=assistant_text))
         structured["assistant_text"] = assistant_text
-        structured["assistant_text_position"] = "before_widget"
+        structured["assistant_text_position"] = (
+            "widget_intro" if assistant_text_in_widget else "before_widget")
+        structured["assistant_text_in_widget"] = assistant_text_in_widget
         structured["assistant_text_verbatim"] = True
     return CallToolResult(
         content=content,
@@ -615,7 +620,8 @@ def _plan_widget(plan: CoursePlan) -> str | None:
     try:
         widget = build_course_widget(
             plan.primary.course, plan.primary.course_id, BASE_URL,
-            alternatives=plan.alternatives, primary_note=plan.primary.match_note)
+            alternatives=plan.alternatives, primary_note=plan.primary.match_note,
+            intro_text=plan.lead if plan.case != CASE_EXACT else "")
     except WidgetTooLargeError:
         log.warning("mcp_widget tool=create_seoul_running_course "
                     f"state=fallback reason=too_large case={plan.case}")
@@ -655,7 +661,7 @@ def _planned_course_result(text: str, *, course_type: str, request: dict,
         return None
     return _mcp_result(
         widget, code=("nearby_course_ready" if plan.primary.is_detour else "course_ready"),
-        assistant_text=lead
+        assistant_text=lead, assistant_text_in_widget=plan.case != CASE_EXACT,
     )
 
 
@@ -1387,9 +1393,9 @@ def create_seoul_running_course(
     then optional hills/night/facilities. Cards state any unmet conditions.
     Ask for a missing start without calling. Do not use this for an
     existing course_id, "이 코스 근처 화장실", map/GPX repetition, completion,
-    or relays. The final response MUST start with
-    structuredContent.assistant_text verbatim before introducing the widget;
-    never paraphrase it or repeat it in the card."""
+    or relays. When structuredContent.assistant_text_in_widget is true,
+    guidance is already above the list; do not repeat it. Otherwise begin with
+    structuredContent.assistant_text verbatim before the widget."""
     common = dict(
         location=location, lat=lat, lon=lon, distance_km=distance_km,
         duration_min=duration_min, include_hills=include_hills,

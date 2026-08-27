@@ -168,6 +168,18 @@ def build_course_plan(
                    f"{target:g}km" if target else "거리 지정 없이" if wants_animal else "기본 5km")
     if primary_score[0] == 0 and primary_score[2] == 0 and primary_score[3] == 0:
         lead = f"{name}에서 {target_text} 기준으로 {shape_name} 코스를 먼저 골랐어요."
+    elif wants_animal and (primary.is_detour or primary_score[2]):
+        shape_label = f"{shape_name} 모양" if spec else shape_name
+        local_requested = any(c.kind == KIND_REQUESTED and not c.is_detour
+                              for c in candidates.values())
+        if not local_requested:
+            reason = f"{name}에서 출발하는 {shape_label} 코스를 찾지 못해"
+        elif target:
+            reason = f"{name}의 {shape_label} 코스가 요청한 {target_text}에 맞지 않아"
+        else:
+            reason = f"{name}에서 요청 조건에 맞는 {shape_label} 코스를 찾지 못해"
+        lead = (f"{reason} 다른 추천 코스를 준비했어요. "
+                f"첫 코스: {primary.start_name} · {primary.match_note}.")
     else:
         lead = (f"요청한 {shape_name} 코스를 찾되, {name}의 장소·시간(거리)을 먼저, "
                 "모양과 선택 특징을 그다음으로 고려했어요. "
