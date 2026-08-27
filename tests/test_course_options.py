@@ -15,7 +15,7 @@ def warm_like_production():
 
 def _card(result) -> dict:
     payload = json.loads(result.content[0].text)
-    assert payload["widget"]["type"] == "Card", result.content[0].text[:400]
+    assert payload["widget"]["type"] == "Basic", result.content[0].text[:400]
     return payload
 
 
@@ -71,12 +71,12 @@ def _lead(result) -> str:
 
 
 ANIMAL_RUNS = ("댕댕런", "야옹런", "깡총런", "고래런")
-# The card opens with a "추천 코스" heading; course names start after it.
-CARD_HEADING = "추천 코스"
 
 
 def _course_titles(payload) -> list[str]:
-    return [value for value in _values(payload, "Title") if value != CARD_HEADING]
+    return [row["children"][1]["children"][1]["value"]
+            for row in payload["widget"]["children"]
+            if row["type"] == "Row" and row["children"][0]["type"] == "Image"]
 
 
 def test_case1_exact_course_here_also_offers_another_animal_and_a_plain_course():
@@ -106,8 +106,7 @@ def test_case2_nearby_course_names_the_real_start_and_still_offers_three():
     assert len(_labels(payload)) == 3
     # The card names the actual start directly in its leading title.
     assert "서울대입구역" in lead
-    start_text = next(value for value in _values(payload, "Title")
-                      if "런" in value and value != "추천 코스")
+    start_text = _course_titles(payload)[0]
     actual_start = "서울대입구역"
     assert actual_start == "서울대입구역"
     assert actual_start in lead

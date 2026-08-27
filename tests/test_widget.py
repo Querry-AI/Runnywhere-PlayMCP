@@ -56,7 +56,7 @@ def _components(value, kind: str) -> list[dict]:
     return found
 
 
-def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
+def test_course_widget_matches_kakao_unframed_contract_and_is_deterministic():
     course = _course()
     course_id = encode_course_id(course.params)
 
@@ -67,16 +67,16 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     assert first == second
     assert set(payload) == {"widget", "copy_text", "name"}
     assert payload["name"] == "runnywhere_course"
-    assert payload["widget"]["type"] == "Card"
+    assert payload["widget"]["type"] == "Basic"
     assert not _contains_key(payload, "status")
     assert "댕댕런" in first
     assert "\\uac15" not in first
     assert len(first.encode("utf-8")) < WIDGET_MAX_BYTES
 
     card = payload["widget"]
-    assert card["size"] == "md" and card["padding"] == 0
-    assert card["border"] == {"size": 0, "color": "transparent"}
-    assert card["background"] == "transparent"
+    assert card["direction"] == "col" and card["padding"] == 0
+    assert not _components(card, "Card")
+    assert not _contains_key(card, "border")
     assert not _components(card, "Divider")
     # The card leads with a one-line heading so the runner knows what it is.
     header = card["children"][0]
@@ -99,7 +99,7 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     }
     assert overview["type"] == "Col"
     assert [child["type"] for child in overview["children"]] == [
-        "Row", "Title", "Row",
+        "Row", "Text", "Row",
     ]
     assert "평지 위주" in _components(overview["children"][0], "Badge")[0]["label"]
     assert overview["children"][1]["value"] == "🐶 강남역 댕댕런"
@@ -175,7 +175,7 @@ def test_mcp_success_uses_cached_course_without_regeneration(monkeypatch):
 
     assert result.structuredContent["result_code"] == "course_ready"
     assert result.isError is False
-    assert payload["widget"]["type"] == "Card"
+    assert payload["widget"]["type"] == "Basic"
     assert result.structuredContent["assistant_text"].startswith("거리를 말씀하지 않아")
     assert result.structuredContent["assistant_text_position"] == "before_widget"
     assert result.structuredContent["assistant_text_verbatim"] is True
@@ -193,7 +193,7 @@ def test_each_confirmed_animal_course_type_is_widget_eligible(shape):
     result = server._course_tool_result(markdown, course_type=shape)
     payload = json.loads(result.content[0].text)
 
-    assert payload["widget"]["type"] == "Card"
+    assert payload["widget"]["type"] == "Basic"
     assert result.structuredContent["result_code"] == "course_ready"
 
 
@@ -221,7 +221,7 @@ def test_new_course_is_cached_and_widgeted_in_its_first_tool_response(monkeypatc
     payload = json.loads(result.content[0].text)
 
     assert len(calls) == 1
-    assert payload["widget"]["type"] == "Card"
+    assert payload["widget"]["type"] == "Basic"
     primary = _components(payload["widget"], "Button")[0]
     assert primary["onClickAction"]["payload"]["target"]["url"].endswith(
         f"/c/{course_id}"
@@ -250,7 +250,7 @@ def test_new_course_is_cached_and_widgeted_in_its_first_tool_response(monkeypatc
 def test_legacy_preview_calls_return_latest_widget_contract(
     monkeypatch, legacy_name, generator_name, kwargs, shape
 ):
-    """Cached old tool names must still emit the new-domain Kakao Card."""
+    """Cached old tool names must still emit the new-domain Kakao listing."""
     course = _course(shape=shape)
     course_id = encode_course_id(course.params)
     server._cache_put(course_id, course)
@@ -262,7 +262,7 @@ def test_legacy_preview_calls_return_latest_widget_contract(
     buttons = _components(payload["widget"], "Button")
 
     assert result.structuredContent["result_code"] == "course_ready"
-    assert payload["widget"]["type"] == "Card"
+    assert payload["widget"]["type"] == "Basic"
     # An animal call may now carry alternative choices, so the primary course
     # is identified by its own button rather than by position.
     target = buttons[0]["onClickAction"]["payload"]["target"]["url"]
@@ -287,7 +287,7 @@ def test_mcp_widget_falls_back_to_original_markdown(monkeypatch):
     monkeypatch.setattr(server, "KAKAO_WIDGETS_ENABLED", True)
     best_animal = server._course_tool_result(markdown, course_type="best_animal")
     best_payload = json.loads(best_animal.content[0].text)
-    assert best_payload["widget"]["type"] == "Card"
+    assert best_payload["widget"]["type"] == "Basic"
 
     second = _course(location_name="잠실역", shape=None)
     second_id = encode_course_id(second.params)
@@ -364,21 +364,20 @@ def test_course_widget_offers_every_alternative_as_a_full_matching_card():
     labels = [button["label"] for button in buttons]
     rows = _components(children, "Row")
     images = _components(children, "Image")
-    titles = [item["value"] for item in _components(children, "Title")]
-    captions = [item["value"] for item in _components(children, "Caption")]
+    titles = [row["children"][1]["children"][1]["value"]
+              for row in rows if row["children"][0]["type"] == "Image"]
 
-    assert payload["widget"]["type"] == "Card"
+    assert payload["widget"]["type"] == "Basic"
     assert not _contains_key(payload, "status")
     assert labels == ["지도 보기"] * 3
     assert len(images) == 3
     # Alternatives are introduced, not silently appended under the winner.
     assert any(child.get("value") == "다른 코스도 있어요"
                for child in _components(children, "Text"))
-    course_titles = [value for value in titles if value != "추천 코스"]
-    assert "야옹런" in course_titles[1]
-    assert "낙성대역" in titles[1]
-    assert "봉천역" in titles[2]
-    assert "서울대입구역" in titles[3]
+    assert "야옹런" in titles[1]
+    assert "낙성대역" in titles[0]
+    assert "봉천역" in titles[1]
+    assert "서울대입구역" in titles[2]
     assert all(image["width"] == image["height"] == 88 for image in images)
     targets = [button["onClickAction"]["payload"]["target"]["url"]
                for button in buttons]
@@ -409,7 +408,7 @@ def test_widget_primary_link_decodes_to_the_same_detail_start_and_course():
     assert linked_id == course_id
     assert decode_course_id(linked_id).canonical() == course.params.canonical()
     assert any("경복궁역" in child.get("value", "")
-               for child in _components(payload["widget"], "Title"))
+               for child in _components(payload["widget"], "Text"))
 
 
 def test_course_widget_without_alternatives_keeps_one_primary_action():
@@ -425,7 +424,7 @@ def test_widget_title_removes_parenthetical_station_aliases():
     course = _course(location_name="서울대입구(abx)역", shape="cat")
     payload = json.loads(build_course_widget(
         course, encode_course_id(course.params), "https://runnywhere.example"))
-    titles = [item["value"] for item in _components(payload["widget"], "Title")]
+    titles = [item["value"] for item in _components(payload["widget"], "Text")]
     assert "🐱 서울대입구역 야옹런" in titles
     assert "abx" not in json.dumps(payload, ensure_ascii=False)
 
@@ -516,7 +515,7 @@ def test_card_rows_read_as_a_listing_not_a_stack_of_paragraphs():
         column = row["children"][1]
         # Reference: badges, title, bold effort, ascent beside the action.
         assert [child["type"] for child in column["children"]] == [
-            "Row", "Title", "Row",
+            "Row", "Text", "Row",
         ]
         tags = column["children"][0]
         assert tags["wrap"] == "wrap"

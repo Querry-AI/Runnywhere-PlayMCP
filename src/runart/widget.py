@@ -109,19 +109,16 @@ def _validate_envelope(payload: dict) -> None:
         raise WidgetBuildError("unexpected widget envelope")
     if payload["name"] != WIDGET_NAME or _has_key(payload, "status"):
         raise WidgetBuildError("unsupported widget metadata")
-    card = payload["widget"]
-    if not isinstance(card, dict) or card.get("type") != "Card":
-        raise WidgetBuildError("widget must be a Card")
-    if set(card) != {"type", "children", "size", "padding", "border", "background"}:
-        raise WidgetBuildError("unsupported Card properties")
-    if (
-        card["border"] != {"size": 0, "color": "transparent"}
-        or card["background"] != "transparent"
-    ):
-        raise WidgetBuildError("course listings must be borderless and transparent")
-    children = card.get("children")
+    listing = payload["widget"]
+    if not isinstance(listing, dict) or listing.get("type") != "Basic":
+        raise WidgetBuildError("course listings require an unframed Basic root")
+    if set(listing) != {"type", "children", "direction", "gap", "padding"}:
+        raise WidgetBuildError("unsupported Basic properties")
+    if listing["direction"] != "col" or listing["padding"] != 0:
+        raise WidgetBuildError("course listings must be vertical and flush")
+    children = listing.get("children")
     if not isinstance(children, list) or not children:
-        raise WidgetBuildError("widget Card must have children")
+        raise WidgetBuildError("widget Basic must have children")
     for child in children:
         _validate_component(child)
     if not isinstance(payload["copy_text"], str) or not payload["copy_text"]:
@@ -331,13 +328,15 @@ def _course_card_row(course: Course, course_id: str, origin: str,
                 "type": "Col", "gap": "6px", "flex": 1, "minWidth": 0,
                 "children": [
                     _character_tags(facts),
-                    {"type": "Title", "value": title, "size": "sm", "weight": "semibold", "color": LISTING_TEXT, "maxLines": 1},
+                    # Kakao's smallest Title is 18px; Text sm matches the
+                    # reference listing's 14px title without a heading bump.
+                    {"type": "Text", "value": title, "size": "sm", "weight": "semibold", "color": LISTING_TEXT, "maxLines": 1},
                     {
                         "type": "Row", "gap": "8px", "align": "center",
                         "children": [
                             {"type": "Col", "gap": "4px", "flex": 1, "minWidth": 0, "children": [
                                 {"type": "Text", "value": _effort_line(course), "size": "sm", "weight": "bold", "color": LISTING_TEXT, "maxLines": 2},
-                                {"type": "Caption", "value": _ascent_line(course), "size": "md", "color": LISTING_SECONDARY, "maxLines": 1},
+                                {"type": "Caption", "value": _ascent_line(course), "size": "lg", "color": LISTING_SECONDARY, "maxLines": 1},
                             ]},
                             button,
                         ],
@@ -356,7 +355,7 @@ def build_course_widget(
     alternatives: tuple[CourseChoice, ...] = (),
     primary_note: str = "",
 ) -> str:
-    """Return a compact Kakao Card envelope for one confirmed course.
+    """Return an unframed Kakao listing for one confirmed course.
 
     ``alternatives`` are the other courses the runner may pick instead; each
     becomes a matching listing row below the primary course. Kakao renders the
@@ -405,11 +404,10 @@ def build_course_widget(
     copy_text = "\n".join(copy_lines)
     return _serialize({
         "widget": {
-            "type": "Card", "size": "md", "padding": 0,
-            # Specify both width and color, not only the numeric shorthand.
-            # The Card is just an envelope, with no inset panel or outline.
-            "border": {"size": 0, "color": "transparent"},
-            "background": "transparent",
+            # Verified in Kakao Preview: Card ignores border=0 (including
+            # Border objects) and retains its 1px stylesheet border. Basic
+            # is ChatKit's unframed root; do not reintroduce a nested Card.
+            "type": "Basic", "direction": "col", "gap": 0, "padding": 0,
             "children": children,
         },
         "copy_text": copy_text,
