@@ -207,15 +207,15 @@ def test_actual_distance_beats_requested_shape_even_at_the_same_start():
     assert "출발하는 강아지 모양 코스를 찾지 못해" not in plan.lead
 
 
-def test_shape_beats_preferences_once_start_and_effort_match():
+def test_night_lighting_is_required_even_when_requested_shape_matches():
     dog = _course(location_name="시청", shape="dog", km=5.2)
     plain = _course(location_name="시청", shape=None, km=5)
     plain.rfs = {"components": {"lighting": .9, "cctv": .9}}
     plan = build_course_plan(requested_name="시청", shape="dog", exact=dog,
         shape_matches=[], animal_matches=[], standard=plain, distance_km=5,
         night_mode=True)
-    assert plan.primary.course is dog
-    assert "선택 특징 일부" in plan.primary.match_note
+    assert plan.primary.course is plain
+    assert not plan.alternatives
 
 
 def test_full_match_wins_and_optional_features_break_shape_ties():
@@ -227,6 +227,20 @@ def test_full_match_wins_and_optional_features_break_shape_ties():
         distance_km=5, night_mode=True)
     assert plan.primary.course is lit_dog
     assert plan.primary.match_note == "요청 조건 일치"
+
+
+def test_night_bundle_excludes_dark_and_unknown_routes_from_every_position():
+    courses = [_course(location_name="강남역", shape=None, km=km) for km in (4.8, 4.9, 5, 5.1, 5.2)]
+    for course, lighting in zip(courses, (None, .3, .6, .8, .9)):
+        course.rfs = {"components": {"lighting": lighting}}
+    plan = build_course_plan(
+        requested_name="강남역", shape="standard", exact=None, standard=courses[0],
+        shape_matches=[], animal_matches=[],
+        standard_matches=[PresetMatch(c, 0) for c in courses[1:]], night_mode=True,
+    )
+    choices = [plan.primary, *plan.alternatives]
+    assert len(choices) == 3
+    assert {c.course.length_km for c in choices} == {5, 5.1, 5.2}
 
 
 @pytest.mark.parametrize("kind", ["dog", "best_animal", "standard"])

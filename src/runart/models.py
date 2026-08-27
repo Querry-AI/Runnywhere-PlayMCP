@@ -57,6 +57,9 @@ class CourseParams(BaseModel):
     distance_km: float = Field(default=DEFAULT_DISTANCE_KM, ge=1.0, le=42.195)
     include_hills: bool = False
     night_mode: bool = False
+    # Internal route alternatives, not an extra user-facing tool call. Zero
+    # keeps legacy generation and IDs unchanged; nonzero rotates the search.
+    route_variant: int = Field(default=0, ge=0, le=7)
     shape: str | None = Field(default=None, max_length=32)
     need_facilities: list[str] = Field(default_factory=list, max_length=8)
     manual_waypoints: list[CourseWaypoint] = Field(default_factory=list, max_length=6)
@@ -80,6 +83,8 @@ class CourseParams(BaseModel):
         d["lon"] = round(d["lon"], 5)
         d["distance_km"] = round(d["distance_km"], 2)
         d["need_facilities"] = sorted(set(d["need_facilities"]) & set(FACILITY_TYPES))
+        if not d["route_variant"]:
+            d.pop("route_variant")
         if d["manual_waypoints"]:
             d["manual_waypoints"] = [
                 {"lat": round(point["lat"], 5), "lon": round(point["lon"], 5)}

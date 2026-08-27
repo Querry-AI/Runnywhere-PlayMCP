@@ -1,6 +1,8 @@
 """Kakao Tools widget contract and MCP-boundary fallback tests."""
 
 import json
+from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
@@ -43,6 +45,18 @@ def _contains_key(value, forbidden: str) -> bool:
     return False
 
 
+def _three_course_plan(course):
+    """Serializer fixture; actual route distinctness is tested at generation."""
+    from runart.courseplan import CourseChoice, CoursePlan
+
+    choices = []
+    for variant in (0, 2, 4):
+        c = deepcopy(course)
+        c.params = c.params.model_copy(update={"route_variant": variant})
+        choices.append(CourseChoice(c, encode_course_id(c.params), "standard"))
+    return CoursePlan("exact", "추천 코스 3개를 준비했어요.", choices[0], tuple(choices[1:]))
+
+
 def _components(value, kind: str) -> list[dict]:
     found = []
     if isinstance(value, dict):
@@ -74,7 +88,7 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     assert len(first.encode("utf-8")) < WIDGET_MAX_BYTES
 
     card = payload["widget"]
-    assert card["size"] == "md" and card["padding"] == {"x": "12px"}
+    assert card["size"] == "md" and card["padding"] == {"x": "12px", "top": "12px"}
     assert len(_components(card, "Card")) == 1
     assert card["border"] == {"size": 0, "color": "transparent"}
     assert not _components(card, "Basic")
@@ -219,6 +233,7 @@ def test_new_course_is_cached_and_widgeted_in_its_first_tool_response(monkeypatc
         return course
 
     monkeypatch.setattr(server, "_offload", generate_once)
+    monkeypatch.setattr(server, "_animal_course_plan", lambda *args: _three_course_plan(course))
     result = server.create_seoul_running_course(
         course_type="standard", location="강남역", distance_km=9.0
     )
@@ -260,6 +275,7 @@ def test_legacy_preview_calls_return_latest_widget_contract(
     server._cache_put(course_id, course)
     markdown = f"## 호환 코스\n- 지도: {server.BASE_URL}/c/{course_id}"
     monkeypatch.setattr(server, generator_name, lambda **_kwargs: markdown)
+    monkeypatch.setattr(server, "_animal_course_plan", lambda *args: _three_course_plan(course))
 
     result = getattr(server, legacy_name)(**kwargs)
     payload = json.loads(result.content[0].text)
@@ -617,6 +633,7 @@ def test_requested_dog_and_actual_course_stay_consistent_even_without_widget(
         animal_matches=[PresetMatch(actual, 0)] if actual_shape else [],
         standard=actual if actual_shape is None else None,
     )
+    plan = replace(plan, alternatives=_three_course_plan(actual).alternatives)
     monkeypatch.setattr(server, "_animal_course_plan", lambda *args: plan)
     if widget_fails:
         def broken_builder(*args, **kwargs):

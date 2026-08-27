@@ -117,3 +117,47 @@ Validation: 431 tests passed with the previously documented pool-unavailable
 generation test excluded. That test was rerun alone and still failed because
 no whale course returned within its existing response budget (4.24s test run).
 No generation budgets were changed.
+
+## Three-course bundles, heading inset, and mandatory night lighting
+
+- A successful recommendation now contains exactly three distinct courses in
+  one MCP result. Standard requests generate alternative search bearings
+  internally within the existing response budget. IDs preserve the selected
+  variant; the legacy zero-variant ID format is unchanged. Identical road-edge
+  sets, including reverse traversals, cannot fill multiple slots.
+- Tool instructions and descriptions explicitly require one call per request,
+  not one call per course. `course_selection` records requested/returned counts,
+  and final assistant copy describes all three actual courses. An incomplete
+  bundle returns `insufficient_courses`, without a singleton widget or an
+  instruction to make additional calls. This is a server contract and model
+  instruction, not proof of the hosted assistant's call count.
+- Add 12px top padding to the existing Card, preserving its 12px horizontal
+  inset, heading styles, and compact listing structure.
+- Night lighting is mandatory, not a preference that may be relaxed during
+  fallback. The shared threshold uses the existing good-lighting band (0.60);
+  missing/unknown measurements do not qualify. Apply it to generated routes,
+  every ranked candidate, and cached/refined courses returned as night runs.
+- A request flag alone no longer creates a safety badge. Qualifying courses
+  say `야간 조명 양호`; unqualified historical detail pages retain a warning.
+  Fewer than three verified candidates yields an explicit shortage response,
+  never dark courses disguised as safe ones. Lighting data is not a guarantee
+  of real-world safety or a reason to hide other route caveats.
+- Tests cover real distinct-route generation and restorable IDs, controlled
+  lighting measurements at the public MCP boundary, missing/poor-lighting
+  rejection, night-preserving fallbacks, cached refinement, and widget padding.
+  Controlled measurements are isolated fixtures, not production data changes.
+- Stabilize the existing duration-refusal copy test with a fixed router error:
+  its purpose is minute conversion, not asserting which loop a timed search
+  discovers under machine load. The separate pool-unavailable whale timeout
+  regression remains unresolved; route time limits were not increased.
+
+Deployment note: the last direct check of the running Kakao endpoint still
+returned the superseded Basic root although origin/main contained the Card
+repair. These changes require a successful redeployment of this revision and
+a fresh Preview conversation before live widget rendering/call count can be
+claimed verified.
+
+Validation for this revision: 443 tests passed with the known pool-unavailable
+whale-generation test excluded (86.51s). A full run reproduced that existing
+failure before exclusion; it still returns no route within the original
+budget. The lighting/Markdown-focused tests also passed (41 tests).

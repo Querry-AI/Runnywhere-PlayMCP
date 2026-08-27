@@ -18,6 +18,7 @@ from .facilities import facilities_along
 from .geo import haversine_m
 from .infrastructure import pedestrian_signals_crossed
 from .naming import GREEN_SHARE_MIN, green_share
+from .rfs import NIGHT_LIGHTING_MIN, has_sufficient_night_lighting
 
 # Four chips is one comfortable line on a phone; past that they wrap into a
 # block that competes with the headline numbers.
@@ -47,7 +48,7 @@ FACILITY_SCAN_LIMIT = 80
 COMPONENT_BANDS = {
     "crossing": (0.57, 0.39, ("🚦", "신호 적음"), ("🚦", "신호 잦음")),
     "sidewalk": (0.60, 0.43, ("🚸", "보도 넓음"), ("🚸", "보도 좁음")),
-    "lighting": (0.60, 0.32, ("🔦", "조명 좋음"), ("🌒", "조명 어두움")),
+    "lighting": (NIGHT_LIGHTING_MIN, 0.32, ("🔦", "조명 좋음"), ("🌒", "조명 어두움")),
 }
 # Cumulative gain per km above which "오르막 포함" deserves a caveat sentence.
 CLIMB_NOTE_GAIN_PER_KM = 15.0
@@ -192,8 +193,8 @@ def course_traits(course: Course) -> tuple[dict, ...]:
     else:
         traits.append({"emoji": "🏙️", "label": "도심 위주"})
 
-    if course.params.night_mode:
-        traits.append({"emoji": "💡", "label": "야간 안전 코스"})
+    if course.params.night_mode and has_sufficient_night_lighting(course.rfs):
+        traits.append({"emoji": "💡", "label": "야간 조명 양호"})
 
     comps = _components(course)
     # Ordered by how much the quality changes the run, not by RFS weight.
@@ -240,11 +241,14 @@ def course_cautions(course: Course, counts: dict[str, int],
     gain_per_km = course.ascent_m / course.length_km if course.length_km else 0.0
     notes: list[str] = []
 
+    if course.params.night_mode and not has_sufficient_night_lighting(course.rfs):
+        notes.append("가로등이 충분한지 확인되지 않아 야간 러닝에는 추천하지 않아요.")
+
     if _verdict(comps, "crossing") == "poor" and signals:
         notes.append(f"보행 신호를 {signals}번 건너요. 대기 시간이 생겨요.")
     if gain_per_km >= CLIMB_NOTE_GAIN_PER_KM:
         notes.append(f"누적 오르막이 {course.ascent_m:.0f}m라 힘이 들어요.")
-    if _verdict(comps, "lighting") == "poor":
+    if not course.params.night_mode and _verdict(comps, "lighting") == "poor":
         notes.append("가로등 정보가 적어 야간에는 주의하세요."
                      + _at_stretch(course, "lighting"))
     if _verdict(comps, "sidewalk") == "poor":

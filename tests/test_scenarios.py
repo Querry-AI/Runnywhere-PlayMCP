@@ -59,7 +59,7 @@ def test_failed_shape_does_not_poison_another_animal_or_standard_course():
     dog_text = dog.content[0].text
     standard_text = standard.content[0].text
     rabbit_guidance = rabbit.structuredContent["assistant_text"]
-    standard_guidance = standard.structuredContent["assistant_text"]
+    standard_guidance = standard.structuredContent.get("assistant_text", "")
     # The rabbit answer keeps its own failure scoped to the rabbit, and now
     # proves it by offering the other choices in the same response.
     assert "토끼" in rabbit_guidance and "일반 코스만 가능" not in rabbit_guidance
@@ -68,16 +68,24 @@ def test_failed_shape_does_not_poison_another_animal_or_standard_course():
     # A same-start alternative now outranks relocating for the requested shape.
     assert rabbit.structuredContent["result_code"] == "course_ready"
     assert '"widget"' in dog_text and "/c/" in dog_text and "댕댕런" in dog_text
-    assert '"widget"' in standard_text and "/c/" in standard_text
-    assert "기본 5km" in standard_guidance
+    if standard.structuredContent["result_code"] == "insufficient_courses":
+        assert standard.structuredContent["available_count"] < 3
+        assert "서로 다른 코스 3개" in standard_text
+    else:
+        assert '"widget"' in standard_text and "/c/" in standard_text
+        assert "기본 5km" in standard_guidance
 
 
 # P4 야간 러너: 야간 안전 모드
 def test_p4_night_runner():
     out = server.generate_running_course(location="홍대", distance_km=5,
                                          night_mode=True)
-    assert _is_course(out)
-    assert "야간 안전 모드" in out
+    if _is_course(out):
+        cid = server._extract_single_course_id(out)
+        course = server._cached_course(cid)
+        assert course.rfs["components"]["lighting"] >= .6
+    else:
+        assert out.startswith("⚠️") and "가로등" in out
 
 
 # 모호/무리 입력 — 거절이 아니라 안내여야 한다

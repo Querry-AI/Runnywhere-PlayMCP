@@ -97,10 +97,15 @@ def test_flat_course_avoids_hills():
     assert course.is_flat
 
 
-def test_night_mode_scores_lighting():
-    day = generate_course(CourseParams(**CITY_HALL, distance_km=4.0))
+def test_night_generation_rejects_poor_lighting_even_with_high_overall_score(monkeypatch):
+    monkeypatch.setattr("runart.course.route_rfs_summary", lambda *args: {
+        "score": 99, "components": {"lighting": .3}})
+    with pytest.raises(CourseError, match="가로등이 충분한"):
+        generate_course(CourseParams(**CITY_HALL, distance_km=4.0, night_mode=True))
+    monkeypatch.setattr("runart.course.route_rfs_summary", lambda *args: {
+        "score": 80, "components": {"lighting": .9}})
     night = generate_course(CourseParams(**CITY_HALL, distance_km=4.0, night_mode=True))
-    assert night.rfs["score"] >= day.rfs["score"] - 15  # night routing shouldn't crater quality
+    assert night.rfs["components"]["lighting"] == .9
 
 
 def test_out_of_area_raises_guidance():
@@ -115,6 +120,19 @@ def test_course_id_roundtrip():
     restored = decode_course_id(cid)
     assert restored.canonical() == params.canonical()
     assert encode_course_id(restored) == cid  # deterministic / stateless
+
+
+def test_default_route_ids_stay_compatible_and_variants_roundtrip():
+    params = CourseParams(**CITY_HALL, distance_km=5)
+    assert "route_variant" not in params.canonical()
+    legacy_id = encode_course_id(params)
+    variant = params.model_copy(update={"route_variant": 2})
+    variant_id = encode_course_id(variant)
+    assert variant_id != legacy_id
+    assert decode_course_id(variant_id).route_variant == 2
+    first = generate_course(variant)
+    restored = generate_course(decode_course_id(variant_id))
+    assert first.path == restored.path
 
 
 def test_course_id_rejects_oversized_input():

@@ -28,6 +28,15 @@ WEIGHTS_NIGHT = {
 FLAT_MAX_SLOPE_PCT = 3.0
 HILL_SWEET_LO, HILL_SWEET_HI = 3.0, 8.0
 SCORE_FLOOR = 0.25
+NIGHT_LIGHTING_MIN = 0.60
+
+
+def has_sufficient_night_lighting(summary: dict) -> bool:
+    """Require measured good lighting; a night request is not proof of it."""
+    value = (summary.get("components") or {}).get("lighting")
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and NIGHT_LIGHTING_MIN <= value <= 1)
+
 
 COMPONENT_LABELS_KO = {
     "sidewalk": "보도 넓음",

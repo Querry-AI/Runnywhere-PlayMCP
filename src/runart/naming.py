@@ -11,6 +11,7 @@ import re
 from . import graph as graphmod
 from .models import clean_course_name
 from .shapes import SHAPES
+from .rfs import has_sufficient_night_lighting
 
 # Animal courses are named after the run, not the species.
 RUN_NAMES_KO = {
@@ -139,11 +140,11 @@ def course_badges(course) -> list[dict]:
                        "신호와 사람이 많을 수 있어요."),
         })
 
-    if p.night_mode:
+    if p.night_mode and has_sufficient_night_lighting(course.rfs):
         badges.append({
             "emoji": NIGHT_EMOJI,
-            "label": "야간 안전 모드 · 조명 좋은 길",
-            "detail": "가로등·CCTV가 많은 길에 가중치를 둬서 만든 야간용 코스예요.",
+            "label": "야간 조명 양호",
+            "detail": "경로의 가로등 데이터가 조명 양호 기준을 통과했어요. 현장 안전을 보장하지는 않아요.",
         })
 
     return badges

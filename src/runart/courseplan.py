@@ -11,6 +11,7 @@ from .facilities import facility_requirement_score
 from .models import DEFAULT_PACE_MIN_PER_KM, encode_course_id
 from .naming import TRACK_EMOJI, course_title
 from .shapes import SHAPES
+from .rfs import has_sufficient_night_lighting
 
 NEARBY_RADIUS_M = 2000.0
 SAME_START_M = 150.0
@@ -21,6 +22,14 @@ CASE_FAR = "far"
 KIND_REQUESTED = "requested_animal"
 KIND_OTHER = "other_animal"
 KIND_STANDARD = "standard"
+RECOMMENDATION_COUNT = 3
+
+
+def route_signature(course: Course) -> frozenset | None:
+    """A reversed/rebased traversal of the same roads is not another option."""
+    if len(course.path) < 3:
+        return None
+    return frozenset((min(a, b), max(a, b)) for a, b in zip(course.path, course.path[1:]))
 
 
 @dataclass(frozen=True)
@@ -83,6 +92,7 @@ def build_course_plan(
     *, requested_name: str | None, shape: str | None,
     exact: Course | None, shape_matches: Sequence[PresetMatch],
     animal_matches: Sequence[PresetMatch], standard: Course | None,
+    standard_matches: Sequence[PresetMatch] = (),
     distance_km: float | None = None, duration_min: float | None = None,
     include_hills: bool = False, night_mode: bool = False,
     need_facilities: Sequence[str] = (),
@@ -99,20 +109,29 @@ def build_course_plan(
     wants_animal = shape not in (None, "standard")
     name = requested_name or "요청한 출발지"
     candidates: dict[str, CourseChoice] = {}
+    routes: dict[frozenset, str] = {}
 
     def add(course: Course | None, moved: float) -> None:
         if course is None:
+            return
+        if night_mode and not has_sufficient_night_lighting(course.rfs):
             return
         kind = (KIND_STANDARD if not course.params.shape else
                 KIND_REQUESTED if shape == "best_animal" or course.params.shape == shape
                 else KIND_OTHER)
         cid = encode_course_id(course.params)
+        signature = route_signature(course)
+        if signature is not None:
+            prior = routes.get(signature)
+            if prior is not None and prior != cid:
+                return
+            routes[signature] = cid
         if cid not in candidates or moved < candidates[cid].distance_m:
             candidates[cid] = CourseChoice(course, cid, kind, moved)
 
     add(exact, 0)
     add(standard, 0)
-    for match in (*shape_matches, *animal_matches):
+    for match in (*standard_matches, *shape_matches, *animal_matches):
         add(match.course, match.distance_m)
 
     def evaluate(choice: CourseChoice, *, with_preferences: bool = True) -> tuple[tuple, CourseChoice]:
@@ -155,7 +174,7 @@ def build_course_plan(
     ranked = []
     for _, group in groupby(ordered, key=lambda pair: pair[0][:3]):
         ranked.extend(sorted((evaluate(c) for _, c in group), key=lambda pair: pair[0]))
-        if len(ranked) >= 3:
+        if len(ranked) >= RECOMMENDATION_COUNT:
             break
     if not ranked:
         return None
@@ -177,7 +196,8 @@ def build_course_plan(
         local_requested = any(c.kind == KIND_REQUESTED and not c.is_detour
                               for c in candidates.values())
         if not local_requested:
-            reason = f"{name}에서 출발하는 {shape_label} 코스를 찾지 못해"
+            condition = "가로등이 충분한" if night_mode else "출발하는"
+            reason = f"{name}에서 {condition} {shape_label} 코스를 찾지 못해"
         elif target:
             reason = f"{name}의 {shape_label} 코스가 요청한 {target_text}에 맞지 않아"
         else:
@@ -188,4 +208,4 @@ def build_course_plan(
         lead = (f"요청한 {shape_name} 코스를 찾되, {name}의 장소·시간(거리)을 먼저, "
                 "모양과 선택 특징을 그다음으로 고려했어요. "
                 f"첫 코스: {actual_course} · {primary.match_note}.")
-    return CoursePlan(case, lead, primary, tuple(c for _, c in ranked[1:3]))
+    return CoursePlan(case, lead, primary, tuple(c for _, c in ranked[1:RECOMMENDATION_COUNT]))

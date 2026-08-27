@@ -114,7 +114,7 @@ def _validate_envelope(payload: dict) -> None:
         raise WidgetBuildError("course listings require the Kakao-supported Card root")
     if set(listing) != {"type", "children", "size", "padding", "border", "background"}:
         raise WidgetBuildError("unsupported Card properties")
-    if listing["size"] != "md" or listing["padding"] != {"x": "12px"}:
+    if listing["size"] != "md" or listing["padding"] != {"x": "12px", "top": "12px"}:
         raise WidgetBuildError("course listings require a small horizontal inset")
     children = listing.get("children")
     if not isinstance(children, list) or not children:
@@ -436,7 +436,7 @@ def build_course_widget(
             # them. Keep its proven Card envelope. The host may ignore border
             # overrides; do not trade a working widget for unverified roots.
             "type": "Card", "size": "md",
-            "padding": {"x": "12px"},
+            "padding": {"x": "12px", "top": "12px"},
             "border": {"size": 0, "color": "transparent"},
             "background": "transparent",
             "children": children,

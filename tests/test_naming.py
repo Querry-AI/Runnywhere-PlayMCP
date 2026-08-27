@@ -70,11 +70,14 @@ def test_badges_lead_with_shape_then_terrain():
     assert course_badges(course)[0]["emoji"] == SHAPES["dog"].emoji
 
 
-def test_night_mode_adds_a_third_badge():
+def test_night_badge_requires_measured_good_lighting():
     day = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
-    night = generate_course(CourseParams(**CITY_HALL, distance_km=5.0, night_mode=True))
     assert len(course_badges(day)) == 2
-    night_badges = course_badges(night)
+    day.params.night_mode = True
+    day.rfs["components"]["lighting"] = .3
+    assert len(course_badges(day)) == 2
+    day.rfs["components"]["lighting"] = .9
+    night_badges = course_badges(day)
     assert len(night_badges) == 3
     assert night_badges[2]["emoji"] == "💡"
 

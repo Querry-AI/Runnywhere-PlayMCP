@@ -18,7 +18,7 @@ from . import graph as graphmod
 from .facilities import facility_requirement_score
 from .geo import haversine_m, to_latlon, to_xy
 from .models import CourseParams, CourseWaypoint, clean_course_name
-from .rfs import (GATED_WEIGHT_FACTOR, prefers_park_paths,
+from .rfs import (GATED_WEIGHT_FACTOR, has_sufficient_night_lighting, prefers_park_paths,
                   route_rfs_summary, routing_weight)
 
 DISTANCE_TOLERANCE = 0.05  # ±5% (PRD §7.2)
@@ -1380,7 +1380,8 @@ def generate_course(params: CourseParams) -> Course:
     best_retrace = 1.0
     n_in_tol = 0
     deadline = time.perf_counter() + 0.8  # anytime cutoff (PRD §7.1)
-    for bearing in BEARINGS:
+    offset = params.route_variant
+    for bearing in BEARINGS[offset:] + BEARINGS[:offset]:
         if time.perf_counter() > deadline:
             break
         # Early exit: a good in-tolerance loop is enough; exhaustive bearing
@@ -1396,9 +1397,11 @@ def generate_course(params: CourseParams) -> Course:
             continue
         length, ascent = _path_metrics(g, path)
         err = abs(length - target_m) / target_m
+        summary = route_rfs_summary(g, path, params.night_mode, params.include_hills)
+        if params.night_mode and not has_sufficient_night_lighting(summary):
+            continue
         if err <= DISTANCE_TOLERANCE:
             n_in_tol += 1
-        summary = route_rfs_summary(g, path, params.night_mode, params.include_hills)
         points = [(g.nodes[n]["lat"], g.nodes[n]["lon"]) for n in path]
         fac_hits, fac_total = facility_requirement_score(points, params.need_facilities)
         # Prefer in-tolerance loops with the highest RFS; flat mode also
@@ -1431,6 +1434,9 @@ def generate_course(params: CourseParams) -> Course:
             best_err = err
             best_retrace = retraced
     if best is None:
+        if params.night_mode:
+            raise CourseError("이 출발지와 거리에서 가로등이 충분한 코스를 확인하지 못했어요. "
+                              "조명 정보가 부족한 길을 야간 코스로 추천하지 않아요.")
         raise CourseError(
             "이 위치에서는 순환 코스를 만들지 못했어요. "
             "출발점을 큰길이나 공원 근처로 조금 옮겨서 다시 시도해 주세요."

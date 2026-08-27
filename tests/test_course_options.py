@@ -169,8 +169,9 @@ def test_widget_failure_still_returns_the_markdown_answer(monkeypatch):
     result = server.create_seoul_running_course(
         course_type="whale", location="서울대입구역")
 
-    assert result.structuredContent["result_code"] == "nearby_course_ready"
-    assert result.content[0].text.startswith("🔎")
+    assert result.structuredContent["result_code"] == "course_ready"
+    assert result.structuredContent["course_selection"]["returned_count"] == 3
+    assert "다른 코스도 있어요" in result.content[0].text
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +191,10 @@ def test_a_plain_course_asked_for_by_time_still_answers_with_a_card(location):
     result = server.create_seoul_running_course(
         course_type="standard", location=location, duration_min=40)
 
+    if result.structuredContent["result_code"] == "insufficient_courses":
+        assert result.structuredContent["available_count"] < 3
+        assert result.isError and not result.content[0].text.startswith("{")
+        return
     assert result.isError is False, result.content[0].text[:200]
     assert result.structuredContent["result_code"] == "course_ready"
     payload = _card(result)
@@ -306,7 +311,6 @@ COURSE_REQUESTS = [
     dict(course_type="standard", location="시청", distance_km=6),
     dict(course_type="standard", location="시청", duration_min=40),
     dict(course_type="standard", location="시청"),
-    dict(course_type="standard", location="시청", night_mode=True),
     dict(course_type="dog", location="강남역"),
     dict(course_type="dog", location="강남역", duration_min=40),
     dict(course_type="dog", location="강남역", distance_km=3),
@@ -345,17 +349,117 @@ def test_a_follow_up_question_stays_markdown():
         assert not answer.lstrip().startswith("{")
 
 
+def test_single_standard_call_returns_three_distinct_routes_with_restorable_ids():
+    from runart.courseplan import route_signature
+    from runart.models import decode_course_id
+
+    result = server.create_seoul_running_course(course_type="standard", location="강남역")
+    payload = _card(result)
+    selection = result.structuredContent["course_selection"]
+    assert selection["returned_count"] == selection["requested_count"] == 3
+    assert len(_urls(payload)) == len(set(_urls(payload))) == 3
+    courses = [server._cached_course(url.rsplit("/", 1)[1]) for url in _urls(payload)]
+    assert len({route_signature(c) for c in courses}) == 3
+    for url, course in zip(_urls(payload), courses):
+        restored = decode_course_id(url.rsplit("/", 1)[1])
+        assert restored.canonical() == course.params.canonical()
+        assert course.params.location_name == "강남역"
+        assert course.params.distance_km == 5
+
+
+def test_incomplete_recommendation_does_not_emit_one_card_or_request_repeat_calls():
+    result = server._mcp_result("한 코스", code="course_ready", course_selection={"returned_count": 1})
+    result = server._complete_recommendation(result, night_mode=True)
+    assert result.structuredContent["result_code"] == "insufficient_courses"
+    assert result.structuredContent["repeat_tool_call"] is False
+    assert result.structuredContent["retryable"] is False
+    assert result.isError
+    assert "가로등이 충분" in result.content[0].text
+    assert '"widget"' not in result.content[0].text
+
+
+def test_night_preferences_are_never_relaxed_to_daytime(monkeypatch):
+    from runart.models import CourseParams
+    from runart.course import CourseError
+
+    calls = []
+    def unavailable(params, **kwargs):
+        calls.append(params)
+        raise CourseError("조명 정보 부족")
+    monkeypatch.setattr(server, "_get_course", unavailable)
+    probe = CourseParams(lat=37.4986, lon=127.0281, night_mode=True, need_facilities=["park"])
+    assert server._plain_course_here(probe, 5, 2) is None
+    assert len(calls) == 2
+    assert all(p.night_mode for p in calls)
+
+
+@pytest.mark.parametrize("lighting", [None, .3, .8])
+def test_night_request_returns_three_lit_routes_or_no_recommendation(monkeypatch, lighting):
+    from runart import course as course_module
+    from runart.courseplan import route_signature
+
+    original_summary = course_module.route_rfs_summary
+
+    def measured_summary(*args, **kwargs):
+        summary = original_summary(*args, **kwargs)
+        summary["components"].pop("lighting", None)
+        if lighting is not None:
+            summary["components"]["lighting"] = lighting
+        return summary
+
+    # Controlled measurements exercise the real router and MCP boundary;
+    # they must never enter the shared cache used by real-data tests.
+    monkeypatch.setattr(server, "_course_cache", {})
+    monkeypatch.setattr(server, "_get_pool", lambda: None)
+    monkeypatch.setattr(course_module, "route_rfs_summary", measured_summary)
+    result = server.create_seoul_running_course(
+        course_type="standard", location="강남역", night_mode=True)
+
+    if lighting != .8:
+        assert result.isError
+        assert "가로등" in result.content[0].text
+        assert '"widget"' not in result.content[0].text
+        return
+
+    courses = [server._cached_course(url.rsplit("/", 1)[1]) for url in _urls(_card(result))]
+    assert len(courses) == 3
+    assert len({route_signature(c) for c in courses}) == 3
+    assert all(c.params.night_mode and c.rfs["components"]["lighting"] == .8 for c in courses)
+    assert result.structuredContent["course_selection"]["returned_count"] == 3
+
+
+def test_night_refinement_rejects_cached_course_with_insufficient_lighting(monkeypatch):
+    from runart.course import generate_course
+    from runart.models import CourseParams, encode_course_id
+
+    course = generate_course(CourseParams(lat=37.4986, lon=127.0281))
+    course.rfs["components"]["lighting"] = .3
+    monkeypatch.setattr(server, "_get_course", lambda *args, **kwargs: course)
+    text = server.refine_course(encode_course_id(course.params), night_mode=True)
+    assert text.startswith("⚠️")
+    assert "야간 코스로 추천할 수 없어요" in text
+    assert "/c/" not in text
+
+
 # ---------------------------------------------------------------------------
 # A refusal answers in the unit the runner used.
 # ---------------------------------------------------------------------------
 
-def test_a_time_request_with_no_matching_course_is_refused_in_minutes():
+def test_a_time_request_with_no_matching_course_is_refused_in_minutes(monkeypatch):
     """Someone who said "60분" never mentioned kilometres.
 
     Telling them "목표 9.2km에 맞는 코스를 찾지 못했어요" answers a question
     they did not ask, with a number they never gave, and leaves them to work
     out which duration to try instead.
     """
+    from runart.course import DistanceMissError
+
+    # Verify unit conversion against a fixed router outcome. The bounded
+    # search may find a different nearest loop depending on machine load.
+    def no_matching_course(params, **kwargs):
+        raise DistanceMissError(params.distance_km, 11.2)
+
+    monkeypatch.setattr(server, "_get_course", no_matching_course)
     text = server.generate_running_course(
         location="여의도한강공원", duration_min=60)
 
