@@ -65,13 +65,8 @@ def _urls(payload) -> list[str]:
 def _lead(result) -> str:
     lead = result.structuredContent["assistant_text"]
     assert result.content[1].text == lead
-    if result.structuredContent["assistant_text_in_widget"]:
-        assert result.structuredContent["assistant_text_position"] == "widget_intro"
-        assert _card(result)["widget"]["children"][0] == {
-            "type": "Markdown", "value": lead,
-        }
-    else:
-        assert result.structuredContent["assistant_text_position"] == "before_widget"
+    assert result.structuredContent["assistant_text_in_widget"] is False
+    assert result.structuredContent["assistant_text_position"] == "before_widget"
     assert result.structuredContent["assistant_text_verbatim"] is True
     return lead
 
@@ -387,7 +382,7 @@ def test_park_request_without_start_samples_three_of_five_without_route_calls(mo
     assert result.structuredContent["park_selection"]["mode"] == "random"
     assert len(set(_urls(_card(result)))) == 3
     assert len(result.model_dump_json().encode()) < 24_000
-    assert "무작위" in _lead(result)
+    assert _lead(result) == "각 공원·강변에서 출발하는 코스를 추천해요."
 
 
 @pytest.mark.parametrize("origin", ["강남역", "홍대", "서울숲"])
@@ -403,8 +398,8 @@ def test_park_request_with_start_orders_by_distance_to_real_course_start(origin)
     selection = result.structuredContent["park_selection"]
     assert selection["mode"] == "nearest"
     assert [d["id"] for d in selection["destinations"]] == [s.id for s, _ in expected]
-    assert "직선거리" in _lead(result)
-    assert "이동 경로는 포함하지 않아요" in _lead(result)
+    assert "직선거리" not in _lead(result)
+    assert "이동 경로" not in result.content[0].text
     facts = result.structuredContent["course_selection"]
     assert [c["start"] for c in [facts["primary"], *facts["alternatives"]]] == [s.name for s, _ in expected]
     assert len(_urls(_card(result))) == 3
@@ -423,7 +418,42 @@ def test_park_recommendations_accept_coordinates_and_preserve_night_lighting():
     # The real Yangjae preset (.34) used to be excluded by the bright-only .60 gate.
     assert "양재천" in {c.params.location_name for c in courses}
     assert any(.33 <= c.rfs["components"]["lighting"] < .6 for c in courses)
-    assert "조명 조건을 만족" in _lead(result)
+    assert "조명 보통 이상" in _lead(result)
+
+
+@pytest.mark.parametrize("widget_fails", [False, True])
+def test_park_response_uses_actual_starts_not_the_requested_district(monkeypatch, widget_fails):
+    # A district keyword may geocode to a landmark. Neither is the location
+    # of all recommended routes, so neither may leak into completion claims.
+    monkeypatch.setattr(server, "resolve_location", lambda *a, **k: (37.509, 127.047, "서울선릉과정릉"))
+    if widget_fails:
+        monkeypatch.setattr(server, "_plan_widget", lambda *a: None)
+    result = server.create_seoul_running_course(
+        course_type="standard", location="강남구", need_facilities=["park"])
+    metadata = result.structuredContent
+    selection = metadata["course_selection"]
+    facts = [selection["primary"], *selection["alternatives"]]
+    assert selection["actual_start_names"] == [c["start"] for c in facts]
+    assert {c["start"] for c in facts} == {"뚝섬한강공원", "양재천", "서울숲"}
+    spoken = "\n".join(c.text for c in result.content)
+    for forbidden in ("강남구", "서울선릉과정릉", "직선거리", "등록된 5곳"):
+        assert forbidden not in spoken
+    assert metadata["park_selection"]["requested_location"] == "강남구"
+    assert metadata["park_selection"]["origin_role"] == "search_reference_only"
+    final = metadata["assistant_final_text"]
+    for fact in facts:
+        assert f"[{fact['start']}]({fact['map_url']})" in final
+    assert final.endswith(server.COURSE_EDIT_NOTICE)
+    assert metadata["assistant_final_text_verbatim"] is True
+    assert metadata["assistant_final_text_position"] == "after_widget"
+    assert metadata["assistant_final_text_is_complete"] is True
+    if not widget_fails:
+        payload = _card(result)
+        assert payload["widget"]["children"][0]["value"] == "추천 코스"
+        assert not _values(payload, "Markdown")
+        assert _course_titles(payload) == [c["title"] for c in facts]
+    else:
+        assert result.content[0].text.endswith(server.COURSE_EDIT_NOTICE)
 
 
 def test_park_catalogue_does_not_fill_a_night_shortage_with_dark_routes(monkeypatch):

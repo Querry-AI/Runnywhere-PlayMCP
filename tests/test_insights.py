@@ -52,6 +52,7 @@ def test_night_label_depends_on_actual_lighting_not_request_flag(lighting):
     assert any("야간" in trait["label"] for trait in facts.traits) is qualified
     assert any("야간 러닝에는 추천하지" in note for note in facts.cautions) is (not qualified)
     markdown = course_markdown(course, "https://runnywhere.example", [])
+    assert markdown.endswith("러닝 코스는 직접 수정할 수 있어요.")
     assert ("야간 조명 양호" in markdown) is (qualified and lighting >= .6)
     assert ("야간 조명 보통" in markdown) is (qualified and lighting < .6)
     if qualified and lighting < .6:

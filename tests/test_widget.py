@@ -194,7 +194,7 @@ def test_mcp_success_uses_cached_course_without_regeneration(monkeypatch):
     assert result.structuredContent["result_code"] == "course_ready"
     assert result.isError is False
     assert payload["widget"]["type"] == "Card"
-    assert result.structuredContent["assistant_text"].startswith("거리를 말씀하지 않아")
+    assert result.structuredContent["assistant_text"] == "강남역에서 출발하는 코스예요."
     assert result.structuredContent["assistant_text_position"] == "before_widget"
     assert result.structuredContent["assistant_text_verbatim"] is True
     assert result.content[1].text == result.structuredContent["assistant_text"]
@@ -340,7 +340,7 @@ def test_mcp_widget_falls_back_to_original_markdown(monkeypatch):
     assert error.isError is True
 
 
-def test_mcp_widget_build_error_preserves_markdown_and_result_code(monkeypatch):
+def test_mcp_widget_build_error_preserves_actual_course_and_result_code(monkeypatch):
     course = _course(shape=None)
     course_id = encode_course_id(course.params)
     markdown = f"## 코스\n- 지도: {server.BASE_URL}/c/{course_id}"
@@ -351,7 +351,9 @@ def test_mcp_widget_build_error_preserves_markdown_and_result_code(monkeypatch):
 
     monkeypatch.setattr(server, "build_course_widget", broken_builder)
     result = server._course_tool_result(markdown, course_type="standard")
-    assert result.content[0].text == markdown
+    assert result.content[0].text == result.structuredContent["assistant_final_text"]
+    assert f"{server.BASE_URL}/c/{course_id}" in result.content[0].text
+    assert result.content[0].text.endswith(server.COURSE_EDIT_NOTICE)
     assert result.structuredContent["result_code"] == "course_ready"
     assert result.isError is False
 
@@ -603,16 +605,17 @@ def test_unavailable_animal_explanation_renders_before_recommendations(monkeypat
     result = server._planned_course_result(
         "", course_type="dog", request={"location": "서울역"}, timeout_s=5)
     payload = json.loads(result.content[0].text)
-    intro, heading, row = payload["widget"]["children"]
-
-    assert intro == {"type": "Markdown", "value": plan.lead}
-    assert "서울역에서 출발하는 강아지 모양 코스를 찾지 못해" in intro["value"]
-    assert "다른 추천 코스를 준비했어요" in intro["value"]
+    heading, row = payload["widget"]["children"]
+    lead = result.structuredContent["assistant_text"]
+    assert not _components(payload["widget"], "Markdown")
+    assert "서울역에서 출발하는 강아지 모양 코스를 찾지 못해" in lead
+    assert "다른 추천 코스를 준비했어요" in lead
     assert heading["value"] == "추천 코스"
     assert _components(row, "Button")[0]["label"] == "지도 보기"
-    assert result.structuredContent["assistant_text_in_widget"] is True
-    assert result.structuredContent["assistant_text_position"] == "widget_intro"
-    assert payload["copy_text"].startswith(plan.lead)
+    assert result.structuredContent["assistant_text_in_widget"] is False
+    assert result.structuredContent["assistant_text_position"] == "before_widget"
+    assert plan.lead not in result.content[0].text
+    assert payload["copy_text"].endswith(server.COURSE_EDIT_NOTICE)
 
 
 @pytest.mark.parametrize("actual_shape", ["rabbit", None, "dog"])
@@ -656,6 +659,8 @@ def test_requested_dog_and_actual_course_stay_consistent_even_without_widget(
     assert "9.0km · 약 63분" in final_text
     assert f"]({server.BASE_URL}/c/{cid})" in final_text
     assert result.content[-1].text == final_text
+    assert final_text.endswith(server.COURSE_EDIT_NOTICE)
+    assert result.structuredContent["assistant_final_text_verbatim"] is True
     assert stale not in "\n".join(c.text for c in result.content)
     assert "완성" not in final_text and "위 카드" not in final_text
     if actual_shape != "dog":
@@ -664,10 +669,12 @@ def test_requested_dog_and_actual_course_stay_consistent_even_without_widget(
         assert primary["title"] in result.content[0].text
         assert primary["map_url"] in result.content[0].text
         assert result.content[0].text.startswith(plan.lead)
+        assert result.content[0].text.endswith(server.COURSE_EDIT_NOTICE)
         assert result.structuredContent["assistant_text_in_widget"] is False
     else:
         payload = json.loads(result.content[0].text)
         assert payload["widget"]["type"] == "Card"
+        assert not _components(payload["widget"], "Markdown")
         assert primary["title"] in [c["value"] for c in _components(payload, "Text")]
         target = _components(payload, "Button")[0]["onClickAction"]["payload"]["target"]
         assert target["url"] == primary["map_url"]
@@ -708,3 +715,20 @@ def test_cached_unplanned_result_also_names_the_actual_shape():
     assert result.structuredContent["course_selection"]["primary"]["course_type"] == "rabbit"
     assert "강아지 모양 대신 토끼 모양" in result.structuredContent["assistant_final_text"]
     assert "강아지 코스를 그렸어요" not in "\n".join(c.text for c in result.content)
+
+
+@pytest.mark.parametrize("widget_fails", [False, True])
+def test_cached_same_shape_cannot_reuse_a_stale_requested_region_claim(monkeypatch, widget_fails):
+    course = _course(location_name="서울숲", shape=None)
+    cid = encode_course_id(course.params)
+    server._cache_put(cid, course)
+    stale = f"강남구에서 공원을 포함하는 코스로 잡아봤어요.\n## 코스\n{server.BASE_URL}/c/{cid}"
+    if widget_fails:
+        def broken(*args, **kwargs):
+            raise WidgetBuildError("unavailable")
+        monkeypatch.setattr(server, "build_course_widget", broken)
+    result = server._course_tool_result(stale, course_type="standard")
+    assert "강남구" not in "\n".join(c.text for c in result.content)
+    assert result.structuredContent["course_selection"]["actual_start_names"] == ["서울숲"]
+    assert "서울숲" in result.structuredContent["assistant_final_text"]
+    assert result.content[-1].text.endswith(server.COURSE_EDIT_NOTICE)

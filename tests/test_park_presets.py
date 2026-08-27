@@ -32,7 +32,7 @@ def test_every_three_place_combination_fits_the_widget_limit():
         choices = [CourseChoice(c, encode_course_id(c.params), "standard") for c in courses]
         payload = build_course_widget(courses[0], choices[0].course_id,
             "https://runnywhere-kakaotools.playmcp-endpoint.kakaocloud.io",
-            alternatives=choices[1:], intro_text="등록된 공원·강변 5곳 중 3곳을 추천해요.")
+            alternatives=choices[1:])
         assert '"widget"' in payload
 
 

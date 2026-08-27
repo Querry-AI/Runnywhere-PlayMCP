@@ -61,6 +61,7 @@ from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
 from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
 from .rfs import has_sufficient_night_lighting
 from .park_presets import PARK_SPOTS, park_courses, select_park_courses
+from .naming import COURSE_EDIT_NOTICE
 from .widget import WidgetTooLargeError, build_course_widget, course_response_facts
 
 DEFAULT_BASE_URL = (
@@ -161,7 +162,13 @@ mcp = FastMCP(
         "text before introducing the widget. Never paraphrase, replace, or "
         "repeat it, and do not copy that guidance into the card. "
         "For closing prose use structuredContent.assistant_final_text verbatim, "
-        "without adding a completion claim. course_selection describes the "
+        "as the complete closing response, without extra paraphrases or a completion claim. "
+        "Always end a course response with '러닝 코스는 직접 수정할 수 있어요.'. "
+        "Describe locations only from course_selection.actual_start_names. A requested "
+        "district or park_selection.origin is a search reference, not proof that the "
+        "returned routes are inside that district or start at that origin. Never say "
+        "'강남구에서 뛰는 코스' just because 강남구 was requested. "
+        "course_selection describes the "
         "ACTUAL returned routes; requested_course_type is only the request, "
         "never evidence that this shape was produced. If primary_matches_requested_shape "
         "is false, say which alternative shape was returned. Never call a rabbit "
@@ -440,6 +447,9 @@ def _mcp_result(text: str, *, code: str, is_error: bool = False,
         # factual closing copy there, without changing Kakao's content[0].
         content.append(TextContent(type="text", text=assistant_final_text))
         structured["assistant_final_text"] = assistant_final_text
+        structured["assistant_final_text_verbatim"] = True
+        structured["assistant_final_text_position"] = "after_widget"
+        structured["assistant_final_text_is_complete"] = True
     return CallToolResult(
         content=content,
         structuredContent=structured,
@@ -470,12 +480,6 @@ def _cached_course(course_id: str) -> Course | None:
         _cache_put(course_id, exc)
         return None
     return cached
-
-
-def _widget_lead_text(text: str) -> str:
-    """Keep controlled context that appears before the course Markdown."""
-    marker = "\n## "
-    return text.split(marker, 1)[0] if marker in text else ""
 
 
 def _try_course_result(text: str, course_type: str) -> CallToolResult | None:
@@ -518,16 +522,13 @@ def _try_course_result(text: str, course_type: str) -> CallToolResult | None:
     selection = _course_selection(
         [course_response_facts(course, course_id, BASE_URL)], course_type)
     final_text = _plan_final_text(selection)
-    lead = _widget_lead_text(text)
+    lead = f"{markdown_text(selection['primary']['start'])}에서 출발하는 코스예요."
     if not selection["primary_matches_requested_shape"]:
         lead = final_text.split("\n", 1)[0]
-        text = final_text
+    text = final_text  # Never reuse stale location/effort claims from generator prose.
     widget = None
     try:
-        widget = build_course_widget(
-            course, course_id, BASE_URL,
-            intro_text=lead if not selection["primary_matches_requested_shape"] else "",
-        )
+        widget = build_course_widget(course, course_id, BASE_URL)
     except WidgetTooLargeError:
         log.warning(
             "mcp_widget tool=create_seoul_running_course "
@@ -546,7 +547,7 @@ def _try_course_result(text: str, course_type: str) -> CallToolResult | None:
     return _mcp_result(
         widget if widget is not None else text, code="course_ready",
         assistant_text=lead, assistant_final_text=final_text,
-        assistant_text_in_widget=widget is not None and not selection["primary_matches_requested_shape"],
+        assistant_text_in_widget=False,
         course_selection=selection,
     )
 
@@ -706,8 +707,7 @@ def _plan_widget(plan: CoursePlan) -> str | None:
     try:
         widget = build_course_widget(
             plan.primary.course, plan.primary.course_id, BASE_URL,
-            alternatives=plan.alternatives, primary_note=plan.primary.match_note,
-            intro_text=plan.lead if plan.case != CASE_EXACT else "")
+            alternatives=plan.alternatives, primary_note=plan.primary.match_note)
     except WidgetTooLargeError:
         log.warning("mcp_widget tool=create_seoul_running_course "
                     f"state=fallback reason=too_large case={plan.case}")
@@ -732,6 +732,7 @@ def _course_selection(choices: list[dict], course_type: str) -> dict:
     return {
         "requested_count": RECOMMENDATION_COUNT,
         "returned_count": len(choices),
+        "actual_start_names": list(dict.fromkeys(c["start"] for c in choices)),
         "requested_course_type": course_type,
         "primary_matches_requested_shape": matches(choices[0]),
         "requested_shape_offered": any(matches(choice) for choice in choices),
@@ -749,16 +750,19 @@ def _course_summary(facts: dict) -> str:
 
 def _plan_final_text(selection: dict) -> str:
     primary = selection["primary"]
+    choices = [primary, *selection["alternatives"]]
+    if selection.get("recommendation_mode") == "park_catalog":
+        places = ", ".join(f"[{markdown_text(c['start'])}]({c['map_url']})" for c in choices)
+        return f"{places}에서 출발하는 코스를 추천해요.\n\n{COURSE_EDIT_NOTICE}"
     prefix = "추천 코스예요."
     if not selection["primary_matches_requested_shape"]:
         requested = SHAPES.get(selection["requested_course_type"])
         label = f"{requested.name_ko} 모양" if requested else "요청한 모양"
         prefix = f"첫 추천은 {label} 대신 {primary['shape_label']} 코스예요."
-    choices = [primary, *selection["alternatives"]]
     count = len(choices)
     if count == RECOMMENDATION_COUNT:
         prefix = f"서로 다른 코스 {count}개를 함께 추천해요. {prefix}"
-    return prefix + "\n\n" + "\n\n".join(_course_summary(c) for c in choices)
+    return prefix + "\n\n" + "\n\n".join(_course_summary(c) for c in choices) + f"\n\n{COURSE_EDIT_NOTICE}"
 
 
 def _recommendation_shortage(count: int, *, night_mode: bool = False) -> CallToolResult:
@@ -812,6 +816,7 @@ def _plan_result(plan: CoursePlan, course_type: str) -> CallToolResult:
     selection = _course_selection(
         [course_response_facts(c.course, c.course_id, BASE_URL)
          for c in (plan.primary, *plan.alternatives)], course_type)
+    selection["recommendation_mode"] = plan.case
     final_text = _plan_final_text(selection)
     widget = _plan_widget(plan) if KAKAO_WIDGETS_ENABLED else None
     if widget is None:
@@ -821,6 +826,7 @@ def _plan_result(plan: CoursePlan, course_type: str) -> CallToolResult:
         if selection["alternatives"]:
             lines.extend(["다른 코스도 있어요", *[
                 _course_summary(c) for c in selection["alternatives"]]])
+        lines.append(COURSE_EDIT_NOTICE)
         return _mcp_result(
             "\n\n".join(lines),
             code="nearby_course_ready" if plan.primary.is_detour else "course_ready",
@@ -829,7 +835,7 @@ def _plan_result(plan: CoursePlan, course_type: str) -> CallToolResult:
         )
     return _mcp_result(
         widget, code=("nearby_course_ready" if plan.primary.is_detour else "course_ready"),
-        assistant_text=lead, assistant_text_in_widget=plan.case != CASE_EXACT,
+        assistant_text=lead, assistant_text_in_widget=False,
         assistant_final_text=final_text, course_selection=selection,
     )
 
@@ -878,14 +884,7 @@ def _park_course_result(request: dict, course_type: str = "standard") -> CallToo
         destinations.append({"id": spot.id, "name": spot.name,
                              "origin_distance_m": round(moved) if origin else None,
                              "source_url": spot.source_url})
-    if origin:
-        distances = ", ".join(f"{d['name']} {d['origin_distance_m'] / 1000:.1f}km" for d in destinations)
-        eligible = "조명 조건을 만족하며 " if night else ""
-        lead = (f"{origin_name} 기준으로 등록된 5곳 중 {eligible}코스 시작점이 가까운 3곳을 골랐어요 "
-                f"(직선거리: {distances}). 각 코스는 해당 공원·강변에서 출발하며, 이동 경로는 포함하지 않아요.")
-    else:
-        eligible = "조명 조건을 만족하는 곳에서 " if night else ""
-        lead = f"미리 등록한 서울 공원·강변 5곳 중 {eligible}서로 다른 3곳을 무작위로 골랐어요. 각 코스는 해당 장소에서 출발해요."
+    lead = "각 공원·강변에서 출발하는 코스를 추천해요."
     if night:
         lead += " 조명 보통 이상으로 확인된 코스만 포함했어요."
     if distance is not None or duration is not None:
@@ -900,6 +899,9 @@ def _park_course_result(request: dict, course_type: str = "standard") -> CallToo
         "mode": "nearest" if origin else "random", "distance_basis": "straight_line_to_course_start",
         "origin": {"name": origin_name, "lat": origin[0], "lon": origin[1]} if origin else None,
         "catalog_size": len(PARK_SPOTS), "destinations": destinations,
+        "requested_location": location,
+        "origin_role": "search_reference_only",
+        "all_routes_start_at_origin": False,
     }
     return _complete_recommendation(result, night_mode=night)
 
@@ -1650,7 +1652,8 @@ def create_seoul_running_course(
     Existing-course changes, 이 코스 근처 화장실, map/GPX and relays use other tools.
     course_selection records ACTUAL courses; never call a rabbit a dog.
     Begin with assistant_text unless assistant_text_in_widget is true.
-    Close with assistant_final_text verbatim; never claim a card/button is visible."""
+    Close with assistant_final_text verbatim, including the edit notice.
+    Use actual starts, never the requested district."""
     common = dict(
         location=location, lat=lat, lon=lon, distance_km=distance_km,
         duration_min=duration_min, include_hills=include_hills,

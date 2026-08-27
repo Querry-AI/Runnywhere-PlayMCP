@@ -15,7 +15,7 @@ from .geo import haversine_m, to_xy
 from .infrastructure import pedestrian_signals_crossed
 from .insights import CourseFacts, course_facts, is_loop
 from .models import encode_course_id
-from .naming import course_badges, course_name_placeholder, course_title
+from .naming import COURSE_EDIT_NOTICE, course_badges, course_name_placeholder, course_title
 from .pace import DEFAULT_PACE_S, PACE_MODEL, effort
 from .rfs import edge_rfs, has_sufficient_night_lighting, night_lighting_label
 from .shapes import SHAPES
@@ -92,6 +92,7 @@ def course_markdown(course: Course, base_url: str, facilities: list[dict]) -> st
         f"- ⬇️ GPX 다운로드: {base_url}/c/{cid}.gpx",
     ])
     lines.append("지도에서 통행·공사·날씨를 확인한 뒤 **러닝 시작**을 누르세요. 코스는 참고용이에요.")
+    lines.extend(["", COURSE_EDIT_NOTICE])
     return "\n".join(lines)
 
 

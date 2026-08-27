@@ -12,7 +12,7 @@ import urllib.parse
 from .course import Course
 from .courseplan import CourseChoice
 from .insights import CourseFacts, course_facts
-from .naming import RUN_NAMES_KO, TRACK_EMOJI, short_place
+from .naming import COURSE_EDIT_NOTICE, RUN_NAMES_KO, TRACK_EMOJI, short_place
 from .pace import DEFAULT_PACE_S, effort
 from .shapes import SHAPES
 
@@ -130,10 +130,6 @@ def _validate_component(component: object) -> None:
     if not isinstance(component, dict):
         raise WidgetBuildError("widget child must be an object")
     kind = component.get("type")
-    if kind == "Markdown":
-        if set(component) != {"type", "value"} or not component.get("value"):
-            raise WidgetBuildError("Markdown requires introductory text")
-        return
     if kind in {"Row", "Col"}:
         allowed = {
             "type", "children", "gap", "align", "flex", "wrap", "minWidth",
@@ -374,7 +370,6 @@ def build_course_widget(
     *,
     alternatives: tuple[CourseChoice, ...] = (),
     primary_note: str = "",
-    intro_text: str = "",
 ) -> str:
     """Return a Kakao-compatible listing for one confirmed course.
 
@@ -398,11 +393,6 @@ def build_course_widget(
         _section_heading("추천 코스", lead=True),
         _course_card_row(course, course_id, origin, primary_note),
     ]
-    if intro_text:
-        # Kakao may render the tool widget before any assistant prose. A
-        # Markdown sibling before the listing guarantees the explanation
-        # appears first while preserving content[0]'s widget contract.
-        children.insert(0, {"type": "Markdown", "value": _copy_value(intro_text, 600)})
     if alternatives:
         children.append(_section_heading("다른 코스도 있어요", lead=False))
         for choice in alternatives:
@@ -427,9 +417,7 @@ def build_course_widget(
             + (f" · {_copy_value(choice.match_note, 160)}" if choice.match_note else "")
             for choice in alternatives
         )
-    copy_text = "\n".join(copy_lines)
-    if intro_text:
-        copy_text = f"{_copy_value(intro_text, 600)}\n\n{copy_text}"
+    copy_text = "\n".join([*copy_lines, "", COURSE_EDIT_NOTICE])
     return _serialize({
         "widget": {
             # Kakao drops Basic roots even though upstream ChatKit supports

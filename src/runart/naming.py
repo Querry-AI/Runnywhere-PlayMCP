@@ -13,6 +13,8 @@ from .models import clean_course_name
 from .shapes import SHAPES
 from .rfs import has_sufficient_night_lighting, night_lighting_label
 
+COURSE_EDIT_NOTICE = "러닝 코스는 직접 수정할 수 있어요."
+
 # Animal courses are named after the run, not the species.
 RUN_NAMES_KO = {
     "dog": "댕댕런",
