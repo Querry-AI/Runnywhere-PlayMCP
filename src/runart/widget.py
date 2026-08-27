@@ -114,8 +114,8 @@ def _validate_envelope(payload: dict) -> None:
         raise WidgetBuildError("course listings require the Kakao-supported Card root")
     if set(listing) != {"type", "children", "size", "padding", "border", "background"}:
         raise WidgetBuildError("unsupported Card properties")
-    if listing["size"] != "md" or listing["padding"] != {"x": "12px", "top": "12px"}:
-        raise WidgetBuildError("course listings require a small horizontal inset")
+    if listing["size"] != "full" or listing["padding"] != {"x": "12px", "top": "12px"}:
+        raise WidgetBuildError("course listings require full width with a small inner inset")
     children = listing.get("children")
     if not isinstance(children, list) or not children:
         raise WidgetBuildError("widget Card must have children")
@@ -423,7 +423,9 @@ def build_course_widget(
             # Kakao drops Basic roots even though upstream ChatKit supports
             # them. Keep its proven Card envelope. The host may ignore border
             # overrides; do not trade a working widget for unverified roots.
-            "type": "Card", "size": "md",
+            # Fill the host's available width instead of the md card cap.
+            # Padding is inside the outline and keeps text/buttons inset.
+            "type": "Card", "size": "full",
             "padding": {"x": "12px", "top": "12px"},
             "border": {"size": 0, "color": "transparent"},
             "background": "transparent",

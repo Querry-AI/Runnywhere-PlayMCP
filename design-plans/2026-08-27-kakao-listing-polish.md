@@ -18,6 +18,15 @@ Mobbin MCP screens inspected:
 
 - Card root: restored after the Basic compatibility regression documented below;
   12px horizontal inset, transparent background/border override.
+- 2026-08-28 width update: change Card `size` from `md` to `full`, keeping
+  the existing 12px internal horizontal/top padding and all row geometry.
+  This fills the width allocated by the host instead of the medium card cap;
+  it cannot remove margins owned by the Kakao conversation screen.
+  `full` is documented in the Card schema linked below. The signed-in Preview
+  rendered the existing deployed course listing, but the new width still needs
+  deployment and a mobile check; no DOM/style injection was used as a substitute.
+  Validation: widget, course-response and park-preset tests all passed (140 tests,
+  39.15s); `git diff --check` passed.
 - Thumbnail: retain 88 × 88, unframed, medium corner radius; image/text gap 8px.
 - Tags: soft blue `info` badges, small and pill-shaped, 4px gaps, whole-tag wrapping.
 - Course title: small semibold Text (14px), one line, dark-mode #f5f5f5 / light-mode #202020.

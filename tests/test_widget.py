@@ -88,7 +88,7 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     assert len(first.encode("utf-8")) < WIDGET_MAX_BYTES
 
     card = payload["widget"]
-    assert card["size"] == "md" and card["padding"] == {"x": "12px", "top": "12px"}
+    assert card["size"] == "full" and card["padding"] == {"x": "12px", "top": "12px"}
     assert len(_components(card, "Card")) == 1
     assert card["border"] == {"size": 0, "color": "transparent"}
     assert not _components(card, "Basic")
