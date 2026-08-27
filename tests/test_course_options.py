@@ -187,7 +187,7 @@ def test_a_plain_course_asked_for_by_time_still_answers_with_a_card(location):
         course_type="standard", location=location, duration_min=40)
 
     if result.structuredContent["result_code"] == "insufficient_courses":
-        assert result.structuredContent["available_count"] < 3
+        assert result.structuredContent["available_count"] == 0
         assert result.isError and not result.content[0].text.startswith("{")
         return
     assert result.isError is False, result.content[0].text[:200]
@@ -415,10 +415,11 @@ def test_park_recommendations_accept_coordinates_and_preserve_night_lighting():
     courses = [server._cached_course(url.rsplit("/", 1)[1]) for url in _urls(_card(result))]
     assert len(courses) == 3
     assert all(c.params.night_mode and has_sufficient_night_lighting(c.rfs) for c in courses)
-    # The real Yangjae preset (.34) used to be excluded by the bright-only .60 gate.
-    assert "양재천" in {c.params.location_name for c in courses}
-    assert any(.33 <= c.rfs["components"]["lighting"] < .6 for c in courses)
-    assert "조명 보통 이상" in _lead(result)
+    # Yangjae (.34) is below .4; Yeouido (.47) no longer needs the old .6 cutoff.
+    assert "양재천" not in {c.params.location_name for c in courses}
+    assert all(c.rfs["components"]["lighting"] >= .4 for c in courses)
+    assert "야간 조명이 많은" in _lead(result)
+    assert "야간 조명 많음" in result.content[0].text
 
 
 @pytest.mark.parametrize("widget_fails", [False, True])
@@ -456,20 +457,33 @@ def test_park_response_uses_actual_starts_not_the_requested_district(monkeypatch
         assert result.content[0].text.endswith(server.COURSE_EDIT_NOTICE)
 
 
-def test_park_catalogue_does_not_fill_a_night_shortage_with_dark_routes(monkeypatch):
+@pytest.mark.parametrize("eligible_count", [0, 1, 2, 3, 5])
+@pytest.mark.parametrize("location", [None, "강남역"])
+def test_park_catalogue_returns_up_to_three_without_filling_with_dark_routes(monkeypatch, eligible_count, location):
     from copy import deepcopy
     from runart import park_presets
 
     courses = deepcopy(park_presets.park_courses())
     for i, (_, course) in enumerate(courses):
-        course.rfs["components"]["lighting"] = .9 if i < 2 else .3
+        course.rfs["components"]["lighting"] = .4 if i < eligible_count else .39
     monkeypatch.setattr(park_presets, "park_courses", lambda: courses)
     result = server.create_seoul_running_course(
-        course_type="standard", need_facilities=["park"], night_mode=True)
-    assert result.isError
-    assert result.structuredContent["available_count"] == 2
-    assert result.structuredContent["result_code"] == "insufficient_courses"
-    assert not result.content[0].text.startswith("{")
+        course_type="standard", need_facilities=["park"], night_mode=True, location=location)
+    if not eligible_count:
+        assert result.isError
+        assert result.structuredContent["available_count"] == 0
+        assert result.structuredContent["result_code"] == "insufficient_courses"
+        assert not result.content[0].text.startswith("{")
+        assert "3개" not in result.content[0].text
+        return
+    assert not result.isError
+    count = min(eligible_count, 3)
+    selection = result.structuredContent["course_selection"]
+    assert selection["returned_count"] == count
+    assert len(set(_urls(_card(result)))) == count
+    assert set(selection["actual_start_names"]) <= {s.name for s, _ in courses[:eligible_count]}
+    assert ("다른 코스도 있어요" in result.content[0].text) is (count > 1)
+    assert result.content[-1].text.endswith(server.COURSE_EDIT_NOTICE)
 
 
 @pytest.mark.parametrize("kwargs", [{"lat": 37.5}, {"location": "부산역"}, {"distance_km": -1}])
@@ -508,8 +522,8 @@ def test_drinking_water_does_not_dispatch_to_the_park_catalogue(monkeypatch):
     assert result.isError  # An ordinary run still requires an explicit start.
 
 
-def test_incomplete_recommendation_does_not_emit_one_card_or_request_repeat_calls():
-    result = server._mcp_result("한 코스", code="course_ready", course_selection={"returned_count": 1})
+def test_empty_recommendation_does_not_request_repeat_calls():
+    result = server._mcp_result("코스 없음", code="course_ready", course_selection={"returned_count": 0})
     result = server._complete_recommendation(result, night_mode=True)
     assert result.structuredContent["result_code"] == "insufficient_courses"
     assert result.structuredContent["repeat_tool_call"] is False
@@ -517,6 +531,50 @@ def test_incomplete_recommendation_does_not_emit_one_card_or_request_repeat_call
     assert result.isError
     assert "야간 최소 기준" in result.content[0].text
     assert '"widget"' not in result.content[0].text
+
+
+@pytest.mark.parametrize("available_count", [1, 2, 5])
+@pytest.mark.parametrize("course_type", ["standard", "dog", "best_animal"])
+@pytest.mark.parametrize("night_mode", [False, True])
+@pytest.mark.parametrize("widget_enabled", [False, True])
+def test_partial_recommendations_survive_all_course_modes(
+        monkeypatch, available_count, course_type, night_mode, widget_enabled):
+    from copy import deepcopy
+    from runart.park_presets import park_courses
+    from runart.animal_presets import PresetMatch
+
+    # Keep the real planner, response wrapper and widget. Only control the
+    # candidate supply so router timing cannot hide the 1/2-course regression.
+    courses = [deepcopy(c) for _, c in park_courses()[:available_count]]
+    for course in courses:
+        course.params.night_mode = night_mode
+        course.rfs["components"]["lighting"] = .4
+    monkeypatch.setattr(server, "_course_cache", {})
+    monkeypatch.setattr(server, "KAKAO_WIDGETS_ENABLED", widget_enabled)
+    monkeypatch.setattr(server, "generate_running_course", lambda **kw: "")
+    monkeypatch.setattr(server, "_animal_text_for_cards", lambda **kw: "")
+    monkeypatch.setattr(server, "_any_animal_matches", lambda *a: [])
+    monkeypatch.setattr(server, "_plain_course_here", lambda *a: courses[0])
+    monkeypatch.setattr(server, "_standard_alternatives", lambda *a: [
+        PresetMatch(c, 0) for c in courses[1:]])
+    result = server.create_seoul_running_course(
+        course_type=course_type, location="강남역", night_mode=night_mode)
+
+    assert not result.isError
+    selection = result.structuredContent["course_selection"]
+    count = min(available_count, 3)
+    assert selection["returned_count"] == count
+    assert len(selection["alternatives"]) == count - 1
+    assert ("다른 코스도 있어요" in result.content[0].text) is (count > 1)
+    assert result.content[-1].text.endswith(server.COURSE_EDIT_NOTICE)
+    if widget_enabled:
+        assert len(set(_urls(_card(result)))) == count
+        if night_mode:
+            assert result.content[0].text.count("야간 조명 많음") >= count
+    else:
+        assert result.content[0].text.endswith(server.COURSE_EDIT_NOTICE)
+    if count < 3:
+        assert "3개" not in result.content[-1].text
 
 
 def test_night_preferences_are_never_relaxed_to_daytime(monkeypatch):
@@ -534,7 +592,7 @@ def test_night_preferences_are_never_relaxed_to_daytime(monkeypatch):
     assert all(p.night_mode for p in calls)
 
 
-@pytest.mark.parametrize("lighting", [None, .3, .32, .33, .4, .8])
+@pytest.mark.parametrize("lighting", [None, .3, .32, .33, .39, .4, .8])
 def test_night_request_returns_three_lit_routes_or_no_recommendation(monkeypatch, lighting):
     from runart import course as course_module
     from runart.courseplan import route_signature
@@ -556,7 +614,7 @@ def test_night_request_returns_three_lit_routes_or_no_recommendation(monkeypatch
     result = server.create_seoul_running_course(
         course_type="standard", location="강남역", night_mode=True)
 
-    if lighting is None or lighting < .33:
+    if lighting is None or lighting < .4:
         assert result.isError
         assert "가로등" in result.content[0].text
         assert '"widget"' not in result.content[0].text

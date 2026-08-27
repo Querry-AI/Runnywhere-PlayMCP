@@ -110,11 +110,11 @@ def test_night_generation_rejects_poor_lighting_even_with_high_overall_score(mon
 
 @pytest.mark.parametrize("score,observed,expected", [
     (None, None, False), (.30, None, False), (.32, None, False),
-    (.33, None, True), (.4, None, True), (.5, None, False),
+    (.33, None, False), (.39, 1, False), (.4, None, True), (.5, None, False),
     (.5, 0, False), (.5, 1, True), (.6, 0, False), (.6, None, True),
     (float("nan"), None, False), (True, None, False), (1.1, None, False),
 ])
-def test_night_threshold_accepts_ordinary_but_not_dark_or_unknown_lighting(score, observed, expected):
+def test_night_threshold_accepts_point_four_but_not_low_or_unknown_lighting(score, observed, expected):
     from runart.rfs import has_sufficient_night_lighting
     summary = {"components": {"lighting": score}}
     if observed is not None:

@@ -229,7 +229,7 @@ def test_full_match_wins_and_optional_features_break_shape_ties():
     assert plan.primary.match_note == "요청 조건 일치"
 
 
-def test_ordinary_night_lighting_is_not_reported_as_an_unmet_preference():
+def test_point_four_night_lighting_is_not_reported_as_an_unmet_preference():
     plain = _course(location_name="시청", shape=None, km=5)
     plain.rfs = {"components": {"lighting": .4, "cctv": .3}}
     plan = build_course_plan(requested_name="시청", shape="standard", exact=None,

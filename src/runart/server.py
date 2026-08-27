@@ -81,8 +81,8 @@ LOCATION_FIELD_KO = (
     "사용자가 상호명이나 주소를 말했다면 가까운 역 이름으로 바꾸지 말고 말한 그대로 넘기세요. "
     "대화에 출발지가 없으면 임의 위치를 만들지 말고 사용자에게 물어보며, 이 툴을 "
     "호출하지 마세요. 단, 공원·강변·하천·물가 추천(need_facilities에 park)은 "
-    "출발지 없이 바로 호출하세요: 등록된 5곳 중 무작위 3곳을 반환합니다. "
-    "출발지가 있으면 그 위치에서 가까운 3곳을 고릅니다. lat/lon을 모두 전달해도 생략 가능합니다."
+    "출발지 없이 바로 호출하세요: 등록된 5곳 중 조건에 맞는 최대 3곳을 무작위로 반환합니다. "
+    "출발지가 있으면 가까운 순으로 최대 3곳을 고릅니다. lat/lon을 모두 전달해도 생략 가능합니다."
 )
 LOCATION_FIELD_EN = (
     "Exact Seoul start place stated by the user: a subway station, a shop or "
@@ -124,19 +124,20 @@ mcp = FastMCP(
         "Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!) creates runnable "
         "courses on real pedestrian roads in Seoul. Route each turn by these "
         "rules, in order. (1) New course: call create_seoul_running_course "
-        "EXACTLY ONCE per recommendation request. One call returns three distinct "
+        "EXACTLY ONCE per recommendation request. One call returns up to three distinct "
         "courses together, including '코스 3개' and night-run requests. Never "
         "call once per course or vary arguments to fill a list. If the result "
-        "is insufficient_courses, explain it without automatic repeat calls. "
-        "Night recommendations allow measured ordinary lighting (>=0.33); good lighting "
-        "(>=0.60) is not required. Never silently "
+        "has only one or two eligible courses, show those without repeat calls or padding. "
+        "Only zero eligible courses is insufficient_courses; explain it without repeat calls. "
+        "Night recommendations require measured lighting >=0.40 and use the label "
+        "'야간 조명 많음'. This is a dataset threshold, not a safety guarantee. Never silently "
         "substitute poorly lit or unknown-lighting routes. Do not claim safety "
         "merely because night_mode was requested. "
         "Use this tool for 러닝 코스/달리기 코스/그려줘/짜줘/만들어줘/추천해줘/GPS 아트 "
         "with an explicit Seoul start place or both coordinates for ordinary runs. "
         "Exception: park/waterside requests set need_facilities=['park'] and may omit "
-        "a start: the server picks 3 of 5 registered destinations randomly. With a "
-        "start, it picks the nearest 3; do not preselect destinations or call 3 times. "
+        "a start: the server picks up to 3 eligible registered destinations randomly. With a "
+        "start, it picks up to 3 nearest eligible places; do not preselect or call 3 times. "
         "Copy an explicit start exactly; never invent, infer, "
         "or substitute a location. If it is missing, ask the user for the "
         "start and do not call a course tool, except the park/waterside case above. A location-only reply is valid "
@@ -760,7 +761,7 @@ def _plan_final_text(selection: dict) -> str:
         label = f"{requested.name_ko} 모양" if requested else "요청한 모양"
         prefix = f"첫 추천은 {label} 대신 {primary['shape_label']} 코스예요."
     count = len(choices)
-    if count == RECOMMENDATION_COUNT:
+    if count > 1:
         prefix = f"서로 다른 코스 {count}개를 함께 추천해요. {prefix}"
     return prefix + "\n\n" + "\n\n".join(_course_summary(c) for c in choices) + f"\n\n{COURSE_EDIT_NOTICE}"
 
@@ -768,7 +769,7 @@ def _plan_final_text(selection: dict) -> str:
 def _recommendation_shortage(count: int, *, night_mode: bool = False) -> CallToolResult:
     condition = "가로등 데이터가 야간 최소 기준을 충족하는 " if night_mode else "서로 다른 "
     incomplete = _mcp_result(
-        f"현재 조건에서 {condition}코스 3개를 모두 확보하지 못했어요. "
+        f"현재 조건에서 {condition}코스를 찾지 못했어요. "
         + ("조명이 부족하거나 확인되지 않은 코스는 야간 추천에서 제외했어요. " if night_mode else "")
         + "출발지나 거리 조건을 조정해 다시 요청해 주세요.",
         code="insufficient_courses", is_error=True, retryable=False)
@@ -779,12 +780,12 @@ def _recommendation_shortage(count: int, *, night_mode: bool = False) -> CallToo
 
 
 def _complete_recommendation(result: CallToolResult, *, night_mode: bool = False) -> CallToolResult:
-    """A successful recommendation is one complete bundle, never a lone card."""
+    """One call returns up to three eligible routes, including partial bundles."""
     metadata = result.structuredContent or {}
     if result.isError or metadata.get("result_code") not in {"course_ready", "nearby_course_ready"}:
         return result
     count = metadata.get("course_selection", {}).get("returned_count", 0)
-    if count == RECOMMENDATION_COUNT:
+    if 1 <= count <= RECOMMENDATION_COUNT:
         return result
     return _recommendation_shortage(count, night_mode=night_mode)
 
@@ -841,7 +842,7 @@ def _plan_result(plan: CoursePlan, course_type: str) -> CallToolResult:
 
 
 def _park_course_result(request: dict, course_type: str = "standard") -> CallToolResult:
-    """Serve three destinations from the researched catalogue, without routing."""
+    """Serve up to three eligible catalogue destinations, without routing."""
     location = request.get("location")
     has_coordinates = request.get("lat") is not None or request.get("lon") is not None
     # A theme is not a secretly defaulted departure at 여의도.
@@ -869,7 +870,7 @@ def _park_course_result(request: dict, course_type: str = "standard") -> CallToo
         log.warning("park catalogue unavailable: %s", exc)
         return _mcp_result("등록된 공원·강변 코스 데이터를 확인하지 못했어요. 잠시 후 다시 요청해 주세요.",
                            code="park_catalog_unavailable", is_error=True, retryable=False)
-    if len(selected) != RECOMMENDATION_COUNT:
+    if not selected:
         return _recommendation_shortage(len(selected), night_mode=night)
     choices = []
     destinations = []
@@ -886,7 +887,7 @@ def _park_course_result(request: dict, course_type: str = "standard") -> CallToo
                              "source_url": spot.source_url})
     lead = "각 공원·강변에서 출발하는 코스를 추천해요."
     if night:
-        lead += " 조명 보통 이상으로 확인된 코스만 포함했어요."
+        lead += " 야간 조명이 많은 코스만 포함했어요."
     if distance is not None or duration is not None:
         requested = f"{distance:g}km" if distance is not None else f"{duration:g}분"
         lead += f" 등록된 고정 코스라 요청 조건({requested})과 실제 거리·시간이 다를 수 있어요."
@@ -1378,7 +1379,7 @@ def generate_running_course(
     distance_km: Annotated[float | None, Field(description="Target distance in km, 1-42.195")] = None,
     duration_min: Annotated[float | None, Field(description="Target duration in minutes, 10-360; converted to distance at 6:30/km if distance_km is absent")] = None,
     include_hills: Annotated[bool, Field(description="True to include uphill training segments (3-8% grade); False prefers flat routes")] = False,
-    night_mode: Annotated[bool, Field(description="Allow ordinary measured lighting for night runs; CCTV remains a preference")] = False,
+    night_mode: Annotated[bool, Field(description="Night runs require measured lighting >=0.4; CCTV remains a preference")] = False,
     need_facilities: Annotated[list[str] | None, Field(description=(
         "Facility types the course should pass: convenience_store, restroom, "
         "water, park. Pass park only when the user explicitly asks to run in "
@@ -1390,7 +1391,7 @@ def generate_running_course(
     from Seoul open data (sidewalk width, slope, lighting, safety CCTV, parks).
     Safe, runner-friendly streets are preferred by default. Provide a start
     location (place name or lat/lon) and a target distance or duration.
-    The MCP tool returns THREE distinct courses in ONE call. Call it only ONCE,
+    The MCP tool returns UP TO THREE distinct courses in ONE call. Call it only ONCE,
     never once per course, including requests for 코스 3개. This is
     only for a new course with an explicit user-provided start. Do not use it
     for questions about facilities near an existing course."""
@@ -1630,25 +1631,25 @@ def create_seoul_running_course(
     ))] = False,
     night_mode: Annotated[bool, Field(description=(
         "야간·밤·가로등·CCTV·안전 경로를 요청했을 때 true; 언급이 없으면 false. "
-        "true이면 조명 보통(0.33) 이상을 허용하며 조명 좋음(0.60)을 필수로 요구하지 않습니다. "
-        "어두움(0.32 이하)·미확인 코스는 제외합니다."
+        "true이면 관측된 조명 점수 0.4 이상인 코스만 추천하고 '야간 조명 많음'으로 표시합니다. "
+        "0.4 미만·미확인 코스는 제외합니다. 실제 안전을 보장하는 기준은 아닙니다."
     ))] = False,
     need_facilities: Annotated[list[str] | None, Field(description=(
         "convenience_store=편의점, restroom=화장실, water=마실 물·음수대. "
         "공원·강변·한강·하천·호수·수변·물가·물 보면서 달리는 코스를 명시한 경우에만 "
-        "park를 전달하세요. 등록된 5곳 중 무작위 3곳, 출발지가 있으면 가까운 3곳을 반환합니다. "
+        "park를 전달하세요. 등록된 5곳 중 조건에 맞는 최대 3곳을 무작위로, 출발지가 있으면 가까운 순으로 반환합니다. "
         "일반 코스 주변에 공원이 있다는 이유로 park를 추론하지 마세요."
     ))] = None,
 ) -> CallToolResult:
-    """Creates three distinct running course recommendations (standard or
+    """Returns up to 3 distinct running courses (standard or
     animal-shaped GPS art) in ONE call with Runnywhere(러니웨어).
     Call EXACTLY ONCE for 러닝 코스/그려줘/추천해줘, including '야간 코스 3개'.
-    Never call once per course; do not repeat on insufficient_courses.
-    Parks/rivers/streams/물가: set need_facilities=['park']. One call picks 3 of
+    Return available 1-2 courses; never repeat calls to fill 3. Only 0 is insufficient_courses.
+    Parks/rivers/streams/물가: set need_facilities=['park']. Picks up to 3 of
     5 registered places, randomly without a start or nearest with a start.
     Never invent a start. Only park requests may omit it; otherwise ask.
     standard=ordinary runs; best_animal=unnamed animal art; dog/cat/rabbit/whale
-    =named animal. '그려줘' alone is standard. Night allows ordinary measured lighting.
+    =named animal. '그려줘' alone is standard. Night: measured lighting >=0.4.
     Existing-course changes, 이 코스 근처 화장실, map/GPX and relays use other tools.
     course_selection records ACTUAL courses; never call a rabbit a dog.
     Begin with assistant_text unless assistant_text_in_widget is true.

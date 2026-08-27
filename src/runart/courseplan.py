@@ -22,7 +22,7 @@ CASE_FAR = "far"
 KIND_REQUESTED = "requested_animal"
 KIND_OTHER = "other_animal"
 KIND_STANDARD = "standard"
-RECOMMENDATION_COUNT = 3
+RECOMMENDATION_COUNT = 3  # Upper bound, never a minimum for a successful result.
 
 
 def route_signature(course: Course) -> frozenset | None:
@@ -81,8 +81,8 @@ def _preference_misses(course: Course, *, include_hills: bool,
     misses = wanted - hits
     if include_hills and course.is_flat:
         misses += 1
-    # Night eligibility is ordinary measured lighting, not the bright band
-    # or a separate CCTV quota. CCTV remains a soft routing weight.
+    # Night eligibility uses the shared measured-lighting threshold, without
+    # a separate CCTV quota. CCTV remains a soft routing weight.
     if night_mode and not has_sufficient_night_lighting(course.rfs):
         misses += 1
     return misses

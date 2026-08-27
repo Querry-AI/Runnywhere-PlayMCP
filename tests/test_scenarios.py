@@ -69,8 +69,8 @@ def test_failed_shape_does_not_poison_another_animal_or_standard_course():
     assert rabbit.structuredContent["result_code"] == "course_ready"
     assert '"widget"' in dog_text and "/c/" in dog_text and "댕댕런" in dog_text
     if standard.structuredContent["result_code"] == "insufficient_courses":
-        assert standard.structuredContent["available_count"] < 3
-        assert "서로 다른 코스 3개" in standard_text
+        assert standard.structuredContent["available_count"] == 0
+        assert "코스를 찾지 못했어요" in standard_text
     else:
         assert '"widget"' in standard_text and "/c/" in standard_text
         assert "기본 5km" in standard_guidance

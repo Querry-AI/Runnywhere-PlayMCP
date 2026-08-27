@@ -28,15 +28,14 @@ WEIGHTS_NIGHT = {
 FLAT_MAX_SLOPE_PCT = 3.0
 HILL_SWEET_LO, HILL_SWEET_HI = 3.0, 8.0
 SCORE_FLOOR = 0.25
-# The presentation's "good" band is not the minimum for a usable night run.
-# Components are rounded to two decimals; .33 is the first non-poor band
-# above the existing <= .32 dark-course cutoff (citywide median is .33).
-NIGHT_LIGHTING_MIN = 0.33
+# Product threshold for night recommendations and the "야간 조명 많음" label.
+# This dataset score is not a lux measurement or a guarantee of safety.
+NIGHT_LIGHTING_MIN = 0.40
 GOOD_LIGHTING_MIN = 0.60
 
 
 def has_sufficient_night_lighting(summary: dict) -> bool:
-    """Allow ordinary lighting, but never treat an unknown .5 prior as data."""
+    """Require the night threshold, never treating an unknown .5 prior as data."""
     value = (summary.get("components") or {}).get("lighting")
     if not (isinstance(value, (int, float)) and not isinstance(value, bool)
             and NIGHT_LIGHTING_MIN <= value <= 1):
@@ -53,8 +52,7 @@ def has_sufficient_night_lighting(summary: dict) -> bool:
 def night_lighting_label(summary: dict) -> str:
     if not has_sufficient_night_lighting(summary):
         return ""
-    return ("야간 조명 양호" if summary["components"]["lighting"] >= GOOD_LIGHTING_MIN
-            else "야간 조명 보통")
+    return "야간 조명 많음"
 
 
 COMPONENT_LABELS_KO = {
