@@ -264,42 +264,46 @@ def _ascent_line(course: Course) -> str:
 
 def _course_card_row(course: Course, course_id: str, origin: str,
                      match_note: str = "") -> dict:
-    """One spacious reference-inspired card: map, hierarchy, then action."""
+    """Reference listing: square image left, full information column right.
+
+    The action belongs in the last line of that column, never in a third
+    column that steals width from every title and metadata line.
+    """
     preview_url = f"{origin}/c/{course_id}"
     title = _widget_title(course)
     facts = course_facts(course)
-    # Mobbin's route cards make the map the visual anchor and use one clear
-    # action at the end of the information stack. Keep the CTA short enough
-    # for Kakao's compact button while making its destination explicit.
-    button = _button("지도에서 보기", preview_url)
-    button.update({"style": "primary", "variant": "solid", "size": "md"})
+    button = _button("지도 보기", preview_url)
+    button.update({"style": "primary", "variant": "solid", "size": "sm"})
     return {
-        "type": "Col",
+        "type": "Row",
         "gap": "sm",
+        "align": "center",
         "children": [
             {
                 "type": "Image",
                 "src": f"{preview_url}/thumb.svg",
                 "alt": _plain_text(f"{title} 실제 지도 코스", 120),
-                "width": 280,
-                "height": 156,
-                "fit": "cover",
+                "width": 88,
+                "height": 88,
+                "fit": "contain",
                 "radius": "lg",
-                "frame": True,
+                "frame": False,
             },
             {
-                "type": "Row", "gap": "md", "align": "center",
+                "type": "Col", "gap": "sm", "flex": 1,
                 "children": [
+                    {"type": "Caption", "value": _character_line(facts), "size": "sm", "maxLines": 2},
+                    {"type": "Title", "value": title, "size": "md", "weight": "semibold", "maxLines": 2},
+                    {"type": "Text", "value": _effort_line(course), "size": "md", "weight": "bold", "maxLines": 1},
                     {
-                        "type": "Col", "gap": "xs", "flex": 1,
+                        "type": "Row", "gap": "sm", "align": "center",
                         "children": [
-                            {"type": "Title", "value": title, "size": "lg", "weight": "bold", "maxLines": 1},
-                            {"type": "Text", "value": _effort_line(course), "size": "md", "weight": "bold", "maxLines": 1},
-                            {"type": "Caption", "value": _ascent_line(course), "size": "sm", "color": "#6b7280", "maxLines": 1},
-                            {"type": "Caption", "value": _character_line(facts), "size": "sm", "color": "#6b7280", "maxLines": 1},
+                            {"type": "Col", "flex": 1, "children": [
+                                {"type": "Caption", "value": _ascent_line(course), "size": "sm", "maxLines": 1},
+                            ]},
+                            button,
                         ],
                     },
-                    button,
                 ],
             },
         ],
@@ -366,7 +370,7 @@ def build_course_widget(
     copy_text = "\n".join(copy_lines)
     return _serialize({
         "widget": {
-            "type": "Card", "size": "md", "padding": "sm",
+            "type": "Card", "size": "md", "padding": "md",
             "children": children,
         },
         "copy_text": copy_text,
