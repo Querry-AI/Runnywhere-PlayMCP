@@ -95,6 +95,8 @@ def test_unified_course_tool_dispatches_standard_and_animal_requests():
     assert "/c/" in standard_text
     assert "댕댕런" in animal_text and "/c/" in animal_text
     assert standard.structuredContent["result_code"] == "course_ready"
+    assert standard.structuredContent["course_selection"]["primary"]["course_type"] == "standard"
+    assert standard.structuredContent["course_selection"]["primary_matches_requested_shape"] is True
     assert animal.isError is False
 
 

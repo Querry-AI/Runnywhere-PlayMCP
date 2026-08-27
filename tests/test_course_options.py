@@ -15,7 +15,7 @@ def warm_like_production():
 
 def _card(result) -> dict:
     payload = json.loads(result.content[0].text)
-    assert payload["widget"]["type"] == "Basic", result.content[0].text[:400]
+    assert payload["widget"]["type"] == "Card", result.content[0].text[:400]
     return payload
 
 

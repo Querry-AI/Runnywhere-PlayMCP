@@ -56,7 +56,7 @@ def _components(value, kind: str) -> list[dict]:
     return found
 
 
-def test_course_widget_matches_kakao_unframed_contract_and_is_deterministic():
+def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     course = _course()
     course_id = encode_course_id(course.params)
 
@@ -67,16 +67,17 @@ def test_course_widget_matches_kakao_unframed_contract_and_is_deterministic():
     assert first == second
     assert set(payload) == {"widget", "copy_text", "name"}
     assert payload["name"] == "runnywhere_course"
-    assert payload["widget"]["type"] == "Basic"
+    assert payload["widget"]["type"] == "Card"
     assert not _contains_key(payload, "status")
     assert "댕댕런" in first
     assert "\\uac15" not in first
     assert len(first.encode("utf-8")) < WIDGET_MAX_BYTES
 
     card = payload["widget"]
-    assert card["direction"] == "col" and card["padding"] == {"x": "12px"}
-    assert not _components(card, "Card")
-    assert not _contains_key(card, "border")
+    assert card["size"] == "md" and card["padding"] == {"x": "12px"}
+    assert len(_components(card, "Card")) == 1
+    assert card["border"] == {"size": 0, "color": "transparent"}
+    assert not _components(card, "Basic")
     assert not _components(card, "Divider")
     # The card leads with a one-line heading so the runner knows what it is.
     header = card["children"][0]
@@ -178,7 +179,7 @@ def test_mcp_success_uses_cached_course_without_regeneration(monkeypatch):
 
     assert result.structuredContent["result_code"] == "course_ready"
     assert result.isError is False
-    assert payload["widget"]["type"] == "Basic"
+    assert payload["widget"]["type"] == "Card"
     assert result.structuredContent["assistant_text"].startswith("거리를 말씀하지 않아")
     assert result.structuredContent["assistant_text_position"] == "before_widget"
     assert result.structuredContent["assistant_text_verbatim"] is True
@@ -196,7 +197,7 @@ def test_each_confirmed_animal_course_type_is_widget_eligible(shape):
     result = server._course_tool_result(markdown, course_type=shape)
     payload = json.loads(result.content[0].text)
 
-    assert payload["widget"]["type"] == "Basic"
+    assert payload["widget"]["type"] == "Card"
     assert result.structuredContent["result_code"] == "course_ready"
 
 
@@ -224,7 +225,7 @@ def test_new_course_is_cached_and_widgeted_in_its_first_tool_response(monkeypatc
     payload = json.loads(result.content[0].text)
 
     assert len(calls) == 1
-    assert payload["widget"]["type"] == "Basic"
+    assert payload["widget"]["type"] == "Card"
     primary = _components(payload["widget"], "Button")[0]
     assert primary["onClickAction"]["payload"]["target"]["url"].endswith(
         f"/c/{course_id}"
@@ -265,7 +266,7 @@ def test_legacy_preview_calls_return_latest_widget_contract(
     buttons = _components(payload["widget"], "Button")
 
     assert result.structuredContent["result_code"] == "course_ready"
-    assert payload["widget"]["type"] == "Basic"
+    assert payload["widget"]["type"] == "Card"
     # An animal call may now carry alternative choices, so the primary course
     # is identified by its own button rather than by position.
     target = buttons[0]["onClickAction"]["payload"]["target"]["url"]
@@ -290,7 +291,7 @@ def test_mcp_widget_falls_back_to_original_markdown(monkeypatch):
     monkeypatch.setattr(server, "KAKAO_WIDGETS_ENABLED", True)
     best_animal = server._course_tool_result(markdown, course_type="best_animal")
     best_payload = json.loads(best_animal.content[0].text)
-    assert best_payload["widget"]["type"] == "Basic"
+    assert best_payload["widget"]["type"] == "Card"
 
     second = _course(location_name="잠실역", shape=None)
     second_id = encode_course_id(second.params)
@@ -370,7 +371,7 @@ def test_course_widget_offers_every_alternative_as_a_full_matching_card():
     titles = [row["children"][1]["children"][1]["value"]
               for row in rows if row["children"][0]["type"] == "Image"]
 
-    assert payload["widget"]["type"] == "Basic"
+    assert payload["widget"]["type"] == "Card"
     assert not _contains_key(payload, "status")
     assert labels == ["지도 보기"] * 3
     assert len(images) == 3
@@ -596,3 +597,97 @@ def test_unavailable_animal_explanation_renders_before_recommendations(monkeypat
     assert result.structuredContent["assistant_text_in_widget"] is True
     assert result.structuredContent["assistant_text_position"] == "widget_intro"
     assert payload["copy_text"].startswith(plan.lead)
+
+
+@pytest.mark.parametrize("actual_shape", ["rabbit", None, "dog"])
+@pytest.mark.parametrize("widget_fails", [False, True])
+def test_requested_dog_and_actual_course_stay_consistent_even_without_widget(
+    monkeypatch, actual_shape, widget_fails,
+):
+    from runart.animal_presets import PresetMatch
+    from runart.courseplan import build_course_plan
+
+    actual = _course(location_name="서울역", shape=actual_shape)
+    # Deliberately feed stale dog copy: neither the normal nor fallback answer
+    # may reuse it when the plan contains a different course.
+    stale = "강아지 코스가 완성됐어요! 위 카드 버튼을 눌러보세요."
+    plan = build_course_plan(
+        requested_name="서울역", shape="dog", exact=actual if actual_shape == "dog" else None,
+        shape_matches=[],
+        animal_matches=[PresetMatch(actual, 0)] if actual_shape else [],
+        standard=actual if actual_shape is None else None,
+    )
+    monkeypatch.setattr(server, "_animal_course_plan", lambda *args: plan)
+    if widget_fails:
+        def broken_builder(*args, **kwargs):
+            raise WidgetBuildError("renderer contract unavailable")
+        monkeypatch.setattr(server, "build_course_widget", broken_builder)
+    result = server._course_tool_result(
+        stale, course_type="dog", request={"location": "서울역"}, timeout_s=5)
+    selection = result.structuredContent["course_selection"]
+    primary = selection["primary"]
+    final_text = result.structuredContent["assistant_final_text"]
+    cid = encode_course_id(actual.params)
+
+    assert selection["requested_course_type"] == "dog"
+    assert selection["primary_matches_requested_shape"] is (actual_shape == "dog")
+    assert selection["requested_shape_offered"] is (actual_shape == "dog")
+    assert primary["course_type"] == (actual_shape or "standard")
+    assert primary["course_id"] == cid
+    assert primary["title"] in final_text
+    assert primary["shape_label"] in final_text
+    assert "9.0km · 약 63분" in final_text
+    assert f"]({server.BASE_URL}/c/{cid})" in final_text
+    assert result.content[-1].text == final_text
+    assert stale not in "\n".join(c.text for c in result.content)
+    assert "완성" not in final_text and "위 카드" not in final_text
+    if actual_shape != "dog":
+        assert f"강아지 모양 대신 {primary['shape_label']}" in final_text
+    if widget_fails:
+        assert primary["title"] in result.content[0].text
+        assert primary["map_url"] in result.content[0].text
+        assert result.content[0].text.startswith(plan.lead)
+        assert result.structuredContent["assistant_text_in_widget"] is False
+    else:
+        payload = json.loads(result.content[0].text)
+        assert payload["widget"]["type"] == "Card"
+        assert primary["title"] in [c["value"] for c in _components(payload, "Text")]
+        target = _components(payload, "Button")[0]["onClickAction"]["payload"]["target"]
+        assert target["url"] == primary["map_url"]
+
+
+def test_fallback_keeps_all_selected_courses_and_does_not_confuse_primary_with_alternative(monkeypatch):
+    from runart.animal_presets import PresetMatch
+    from runart.courseplan import build_course_plan
+
+    rabbit = _course(shape="rabbit")
+    dog = _course(location_name="역삼역", shape="dog")
+    plan = build_course_plan(
+        requested_name="강남역", shape="dog", exact=None, shape_matches=[],
+        animal_matches=[PresetMatch(rabbit, 0), PresetMatch(dog, 900)], standard=None,
+    )
+    monkeypatch.setattr(server, "_animal_course_plan", lambda *args: plan)
+    monkeypatch.setattr(server, "_plan_widget", lambda *args: None)
+    result = server._planned_course_result(
+        "강아지를 그렸어요", course_type="dog", request={"location": "강남역"}, timeout_s=5)
+    selection = result.structuredContent["course_selection"]
+
+    assert selection["primary_matches_requested_shape"] is False
+    assert selection["requested_shape_offered"] is True
+    assert selection["primary"]["course_type"] == "rabbit"
+    assert selection["alternatives"][0]["course_type"] == "dog"
+    for course in [selection["primary"], *selection["alternatives"]]:
+        assert course["map_url"] in result.content[0].text
+    assert "강아지 모양 대신 토끼 모양" in result.structuredContent["assistant_final_text"]
+
+
+def test_cached_unplanned_result_also_names_the_actual_shape():
+    rabbit = _course(shape="rabbit")
+    course_id = encode_course_id(rabbit.params)
+    server._cache_put(course_id, rabbit)
+    stale = f"강아지 코스를 그렸어요.\n## 코스\n- 지도: {server.BASE_URL}/c/{course_id}"
+    result = server._course_tool_result(stale, course_type="dog")
+
+    assert result.structuredContent["course_selection"]["primary"]["course_type"] == "rabbit"
+    assert "강아지 모양 대신 토끼 모양" in result.structuredContent["assistant_final_text"]
+    assert "강아지 코스를 그렸어요" not in "\n".join(c.text for c in result.content)

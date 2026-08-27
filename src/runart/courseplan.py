@@ -166,8 +166,12 @@ def build_course_plan(
     shape_name = spec.name_ko if spec else "동물 모양" if wants_animal else "일반"
     target_text = (f"약 {duration_min:g}분" if duration_min and distance_km is None else
                    f"{target:g}km" if target else "거리 지정 없이" if wants_animal else "기본 5km")
+    actual_spec = SHAPES.get(primary.course.params.shape or "")
+    actual_shape = f"{actual_spec.name_ko} 모양" if actual_spec else "일반 러닝"
+    actual_course = f"{primary.start_name} · {primary.title} ({actual_shape})"
     if primary_score[0] == 0 and primary_score[2] == 0 and primary_score[3] == 0:
-        lead = f"{name}에서 {target_text} 기준으로 {shape_name} 코스를 먼저 골랐어요."
+        criterion = target_text if target is None and wants_animal else f"{target_text} 기준으로"
+        lead = f"{name}에서 {criterion} {actual_shape} 코스를 먼저 골랐어요."
     elif wants_animal and (primary.is_detour or primary_score[2]):
         shape_label = f"{shape_name} 모양" if spec else shape_name
         local_requested = any(c.kind == KIND_REQUESTED and not c.is_detour
@@ -179,9 +183,9 @@ def build_course_plan(
         else:
             reason = f"{name}에서 요청 조건에 맞는 {shape_label} 코스를 찾지 못해"
         lead = (f"{reason} 다른 추천 코스를 준비했어요. "
-                f"첫 코스: {primary.start_name} · {primary.match_note}.")
+                f"첫 코스: {actual_course} · {primary.match_note}.")
     else:
         lead = (f"요청한 {shape_name} 코스를 찾되, {name}의 장소·시간(거리)을 먼저, "
                 "모양과 선택 특징을 그다음으로 고려했어요. "
-                f"첫 코스: {primary.start_name} · {primary.match_note}.")
+                f"첫 코스: {actual_course} · {primary.match_note}.")
     return CoursePlan(case, lead, primary, tuple(c for _, c in ranked[1:3]))

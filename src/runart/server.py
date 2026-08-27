@@ -58,7 +58,7 @@ from .render import (card_svg, course_edit_summary, course_markdown,
 from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
                      generate_shape_course, list_shapes)
 from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
-from .widget import WidgetTooLargeError, build_course_widget
+from .widget import WidgetTooLargeError, build_course_widget, course_response_facts
 
 DEFAULT_BASE_URL = (
     "https://runnywhere-kakaotools.playmcp-endpoint.kakaocloud.io"
@@ -124,7 +124,8 @@ mcp = FastMCP(
         "start and do not call a course tool. A location-only reply is valid "
         "only immediately after the user established course-creation intent "
         "or was asked for the missing start. Use standard for ordinary runs, "
-        "best_animal when no animal is named, and dog/cat/rabbit/whale for "
+        "best_animal only for animal/GPS-art requests without a named animal, "
+        "never infer animal art from 그려줘 alone, and dog/cat/rabbit/whale for "
         "강아지·댕댕이/고양이·야옹이/토끼/고래. (2) Existing-course "
         "For a new course, include need_facilities=park only when the user "
         "explicitly asks to run in or through a park, riverside park, or "
@@ -140,7 +141,15 @@ mcp = FastMCP(
         "a result includes structuredContent.assistant_text, your response "
         "MUST begin with that exact sentence verbatim as normal conversational "
         "text before introducing the widget. Never paraphrase, replace, or "
-        "repeat it, and do not copy that guidance into the card."
+        "repeat it, and do not copy that guidance into the card. "
+        "For closing prose use structuredContent.assistant_final_text verbatim, "
+        "without adding a completion claim. course_selection describes the "
+        "ACTUAL returned routes; requested_course_type is only the request, "
+        "never evidence that this shape was produced. If primary_matches_requested_shape "
+        "is false, say which alternative shape was returned. Never call a rabbit "
+        "or standard course a dog course. A widget payload does not confirm host "
+        "rendering: never claim a card is visible or direct users to a button "
+        "above. Use the provided map link instead."
     ),
     stateless_http=True,
     json_response=True,
@@ -388,7 +397,9 @@ def offloaded(fn):
 def _mcp_result(text: str, *, code: str, is_error: bool = False,
                 retryable: bool = False,
                 assistant_text: str | None = None,
-                assistant_text_in_widget: bool = False) -> CallToolResult:
+                assistant_text_in_widget: bool = False,
+                assistant_final_text: str | None = None,
+                course_selection: dict | None = None) -> CallToolResult:
     content = [TextContent(type="text", text=text)]
     structured = {
         "result_code": code,
@@ -404,6 +415,13 @@ def _mcp_result(text: str, *, code: str, is_error: bool = False,
             "widget_intro" if assistant_text_in_widget else "before_widget")
         structured["assistant_text_in_widget"] = assistant_text_in_widget
         structured["assistant_text_verbatim"] = True
+    if course_selection is not None:
+        structured["course_selection"] = course_selection
+    if assistant_final_text:
+        # Some hosts pass only text content to the assistant. Supply the same
+        # factual closing copy there, without changing Kakao's content[0].
+        content.append(TextContent(type="text", text=assistant_final_text))
+        structured["assistant_final_text"] = assistant_final_text
     return CallToolResult(
         content=content,
         structuredContent=structured,
@@ -442,8 +460,8 @@ def _widget_lead_text(text: str) -> str:
     return text.split(marker, 1)[0] if marker in text else ""
 
 
-def _try_course_widget(text: str, course_type: str) -> str | None:
-    """Build from a cached course only; every mismatch keeps Markdown."""
+def _try_course_result(text: str, course_type: str) -> CallToolResult | None:
+    """Ground even a non-planned response in its cached course, without generation."""
     if not KAKAO_WIDGETS_ENABLED:
         log.info(
             "mcp_widget tool=create_seoul_running_course "
@@ -479,27 +497,40 @@ def _try_course_widget(text: str, course_type: str) -> str | None:
             "state=fallback reason=cache_miss"
         )
         return None
+    selection = _course_selection(
+        [course_response_facts(course, course_id, BASE_URL)], course_type)
+    final_text = _plan_final_text(selection)
+    lead = _widget_lead_text(text)
+    if not selection["primary_matches_requested_shape"]:
+        lead = final_text.split("\n", 1)[0]
+        text = final_text
+    widget = None
     try:
         widget = build_course_widget(
-            course, course_id, BASE_URL
+            course, course_id, BASE_URL,
+            intro_text=lead if not selection["primary_matches_requested_shape"] else "",
         )
     except WidgetTooLargeError:
         log.warning(
             "mcp_widget tool=create_seoul_running_course "
             "state=fallback reason=too_large"
         )
-        return None
     except Exception:  # noqa: BLE001 — widget failures must preserve Markdown
         log.warning(
             "mcp_widget tool=create_seoul_running_course "
             "state=fallback reason=build_error"
         )
-        return None
-    log.info(
-        "mcp_widget tool=create_seoul_running_course "
-        "state=emitted reason=course_ready"
+    if widget is not None:
+        log.info(
+            "mcp_widget tool=create_seoul_running_course "
+            "state=emitted reason=course_ready"
+        )
+    return _mcp_result(
+        widget if widget is not None else text, code="course_ready",
+        assistant_text=lead, assistant_final_text=final_text,
+        assistant_text_in_widget=widget is not None and not selection["primary_matches_requested_shape"],
+        course_selection=selection,
     )
-    return widget
 
 
 def _any_animal_matches(probe: CourseParams,
@@ -616,7 +647,7 @@ def _animal_course_plan(request: dict, shape: str, text: str,
 
 
 def _plan_widget(plan: CoursePlan) -> str | None:
-    """Serialize a plan, or keep the Markdown answer by returning None."""
+    """Serialize a plan; on failure the caller renders that SAME plan as text."""
     try:
         widget = build_course_widget(
             plan.primary.course, plan.primary.course_id, BASE_URL,
@@ -634,6 +665,39 @@ def _plan_widget(plan: CoursePlan) -> str | None:
              f"state=emitted reason=plan case={plan.case} "
              f"choices={1 + len(plan.alternatives)}")
     return widget
+
+
+def _course_selection(choices: list[dict], course_type: str) -> dict:
+    """Actual output facts, separate from the shape the user asked for."""
+
+    def matches(choice: dict) -> bool:
+        actual = choice["course_type"]
+        return actual != "standard" if course_type == "best_animal" else actual == course_type
+
+    return {
+        "requested_course_type": course_type,
+        "primary_matches_requested_shape": matches(choices[0]),
+        "requested_shape_offered": any(matches(choice) for choice in choices),
+        "primary": choices[0],
+        "alternatives": choices[1:],
+    }
+
+
+def _course_summary(facts: dict) -> str:
+    """A real link works even when the host does not display its widget."""
+    return (f"{facts['title']} ({facts['shape_label']}) · "
+            f"{facts['distance_km']:.1f}km · 약 {facts['duration_min']}분\n"
+            f"[지도 보기]({facts['map_url']})")
+
+
+def _plan_final_text(selection: dict) -> str:
+    primary = selection["primary"]
+    prefix = "추천 코스예요."
+    if not selection["primary_matches_requested_shape"]:
+        requested = SHAPES.get(selection["requested_course_type"])
+        label = f"{requested.name_ko} 모양" if requested else "요청한 모양"
+        prefix = f"첫 추천은 {label} 대신 {primary['shape_label']} 코스예요."
+    return f"{prefix}\n\n{_course_summary(primary)}"
 
 
 def _planned_course_result(text: str, *, course_type: str, request: dict,
@@ -656,12 +720,28 @@ def _planned_course_result(text: str, *, course_type: str, request: dict,
     # can contain scoring rationale that belongs on the detail page, not in a
     # concise chat handoff beside the widget.
     lead = plan.lead
+    selection = _course_selection(
+        [course_response_facts(c.course, c.course_id, BASE_URL)
+         for c in (plan.primary, *plan.alternatives)], course_type)
+    final_text = _plan_final_text(selection)
     widget = _plan_widget(plan)
     if widget is None:
-        return None
+        # Never return the original generator's requested-animal copy once a
+        # different plan was selected. Keep every actual choice and map link.
+        lines = [lead, "추천 코스", _course_summary(selection["primary"])]
+        if selection["alternatives"]:
+            lines.extend(["다른 코스도 있어요", *[
+                _course_summary(c) for c in selection["alternatives"]]])
+        return _mcp_result(
+            "\n\n".join(lines),
+            code="nearby_course_ready" if plan.primary.is_detour else "course_ready",
+            assistant_text=lead, assistant_final_text=final_text,
+            course_selection=selection,
+        )
     return _mcp_result(
         widget, code=("nearby_course_ready" if plan.primary.is_detour else "course_ready"),
         assistant_text=lead, assistant_text_in_widget=plan.case != CASE_EXACT,
+        assistant_final_text=final_text, course_selection=selection,
     )
 
 
@@ -692,11 +772,9 @@ def _course_tool_result(text: str, *, course_type: str,
         if "추천 거리" in text:
             return _mcp_result(text, code="exact_shape_unavailable")
         return _mcp_result(text, code="invalid_request", is_error=True)
-    widget = _try_course_widget(text, course_type)
-    if widget is not None:
-        return _mcp_result(
-            widget, code="course_ready", assistant_text=_widget_lead_text(text)
-        )
+    cached_result = _try_course_result(text, course_type)
+    if cached_result is not None:
+        return cached_result
     return _mcp_result(text, code="course_ready")
 
 
@@ -1384,18 +1462,17 @@ def create_seoul_running_course(
     ))] = None,
 ) -> CallToolResult:
     """Creates a standard running course or animal-shaped GPS-art course on
-    real pedestrian roads in Seoul with Runnywhere(러니웨어). Use it for a new 러닝 코스, 달리기 코스,
-    그려줘, 추천해줘, or animal/GPS-art request only after the user supplied
-    a Seoul start. Use standard for an ordinary run, best_animal when no
-    animal is named, or dog/cat/rabbit/whale for the named animal. Never invent
-    a start or change the requested effort to preserve a shape: full matches
-    come first, otherwise prioritize start and time/distance, then shape,
-    then optional hills/night/facilities. Cards state any unmet conditions.
-    Ask for a missing start without calling. Do not use this for an
-    existing course_id, "이 코스 근처 화장실", map/GPX repetition, completion,
-    or relays. When structuredContent.assistant_text_in_widget is true,
-    guidance is already above the list; do not repeat it. Otherwise begin with
-    structuredContent.assistant_text verbatim before the widget."""
+    real pedestrian roads in Seoul with Runnywhere(러니웨어). Call for new 러닝 코스/그려줘/
+    추천해줘 only with an explicit Seoul start; otherwise ask. Never invent a start.
+    Use standard for ordinary runs, best_animal for unnamed animal art, dog/cat/rabbit/whale
+    only for the named animal. Never infer a shape from '그려줘' alone.
+    Preserve start and effort before shape, then optional preferences.
+    Existing-course changes/facilities (이 코스 근처 화장실)/map/GPX/completion/relays use other tools.
+    Output course_selection records ACTUAL routes, not the requested shape.
+    Never claim a dog was created when a rabbit or standard course was returned.
+    Begin with assistant_text verbatim unless assistant_text_in_widget is true.
+    Close with assistant_final_text verbatim; do not invent completion claims
+    or say a card/button is visible. Use its real map link if needed."""
     common = dict(
         location=location, lat=lat, lon=lon, distance_km=distance_km,
         duration_min=duration_min, include_hills=include_hills,

@@ -16,7 +16,8 @@ Mobbin MCP screens inspected:
 
 ## Widget changes
 
-- Basic root: vertical layout, zero gap/inset, no Card component. See the live verification below for why Card's border override was insufficient.
+- Card root: restored after the Basic compatibility regression documented below;
+  12px horizontal inset, transparent background/border override.
 - Thumbnail: retain 88 × 88, unframed, medium corner radius; image/text gap 8px.
 - Tags: soft blue `info` badges, small and pill-shaped, 4px gaps, whole-tag wrapping.
 - Course title: small semibold Text (14px), one line, dark-mode #f5f5f5 / light-mode #202020.
@@ -83,3 +84,36 @@ temporary package using the same data. No generation budget or route logic was
 changed to hide that unrelated failure. An initial focused run also exposed the
 existing hardcoded 73-minute nearest-route expectation returning 85 minutes;
 the subsequent full run passed that test.
+
+## Widget disappearance and contradictory animal copy — correction
+
+The upstream Basic-root experiment above is superseded. On 2026-08-27 the
+deployed server returned Basic for 서울대입구역/dog, with a real 9.3km dog
+course in its share copy. A fresh signed-in Preview request for
+`서울역에서 강아지 모양 러닝 코스 그려줘` displayed only prose and no widget.
+The previously deployed Card response in the same Preview did render.
+
+- Restore the known-rendering Card envelope, keeping compact rows, heading
+  weight/color and spacing. Do not claim the host's outer border is removed:
+  it previously ignored the zero-border override, and upstream support alone
+  does not prove Kakao support.
+- Send `course_selection` with requested type separate from actual primary
+  and alternative course facts, exact map URLs and shape-match booleans.
+- Derive `assistant_final_text` from the same course as the widget. It names
+  the actual shape and supplies a direct link; it never claims that a card
+  rendered or a requested animal was created when a different shape won.
+- If widget serialization fails after ranking, render the selected plan as
+  Markdown with all its links. Never revert to the original generator's copy
+  for another animal. Cached single-course responses use the same facts.
+- Plain “러닝 코스 그려줘” explicitly means standard unless animal art was
+  actually requested. Existing start/effort/shape ranking is unchanged.
+
+Regression tests cover dog→rabbit, dog→standard, exact dog, widget failure,
+actual alternatives, cached responses and standard dispatch. This proves the
+server contract only; the repaired payload and assistant wording still need
+an actual Kakao deployment and fresh-conversation check.
+
+Validation: 431 tests passed with the previously documented pool-unavailable
+generation test excluded. That test was rerun alone and still failed because
+no whale course returned within its existing response budget (4.24s test run).
+No generation budgets were changed.

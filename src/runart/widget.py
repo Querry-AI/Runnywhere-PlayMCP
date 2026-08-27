@@ -110,15 +110,15 @@ def _validate_envelope(payload: dict) -> None:
     if payload["name"] != WIDGET_NAME or _has_key(payload, "status"):
         raise WidgetBuildError("unsupported widget metadata")
     listing = payload["widget"]
-    if not isinstance(listing, dict) or listing.get("type") != "Basic":
-        raise WidgetBuildError("course listings require an unframed Basic root")
-    if set(listing) != {"type", "children", "direction", "gap", "padding"}:
-        raise WidgetBuildError("unsupported Basic properties")
-    if listing["direction"] != "col" or listing["padding"] != {"x": "12px"}:
+    if not isinstance(listing, dict) or listing.get("type") != "Card":
+        raise WidgetBuildError("course listings require the Kakao-supported Card root")
+    if set(listing) != {"type", "children", "size", "padding", "border", "background"}:
+        raise WidgetBuildError("unsupported Card properties")
+    if listing["size"] != "md" or listing["padding"] != {"x": "12px"}:
         raise WidgetBuildError("course listings require a small horizontal inset")
     children = listing.get("children")
     if not isinstance(children, list) or not children:
-        raise WidgetBuildError("widget Basic must have children")
+        raise WidgetBuildError("widget Card must have children")
     for child in children:
         _validate_component(child)
     if not isinstance(payload["copy_text"], str) or not payload["copy_text"]:
@@ -348,6 +348,25 @@ def _course_card_row(course: Course, course_id: str, origin: str,
     }
 
 
+def course_response_facts(course: Course, course_id: str, base_url: str) -> dict:
+    """Ground assistant prose in the same course and name as its widget row."""
+    if not _COURSE_ID_RE.fullmatch(course_id):
+        raise WidgetBuildError("invalid course id")
+    shape = course.params.shape
+    spec = SHAPES.get(shape or "")
+    return {
+        "course_id": course_id,
+        "title": _copy_value(_widget_title(course), 80),
+        "course_type": shape or "standard",
+        "shape_label": f"{spec.name_ko} 모양" if spec else "일반 러닝",
+        "start": _copy_value(course.params.location_name or "지정한 출발점", 120),
+        "distance_km": round(course.length_km, 1),
+        "duration_min": effort(course.length_km, DEFAULT_PACE_S)["duration_min"],
+        "ascent_m": round(course.ascent_m),
+        "map_url": f"{_origin(base_url)}/c/{course_id}",
+    }
+
+
 def build_course_widget(
     course: Course,
     course_id: str,
@@ -357,7 +376,7 @@ def build_course_widget(
     primary_note: str = "",
     intro_text: str = "",
 ) -> str:
-    """Return an unframed Kakao listing for one confirmed course.
+    """Return a Kakao-compatible listing for one confirmed course.
 
     ``alternatives`` are the other courses the runner may pick instead; each
     becomes a matching listing row below the primary course. Kakao renders the
@@ -413,11 +432,13 @@ def build_course_widget(
         copy_text = f"{_copy_value(intro_text, 600)}\n\n{copy_text}"
     return _serialize({
         "widget": {
-            # Verified in Kakao Preview: Card ignores border=0 (including
-            # Border objects) and retains its 1px stylesheet border. Basic
-            # is ChatKit's unframed root; do not reintroduce a nested Card.
-            "type": "Basic", "direction": "col", "gap": 0,
+            # Kakao drops Basic roots even though upstream ChatKit supports
+            # them. Keep its proven Card envelope. The host may ignore border
+            # overrides; do not trade a working widget for unverified roots.
+            "type": "Card", "size": "md",
             "padding": {"x": "12px"},
+            "border": {"size": 0, "color": "transparent"},
+            "background": "transparent",
             "children": children,
         },
         "copy_text": copy_text,
