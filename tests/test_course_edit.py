@@ -271,18 +271,35 @@ def test_editing_never_refuses_the_runner():
         assert "note" in payload, label
 
 
-def test_a_drawn_stroke_is_trimmed_rather_than_refused_for_being_long():
-    from runart.course import STROKE_MAX_LENGTH_M, snap_drawn_segment
+def test_a_long_drawing_is_followed_to_its_end_not_trimmed():
+    """Trimming a drawing to its first few kilometres threw away most of what
+    the runner drew and told them so afterwards, which is the worst of both.
+    Inside Seoul the line is followed all the way."""
+    from runart.course import snap_drawn_segment
     source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
     # A stroke that walks the whole loop several times over.
     stroke = [CourseWaypoint(lat=la, lon=lo)
               for _ in range(4) for la, lo in source.points[::3]]
     walked = sum(
         haversine_m(a.lat, a.lon, b.lat, b.lon) for a, b in zip(stroke, stroke[1:]))
-    assert walked > STROKE_MAX_LENGTH_M
+    assert walked > 6000
     course = snap_drawn_segment(source.params, source.path, None, None, stroke)
     assert course.path[0] == course.path[-1]
-    assert "너무 길어" in course.note
+    assert "너무 길어" not in (course.note or "")
+    assert "앞쪽" not in (course.note or "")
+
+
+def test_the_waypoint_budget_grows_with_the_drawing():
+    """Eight anchors for a whole outline let the router fill the gaps with
+    whatever it liked -- the spikes along the top of a 고구마 drawn round
+    여의도. The spacing floor stays at 140m; only the count cap moved."""
+    from runart.course import STROKE_WAYPOINT_MIN_M, stroke_waypoints
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    assert STROKE_WAYPOINT_MIN_M == 140.0
+    long_stroke = [CourseWaypoint(lat=la, lon=lo) for la, lo in source.points]
+    assert len(stroke_waypoints(long_stroke)) > 8
+    short = [CourseWaypoint(lat=la, lon=lo) for la, lo in source.points[:4]]
+    assert len(stroke_waypoints(short)) <= 8
 
 
 def test_edit_endpoint_detaches_one_edge_and_reconnects_an_alternate_walkway():
@@ -1345,3 +1362,78 @@ def test_the_editor_is_handed_the_same_street_shapes_the_other_pages_draw():
             expanded.extend(tuple(point) for point in (geometry[index] or []))
     drawn = [(round(lat, 6), round(lon, 6)) for lat, lon in route_points(source)]
     assert expanded == drawn, "the editor's line and the info page's line differ"
+
+
+# ---------------------------------------------------------------------------
+# Following the drawing
+# ---------------------------------------------------------------------------
+
+def _doubled_share(path) -> float:
+    g = graphmod.get_graph()
+    seen, repeated, total = set(), 0.0, 0.0
+    for u, v in zip(path, path[1:]):
+        length = float(g.edges[u, v]["length"])
+        total += length
+        key = frozenset((u, v))
+        if key in seen:
+            repeated += length
+        else:
+            seen.add(key)
+    return repeated / total if total else 0.0
+
+
+def test_a_closed_drawing_becomes_the_course_not_a_patch_on_it():
+    """Splicing a closed shape into the short span between the two ends it
+    happens to touch made the route run out around the shape and back: a 고구마
+    drawn over a 5km loop came back as 10.4km with 48% of it walked twice."""
+    from runart.course import snap_drawn_segment
+    for name, lat, lon in (("서울시청", 37.5665, 126.9780),
+                           ("잠실", 37.5133, 127.1000)):
+        source = generate_course(CourseParams(
+            lat=lat, lon=lon, location_name=name, distance_km=5.0))
+        outline = [CourseWaypoint(lat=la, lon=lo)
+                   for la, lo in source.points[::2]]
+        drawn = snap_drawn_segment(source.params, source.path, None, None, outline)
+
+        assert drawn.path[0] == drawn.path[-1]
+        assert drawn.length_km < source.length_km * 1.4, (
+            f"{name}: {drawn.length_km:.2f}km against a {source.length_km:.2f}km outline")
+        assert _doubled_share(drawn.path) < 0.15, (
+            f"{name}: {_doubled_share(drawn.path):.0%} of the loop walked twice")
+
+
+def test_a_spur_appears_only_where_the_runner_drew_one():
+    """"삐죽 튀어나온" spikes were the router's own out-and-backs on its way to
+    touch a waypoint. An excursion now survives only where the drawn line went
+    there too, and only if it actually reaches somewhere."""
+    from runart.course import snap_drawn_segment
+    g = graphmod.get_graph()
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    outline = source.points[::2]
+    index = len(outline) // 3
+    anchor = outline[index]
+    tip = (anchor[0] + 0.0016, anchor[1] + 0.0016)
+    with_spur = outline[:index] + [
+        (anchor[0] + 0.0005, anchor[1] + 0.0005),
+        (anchor[0] + 0.0011, anchor[1] + 0.0011), tip,
+        (anchor[0] + 0.0011, anchor[1] + 0.0011),
+        (anchor[0] + 0.0005, anchor[1] + 0.0005),
+    ] + outline[index:]
+
+    def reach(course):
+        return min(haversine_m(tip[0], tip[1], g.nodes[n]["lat"], g.nodes[n]["lon"])
+                   for n in course.path)
+
+    drew_it = snap_drawn_segment(source.params, source.path, None, None,
+                                 [CourseWaypoint(lat=a, lon=b) for a, b in with_spur])
+    assert reach(drew_it) < 120, "a spur the runner drew was cut"
+
+    did_not = snap_drawn_segment(source.params, source.path, None, None,
+                                 [CourseWaypoint(lat=a, lon=b) for a, b in outline])
+    assert _doubled_share(did_not.path) < 0.15, "the router invented out-and-backs"
+
+
+def test_a_tremor_sized_out_and_back_is_never_kept_as_a_spur():
+    from runart.course import DRAWN_SPUR_MIN_M, STROKE_CORRIDOR_M
+    assert DRAWN_SPUR_MIN_M >= 100.0
+    assert STROKE_CORRIDOR_M <= 60.0

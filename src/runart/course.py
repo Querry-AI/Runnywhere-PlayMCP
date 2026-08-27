@@ -67,6 +67,23 @@ class CourseError(Exception):
     """User-facing generation failure; message must say what to do next."""
 
 
+class DistanceMissError(CourseError):
+    """No loop close enough to the target; the nearest one is this long.
+
+    Carries the two numbers so a caller that knows the runner asked in
+    minutes can say the same thing in minutes. The default message stays
+    correct for a request that really was made in kilometres.
+    """
+
+    def __init__(self, target_km: float, nearest_km: float):
+        self.target_km = target_km
+        self.nearest_km = nearest_km
+        super().__init__(
+            f"목표 {target_km:g}km에 맞는 코스를 찾지 못했어요 "
+            f"(가장 근접: {nearest_km:.1f}km). 거리를 조금 조정해 다시 요청해 주세요."
+        )
+
+
 def _routing_weight_for(params: CourseParams) -> str:
     """Select the map-aligned profile unless park running was explicit."""
     return routing_weight(
@@ -641,6 +658,39 @@ def _connect_through(g, weight, start: int, waypoints: list[int],
     return route or [start]
 
 
+def _course_from_closed_stroke(params: CourseParams,
+                               points: list[tuple[float, float]]) -> Course:
+    """Build a loop out of a shape the runner drew closed."""
+    g = graphmod.get_graph()
+    weight = easy_route_weight(_routing_weight_for(params), prefer_named_walkways=True)
+    drawn: list[int] = []
+    for lat, lon in stroke_waypoints(
+            [CourseWaypoint(lat=lat, lon=lon) for lat, lon in points]):
+        node, snap_m = graphmod.nearest_node(lat, lon)
+        if node is None or snap_m > STROKE_SNAP_MAX_M:
+            continue
+        if not drawn or drawn[-1] != node:
+            drawn.append(node)
+    if len(drawn) < 3:
+        raise CourseError(
+            "그린 모양 가까이에 걸을 수 있는 길이 없어요. "
+            "지도에 보이는 길 위로 그려 주세요.")
+    loop = _connect_through(g, weight, drawn[0], drawn[1:], drawn[0])
+    if loop is None or len(loop) < 3:
+        raise CourseError("그린 모양을 보행로로 잇지 못했어요. 조금 더 크게 그려 주세요.")
+    trimmed = drop_backtracking(
+        loop, keep_span=lambda span: _within_drawn_corridor(g, span, points))
+    for candidate in (trimmed, loop):
+        if candidate[0] != candidate[-1]:
+            candidate = [*candidate, candidate[0]]
+        try:
+            course = course_from_path(params, candidate)
+        except CourseError:
+            continue
+        return rebase_closed_course_start(course)
+    raise CourseError("그린 모양으로 순환 코스를 만들지 못했어요.")
+
+
 def snap_drawn_segment(params: CourseParams, path: list[int],
                        from_index: int | None, to_index: int | None,
                        stroke: list[CourseWaypoint]) -> Course:
@@ -667,21 +717,22 @@ def snap_drawn_segment(params: CourseParams, path: list[int],
         gap = (from_index, min(to_index, last + 1))
 
     note = ""
+    # The whole drawing, however long. Trimming it to the first few kilometres
+    # threw away most of what the runner drew and told them so afterwards,
+    # which is the worst of both. Inside Seoul the line is followed to its end;
+    # the coordinate bounds on CourseWaypoint already keep it in the city.
     points = [(point.lat, point.lon) for point in stroke]
+
+    # A closed drawing is a course in its own right. Splicing one into the
+    # short span between the two ends it happens to touch made the route run
+    # out around the shape and back again: a 고구마 drawn over a 5km loop came
+    # back as 10.4km with 48% of it walked twice.
     walked = sum(haversine_m(a[0], a[1], b[0], b[1])
                  for a, b in zip(points, points[1:]))
-    if walked > STROKE_MAX_LENGTH_M:
-        # Trim rather than refuse: the head of the stroke is what the runner
-        # drew first and meant most.
-        kept, run = [points[0]], 0.0
-        for a, b in zip(points, points[1:]):
-            run += haversine_m(a[0], a[1], b[0], b[1])
-            if run > STROKE_MAX_LENGTH_M:
-                break
-            kept.append(b)
-        points = kept
-        note = (f"그린 선이 {walked / 1000:.1f}km로 너무 길어 "
-                f"앞쪽 {STROKE_MAX_LENGTH_M / 1000:.0f}km만 반영했어요.")
+    if (len(points) >= 8 and walked >= CLOSED_STROKE_MIN_M
+            and haversine_m(points[0][0], points[0][1],
+                            points[-1][0], points[-1][1]) <= CLOSED_STROKE_M):
+        return _course_from_closed_stroke(params, points)
 
     # Where the stroke meets the course decides what gets replaced.
     span = gap
@@ -744,7 +795,8 @@ def snap_drawn_segment(params: CourseParams, path: list[int],
     if drawn_nodes and not stroke_is_doubled(
             [CourseWaypoint(lat=lat, lon=lon) for lat, lon in points]):
         candidates.insert(0, drop_backtracking(
-            replacement, _detour_nodes(g, drawn_nodes, path[lo], path[hi])))
+            replacement,
+            keep_span=lambda span: _within_drawn_corridor(g, span, points)))
     for candidate in candidates:
         try:
             course = course_from_path(params, path[:lo] + candidate + path[hi + 1:])
@@ -772,12 +824,23 @@ def snap_drawn_segment(params: CourseParams, path: list[int],
 # any real circuit, while a short shared spur stays acceptable.
 RETRACE_PENALTY = 120.0
 RETRACE_ACCEPTABLE = 0.25
+# How far apart the points handed to the router have to be. Closer than this
+# and two neighbouring samples snap to different ways, forcing a detour out to
+# one and back -- the zigzag that turned a straight 489m line into 1,515m.
+# Dropping it to 90m to follow a drawing more closely brought that straight
+# back: a +/-25m wobble backtracked over six of thirty-two nodes. Fidelity
+# comes from lifting the *count* cap instead, which is what actually bound a
+# long outline.
 STROKE_WAYPOINT_MIN_M = 140.0
 # Perpendicular deviation below which a drawn line counts as straight.
 STROKE_SIMPLIFY_TOLERANCE_M = 45.0
-STROKE_WAYPOINT_MAX = 8
-# A stroke longer than this is trimmed, never refused.
-STROKE_MAX_LENGTH_M = 6000.0
+# The cap scales with the drawing. A fixed eight points meant a long outline --
+# a 고구마 round 여의도, say -- was reconstructed from eight anchors and the
+# router filled the gaps with whatever it liked. Editing is the one place the
+# runner is entitled to be followed exactly, so the budget follows the line.
+STROKE_WAYPOINT_PER_M = 120.0
+STROKE_WAYPOINT_MIN_COUNT = 8
+STROKE_WAYPOINT_MAX = 240
 # How close a drawn line has to come to the course before it counts
 # as having touched it. Beyond this it is still joined -- to the
 # nearest point -- and the runner is told that is what happened.
@@ -845,9 +908,13 @@ def stroke_waypoints(stroke) -> list[tuple[float, float]]:
                                   point[0], point[1]) < STROKE_WAYPOINT_MIN_M:
             continue
         spaced.append(point)
-    if len(spaced) <= STROKE_WAYPOINT_MAX:
+    walked = sum(haversine_m(a[0], a[1], b[0], b[1])
+                 for a, b in zip(points, points[1:]))
+    budget = max(STROKE_WAYPOINT_MIN_COUNT,
+                 min(STROKE_WAYPOINT_MAX, math.ceil(walked / STROKE_WAYPOINT_PER_M)))
+    if len(spaced) <= budget:
         return spaced
-    step = math.ceil(len(spaced) / STROKE_WAYPOINT_MAX)
+    step = math.ceil(len(spaced) / budget)
     return spaced[::step]
 
 
@@ -922,8 +989,47 @@ def _detour_nodes(graph, drawn: list[int], start: int, end: int) -> frozenset[in
     return frozenset(out)
 
 
+# How far a route may stray from the drawn line and still count as part of it.
+STROKE_CORRIDOR_M = 55.0
+# Ends this close together mean the runner drew a closed shape, and a closed
+# shape is a whole course rather than a patch on one.
+CLOSED_STROKE_M = 220.0
+CLOSED_STROKE_MIN_M = 1200.0
+# A spur the runner drew reaches somewhere. One a wobbling finger produced does
+# not: a +/-25m tremor makes out-and-backs a few tens of metres deep, and those
+# are the zigzag, not an instruction.
+DRAWN_SPUR_MIN_M = 120.0
+
+
+def _within_drawn_corridor(graph, span: list[int],
+                           drawn: list[tuple[float, float]]) -> bool:
+    """Did the runner's own line go where this excursion goes?
+
+    A repeated node is an out-and-back. Some are the runner's -- they drew a
+    spur on purpose -- and some the router invented on its way out to touch a
+    waypoint. The drawn line tells them apart: an excursion the runner drew
+    stays inside the corridor of their stroke, and one the router invented
+    sticks out of it. Judging by distance from the chord between the two ends
+    instead protected everything on any large outline, which is why a 고구마
+    drawn round 여의도 came back with spikes along its top edge.
+    """
+    if len(drawn) < 2 or not span:
+        return True
+    root = graph.nodes[span[0]]
+    reach = 0.0
+    for node in span:
+        data = graph.nodes[node]
+        point = (data["lat"], data["lon"])
+        if min(_perpendicular_m(point, a, b)
+               for a, b in zip(drawn, drawn[1:])) > STROKE_CORRIDOR_M:
+            return False                      # the runner's line never went there
+        reach = max(reach, haversine_m(root["lat"], root["lon"], *point))
+    return reach >= DRAWN_SPUR_MIN_M
+
+
 def drop_backtracking(nodes: list[int],
-                      protected: frozenset[int] = frozenset()) -> list[int]:
+                      protected: frozenset[int] = frozenset(),
+                      keep_span=None) -> list[int]:
     """Cut excursions the router invented, keep the ones the runner drew.
 
     A repeated node is usually an out-and-back spur, and removing what lies
@@ -943,7 +1049,9 @@ def drop_backtracking(nodes: list[int],
         start = seen.get(node)
         if start is not None:
             span = trimmed[start + 1:]
-            if protected.isdisjoint(span):
+            keep = (keep_span(span) if keep_span is not None
+                    else not protected.isdisjoint(span))
+            if not keep:
                 del trimmed[start + 1:]
                 for gone in list(seen):
                     if seen[gone] > start:
@@ -1203,8 +1311,5 @@ def generate_course(params: CourseParams) -> Course:
     # Near-misses are still useful: we always display the *real* distance, so
     # a 4.4km loop for a 4km ask beats a refusal (river/terrain constraints).
     if best_err > DISTANCE_TOLERANCE * 2.5:
-        raise CourseError(
-            f"목표 {params.distance_km:g}km에 맞는 코스를 찾지 못했어요 "
-            f"(가장 근접: {best.length_km:.1f}km). 거리를 조금 조정해 다시 요청해 주세요."
-        )
+        raise DistanceMissError(params.distance_km, best.length_km)
     return best

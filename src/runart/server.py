@@ -34,9 +34,9 @@ from .animal_presets import (MISSING as PRESET_MISSING, PresetMatch,
                              find_nearby_animal_presets,
                              find_nearest_animal_preset, get_animal_preset,
                              preset_status)
-from .course import (MAX_VIA_POINTS, Course, CourseError, course_from_path,
-                     generate_course, reroute_segment, route_via_points,
-                     snap_drawn_segment)
+from .course import (MAX_VIA_POINTS, Course, CourseError, DistanceMissError,
+                     course_from_path, generate_course, reroute_segment,
+                     route_via_points, snap_drawn_segment)
 from .courseplan import (CASE_EXACT, CASE_FAR, CASE_NEARBY, NEARBY_RADIUS_M,
                          SAME_START_M, CoursePlan, build_course_plan)
 from .facilities import LABELS_KO, facilities_along
@@ -523,7 +523,9 @@ def _exact_animal_course(text: str, shape: str,
     Read from the text the generator already produced: the plan must never
     pay for a second generation of a course we are holding.
     """
-    if text.startswith(("🔎", "⚠️", "⏱️")):
+    # 🔎 is a course somewhere else and ⚠️ carries no course at all. A course
+    # under an interpretation note is still the exact one that was asked for.
+    if text.startswith(("🔎", "⚠️")):
         return None
     course_id = _extract_single_course_id(text)
     if course_id is None:
@@ -596,8 +598,12 @@ def _planned_course_result(text: str, *, course_type: str, request: dict,
     """Answer an animal request with the full choice matrix, or None."""
     if not KAKAO_WIDGETS_ENABLED or course_type not in SHAPES:
         return None
-    # A rejection with no course behind it stays conversational copy.
-    if text.startswith(("⏱️", "⚠️")):
+    # A timeout has already spent the budget, so never start a plan on top of
+    # one. Everything else is worth planning: a course request is answered
+    # with a card whenever a route can be built, and "this distance draws a
+    # poor silhouette" is a request we can still answer with real courses.
+    # When nothing can be built the plan returns None and the copy stands.
+    if text.startswith("⏱️") and not _extract_course_ids(text):
         return None
     plan = _animal_course_plan(request, course_type, text, timeout_s)
     if plan is None:
@@ -623,7 +629,11 @@ def _course_tool_result(text: str, *, course_type: str,
             text, course_type=course_type, request=request, timeout_s=timeout_s)
         if planned is not None:
             return planned
-    if text.startswith("⏱️"):
+    # Whether a course came back decides success, not the leading emoji. The
+    # prefix convention is still how failures tell themselves apart, but a
+    # course request is answered with a card whenever a route exists, and one
+    # note wearing the wrong prefix must not be able to hide it again.
+    if text.startswith("⏱️") and not _extract_course_ids(text):
         return _mcp_result(
             text, code="generation_timeout", is_error=True, retryable=True)
     if text.startswith("🔎"):
@@ -744,7 +754,11 @@ def _build_params(location, lat, lon, distance_km, duration_min, include_hills,
     rlat, rlon, name = resolve_location(location, lat, lon, timeout_s=timeout_s)
     if distance_km is None and duration_min:
         distance_km = round(duration_min / DEFAULT_PACE_MIN_PER_KM, 1)
-        note = f"⏱️ {duration_min:g}분 → 6:30/km 페이스 기준 약 {distance_km:g}km로 잡았어요.\n"
+        # 🕒, not ⏱️. The ⚠️/⏱️ prefixes mark failures, and the result
+        # classifier reads them as such — dressing a reading of what the user
+        # asked for in the timeout prefix made a working course come back as
+        # isError with no card, on the commonest phrasing there is.
+        note = f"🕒 {duration_min:g}분 → 6:30/km 페이스 기준 약 {distance_km:g}km로 잡았어요.\n"
     if distance_km is None:
         distance_km = 5.0
         note = "거리를 말씀하지 않으셔서 기본 5km로 잡았어요. 바꾸고 싶으면 말씀해 주세요.\n"
@@ -765,11 +779,22 @@ def _build_params(location, lat, lon, distance_km, duration_min, include_hills,
 
 
 def _run(params: CourseParams, note: str = "",
-         timeout_s: float | None = None) -> str:
+         timeout_s: float | None = None,
+         asked_minutes: float | None = None) -> str:
     try:
         course = _get_course(params, timeout_s=timeout_s)
         facs = facilities_along(route_points(course), params.need_facilities or None)
         return note + course_markdown(course, BASE_URL, facs)
+    except DistanceMissError as e:
+        # Answer in the unit the runner used. Someone who said "60분" never
+        # mentioned kilometres, and "목표 9.2km를 찾지 못했어요" hands them a
+        # number they did not give and a conversion to do themselves.
+        if asked_minutes:
+            nearest_min = round(e.nearest_km * DEFAULT_PACE_MIN_PER_KM)
+            return (f"⚠️ {asked_minutes:g}분 정도로 뛸 만한 코스를 이 출발지에서 "
+                    f"찾지 못했어요 (가장 가까운 코스가 약 {nearest_min}분). "
+                    "시간을 조금 바꿔서 다시 알려주세요.")
+        return f"⚠️ {e}"
     except CourseError as e:
         return f"⚠️ {e}"
     except _GenerationTimeout:
@@ -1062,7 +1087,11 @@ def generate_running_course(
                                      timeout_s=remaining())
     except CourseError as e:
         return f"⚠️ {e}"
-    return _run(params, note, timeout_s=remaining())
+    # The ask was a duration only when no distance came with it; that is the
+    # same condition _build_params used to convert one into the other.
+    asked_minutes = duration_min if distance_km is None else None
+    return _run(params, note, timeout_s=remaining(),
+                asked_minutes=asked_minutes)
 
 
 def generate_animal_course(

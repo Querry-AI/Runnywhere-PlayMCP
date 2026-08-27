@@ -15,7 +15,8 @@ import pytest
 
 from runart.animal_presets import PresetMatch
 from runart.course import Course
-from runart.courseplan import NEARBY_RADIUS_M, build_course_plan
+from runart.courseplan import (CASE_EXACT, CASE_NEARBY, NEARBY_RADIUS_M,
+                               build_course_plan)
 from runart.models import CourseParams, encode_course_id
 
 
@@ -163,3 +164,41 @@ def test_choice_ids_round_trip_to_the_course_that_produced_them():
         shape_matches=[PresetMatch(exact, 0.0)], animal_matches=[], standard=None,
     )
     assert plan.primary.course_id == encode_course_id(exact.params)
+
+
+def test_a_verified_course_at_the_requested_start_is_not_called_a_detour():
+    """"0.0km 떨어진 시청역" is a sentence that argues with itself.
+
+    A preset sitting at the requested start is that start's course. Station
+    exits are tens of metres apart, which is why SAME_START_M exists; the case
+    split has to use it too, or the lead says the course is both absent from
+    here and zero kilometres away.
+    """
+    here = _course(location_name="시청역", shape="cat")
+    plan = build_course_plan(
+        requested_name="시청",
+        shape="cat",
+        exact=None,
+        shape_matches=[PresetMatch(here, 0.0)],
+        animal_matches=[],
+        standard=None,
+    )
+
+    assert plan.case == CASE_EXACT
+    assert "떨어진" not in plan.lead
+    assert "없어서" not in plan.lead
+    assert "시청" in plan.lead
+
+
+def test_a_course_a_real_walk_away_is_still_called_nearby():
+    plan = build_course_plan(
+        requested_name="서울대입구역",
+        shape="whale",
+        exact=None,
+        shape_matches=[PresetMatch(_course(location_name="봉천역", shape="whale"), 1000.0)],
+        animal_matches=[],
+        standard=None,
+    )
+
+    assert plan.case == CASE_NEARBY
+    assert "1.0km 떨어진 봉천역" in plan.lead

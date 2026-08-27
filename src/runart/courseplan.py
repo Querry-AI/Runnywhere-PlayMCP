@@ -138,7 +138,13 @@ def build_course_plan(
         case = CASE_EXACT
         primary = take(exact, KIND_REQUESTED, 0.0)
     elif nearest_shape is not None and nearest_shape.distance_m <= NEARBY_RADIUS_M:
-        case = CASE_NEARBY
+        # A verified preset standing at the requested start is that start's
+        # course, not a trip to somewhere else. Splitting on NEARBY_RADIUS_M
+        # alone made the lead argue with itself: "시청에는 검증된 고양이 코스가
+        # 없어서, 0.0km 떨어진 시청역의 고양이 코스를 골랐어요." SAME_START_M
+        # already draws this line for the card; the case has to use it too.
+        case = (CASE_EXACT if nearest_shape.distance_m < SAME_START_M
+                else CASE_NEARBY)
         primary = take(nearest_shape.course, KIND_REQUESTED,
                        nearest_shape.distance_m)
     else:
