@@ -17,10 +17,13 @@ from .pace import DEFAULT_PACE_S, effort
 from .shapes import SHAPES
 
 WIDGET_NAME = "runnywhere_course"
-# Two chips plus the facility tally is the most a Kakao Caption fits on one
-# phone line; a wrapped chip line reads as a second, weaker title.
+# Keep the two useful traits; the badge row wraps whole tags on narrow phones.
 CARD_TRAIT_LIMIT = 2
 FACILITY_EMOJI = {"convenience_store": "🏪", "restroom": "🚻"}
+# The supplied dark reference uses white titles and quieter grey metrics.
+# Keep the light theme legible too; the host still owns the chat background.
+LISTING_TEXT = {"light": "#202020", "dark": "#f5f5f5"}
+LISTING_SECONDARY = {"light": "#666666", "dark": "#a6a6a6"}
 WIDGET_MAX_BYTES = 12_000
 # A Kakao button label is one line on a phone; past this it truncates anyway.
 LABEL_MAX_CHARS = 60
@@ -111,7 +114,10 @@ def _validate_envelope(payload: dict) -> None:
         raise WidgetBuildError("widget must be a Card")
     if set(card) != {"type", "children", "size", "padding", "border", "background"}:
         raise WidgetBuildError("unsupported Card properties")
-    if card["border"] != 0 or card["background"] != "transparent":
+    if (
+        card["border"] != {"size": 0, "color": "transparent"}
+        or card["background"] != "transparent"
+    ):
         raise WidgetBuildError("course listings must be borderless and transparent")
     children = card.get("children")
     if not isinstance(children, list) or not children:
@@ -128,7 +134,10 @@ def _validate_component(component: object) -> None:
         raise WidgetBuildError("widget child must be an object")
     kind = component.get("type")
     if kind in {"Row", "Col"}:
-        allowed = {"type", "children", "gap", "align", "flex", "wrap"}
+        allowed = {
+            "type", "children", "gap", "align", "flex", "wrap", "minWidth",
+            "padding",
+        }
         if not set(component) <= allowed:
             raise WidgetBuildError(f"unsupported {kind} properties")
         children = component.get("children")
@@ -150,13 +159,23 @@ def _validate_component(component: object) -> None:
             raise WidgetBuildError("Image requires src and alt")
         _target_url(component.get("src", ""))
         return
-    if kind == "Divider":
-        if not set(component) <= {"type", "spacing"}:
-            raise WidgetBuildError("unsupported Divider properties")
+    if kind == "Badge":
+        allowed = {"type", "label", "size", "color", "variant", "pill"}
+        if (
+            not set(component) <= allowed
+            or not isinstance(component.get("label"), str)
+            or not component["label"]
+            or component.get("color") != "info"
+            or component.get("variant") != "soft"
+            or component.get("size") != "sm"
+            or component.get("pill") is not True
+        ):
+            raise WidgetBuildError("course tags must be soft blue pills")
         return
     if kind == "Button":
         allowed = {
             "type", "label", "onClickAction", "style", "variant", "size", "block",
+            "pill", "color",
         }
         if not set(component) <= allowed or not component.get("label"):
             raise WidgetBuildError("Button requires label")
@@ -230,17 +249,29 @@ def _card_traits(facts: CourseFacts) -> tuple[dict, ...]:
     return (grade, second) if second else (grade,)
 
 
-def _character_line(facts: CourseFacts) -> str:
-    """What kind of run it is, plus what the runner will find on the way."""
+def _character_tags(facts: CourseFacts) -> dict:
+    """Reference category pills, above the title, with no outlined chips.
+
+    Each tag wraps as a unit so a facility count cannot be separated from
+    its icon. Do not truncate the whole row and hide the last facilities.
+    """
     parts = [
         f"{trait['emoji']} {trait['label']}"
         for trait in _card_traits(facts)[:CARD_TRAIT_LIMIT]
     ]
     parts.extend(
         f"{FACILITY_EMOJI[kind]} {count}"
-        for kind, count in facts.facility_counts.items() if count
+        for kind in FACILITY_EMOJI
+        if (count := facts.facility_counts.get(kind, 0))
     )
-    return _plain_text(" · ".join(parts), 120)
+    return {
+        "type": "Row", "gap": "4px", "align": "center", "wrap": "wrap",
+        "children": [
+            {"type": "Badge", "label": _plain_text(part, 60), "size": "sm",
+             "color": "info", "variant": "soft", "pill": True}
+            for part in parts
+        ],
+    }
 
 
 def _section_heading(title: str, *, lead: bool) -> dict:
@@ -251,11 +282,12 @@ def _section_heading(title: str, *, lead: bool) -> dict:
     three-course card scroll.
     """
     return (
-        {"type": "Title", "value": _plain_text(title, 40), "size": "md",
+        {"type": "Title", "value": _plain_text(title, 40), "size": "sm",
+         "color": LISTING_TEXT,
          "maxLines": 1}
         if lead else
         {"type": "Text", "value": _plain_text(title, 40), "size": "sm",
-         "weight": "semibold", "maxLines": 1}
+         "weight": "semibold", "color": LISTING_SECONDARY, "maxLines": 1}
     )
 
 
@@ -275,11 +307,15 @@ def _course_card_row(course: Course, course_id: str, origin: str,
     title = _widget_title(course)
     facts = course_facts(course)
     button = _button("지도 보기", preview_url)
-    button.update({"style": "primary", "variant": "solid", "size": "sm"})
+    button.update({
+        "style": "primary", "color": "primary", "variant": "solid",
+        "size": "sm", "pill": True,
+    })
     return {
         "type": "Row",
-        "gap": "sm",
+        "gap": "8px",
         "align": "center",
+        "padding": {"top": "12px", "bottom": "16px"},
         "children": [
             {
                 "type": "Image",
@@ -288,20 +324,20 @@ def _course_card_row(course: Course, course_id: str, origin: str,
                 "width": 88,
                 "height": 88,
                 "fit": "contain",
-                "radius": "lg",
+                "radius": "md",
                 "frame": False,
             },
             {
-                "type": "Col", "gap": "sm", "flex": 1,
+                "type": "Col", "gap": "6px", "flex": 1, "minWidth": 0,
                 "children": [
-                    {"type": "Caption", "value": _character_line(facts), "size": "sm", "maxLines": 2},
-                    {"type": "Title", "value": title, "size": "md", "weight": "semibold", "maxLines": 2},
+                    _character_tags(facts),
+                    {"type": "Title", "value": title, "size": "sm", "weight": "semibold", "color": LISTING_TEXT, "maxLines": 1},
                     {
-                        "type": "Row", "gap": "sm", "align": "center",
+                        "type": "Row", "gap": "8px", "align": "center",
                         "children": [
-                            {"type": "Col", "gap": "xs", "flex": 1, "children": [
-                                {"type": "Text", "value": _effort_line(course), "size": "md", "weight": "bold", "maxLines": 2},
-                                {"type": "Caption", "value": _ascent_line(course), "size": "sm", "maxLines": 1},
+                            {"type": "Col", "gap": "4px", "flex": 1, "minWidth": 0, "children": [
+                                {"type": "Text", "value": _effort_line(course), "size": "sm", "weight": "bold", "color": LISTING_TEXT, "maxLines": 2},
+                                {"type": "Caption", "value": _ascent_line(course), "size": "md", "color": LISTING_SECONDARY, "maxLines": 1},
                             ]},
                             button,
                         ],
@@ -323,7 +359,7 @@ def build_course_widget(
     """Return a compact Kakao Card envelope for one confirmed course.
 
     ``alternatives`` are the other courses the runner may pick instead; each
-    becomes one extra button below the primary course.  Kakao renders the
+    becomes a matching listing row below the primary course. Kakao renders the
     widget verbatim, so a choice that is not a button here is a choice the
     runner cannot reach.
     """
@@ -369,10 +405,11 @@ def build_course_widget(
     copy_text = "\n".join(copy_lines)
     return _serialize({
         "widget": {
-            "type": "Card", "size": "md", "padding": "md",
-            # Explicitly override ChatKit's default card surface. Kakao
-            # host-renderer parity still needs checking in its Preview.
-            "border": 0, "background": "transparent",
+            "type": "Card", "size": "md", "padding": 0,
+            # Specify both width and color, not only the numeric shorthand.
+            # The Card is just an envelope, with no inset panel or outline.
+            "border": {"size": 0, "color": "transparent"},
+            "background": "transparent",
             "children": children,
         },
         "copy_text": copy_text,

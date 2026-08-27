@@ -74,8 +74,9 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     assert len(first.encode("utf-8")) < WIDGET_MAX_BYTES
 
     card = payload["widget"]
-    assert card["size"] == "md" and card["padding"] == "md"
-    assert card["border"] == 0 and card["background"] == "transparent"
+    assert card["size"] == "md" and card["padding"] == 0
+    assert card["border"] == {"size": 0, "color": "transparent"}
+    assert card["background"] == "transparent"
     assert not _components(card, "Divider")
     # The card leads with a one-line heading so the runner knows what it is.
     header = card["children"][0]
@@ -89,24 +90,25 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     assert image == {
         "type": "Image",
         "src": f"https://runnywhere.example/c/{course_id}/thumb.svg",
-                "alt": "🐶 강남역 댕댕런 실제 지도 코스",
-            "width": 88,
-            "height": 88,
-            "fit": "contain",
-        "radius": "lg",
+        "alt": "🐶 강남역 댕댕런 실제 지도 코스",
+        "width": 88,
+        "height": 88,
+        "fit": "contain",
+        "radius": "md",
         "frame": False,
     }
     assert overview["type"] == "Col"
     assert [child["type"] for child in overview["children"]] == [
-        "Caption", "Title", "Row",
+        "Row", "Title", "Row",
     ]
-    assert "평지 위주" in overview["children"][0]["value"]
+    assert "평지 위주" in _components(overview["children"][0], "Badge")[0]["label"]
     assert overview["children"][1]["value"] == "🐶 강남역 댕댕런"
     footer = overview["children"][2]
     assert _components(footer, "Text")[0]["value"] == "9.0km · 약 63분"
     assert _components(footer, "Text")[0]["weight"] == "bold"
     assert _components(footer, "Caption")[0]["value"] == f"오르막 {course.ascent_m:.0f}m"
     assert footer["children"][-1] is action
+    assert action["pill"] is True and action["variant"] == "solid"
     # Distance pairs with time, not ascent: time is what a runner plans around.
     buttons = _components(card, "Button")
     assert [button["label"] for button in buttons] == ["지도 보기"]
@@ -438,7 +440,9 @@ def test_course_card_reads_like_a_recommendation_not_a_data_dump():
               _components(payload["widget"], "Caption")
               + _components(payload["widget"], "Text")
               + _components(payload["widget"], "Title")]
-    joined = " ".join(values)
+    joined = " ".join(values + [
+        child["label"] for child in _components(payload["widget"], "Badge")
+    ])
 
     # Heading, then identity, start, effort, character -- in that order.
     assert "추천 코스" in joined
@@ -490,9 +494,7 @@ def test_card_chips_prefer_what_separates_one_course_from_another():
 
 
 def test_card_rows_read_as_a_listing_not_a_stack_of_paragraphs():
-    """Thumbnail, facts, action -- three columns, the way a travel or commerce
-    listing is laid out. With the action inside the text column every row was
-    taller than its content and the right edge came out ragged."""
+    """Keep the reference's two columns and the action beside the metrics."""
     from runart.courseplan import CourseChoice
 
     primary = _course(location_name="성수역")
@@ -514,12 +516,54 @@ def test_card_rows_read_as_a_listing_not_a_stack_of_paragraphs():
         column = row["children"][1]
         # Reference: badges, title, bold effort, ascent beside the action.
         assert [child["type"] for child in column["children"]] == [
-            "Caption", "Title", "Row",
+            "Row", "Title", "Row",
         ]
-        assert column["children"][0]["maxLines"] == 2
+        tags = column["children"][0]
+        assert tags["wrap"] == "wrap"
+        assert all(tag["variant"] == "soft" for tag in tags["children"])
+        assert column["children"][1]["maxLines"] == 1
         assert column["children"][-1]["children"][-1]["type"] == "Button"
 
     # Headings are one line each; the explanatory category captions are gone.
     assert "동물 코스" not in json.dumps(payload, ensure_ascii=False)
     assert "일반 코스" not in json.dumps(payload, ensure_ascii=False)
     assert "요청 조건에 가장 잘 맞는" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_bongcheon_reference_copy_uses_live_facts_and_keeps_map_action(monkeypatch):
+    """The requested example is data, not text hardcoded onto every course."""
+    from runart.insights import CourseFacts
+
+    course = _course(location_name="봉천역", shape="cat")
+    course.params = course.params.model_copy(update={"distance_km": 7.5})
+    course.length_m = 7_540.0  # Displays 7.5km, 53 minutes at the detail pace.
+    course.ascent_m = 106.0
+    facts = CourseFacts(
+        traits=(
+            {"emoji": "🌤️", "label": "완만한 경사"},
+            {"emoji": "🏙️", "label": "도심 위주"},
+            {"emoji": "🌒", "label": "조명 어두움"},
+        ),
+        highlights=(), cautions=(), signals=0,
+        # Deliberately reversed: the UI always puts shops before toilets.
+        facility_counts={"restroom": 2, "convenience_store": 7},
+    )
+    monkeypatch.setattr("runart.widget.course_facts", lambda value: facts)
+    course_id = encode_course_id(course.params)
+    payload = json.loads(build_course_widget(
+        course, course_id, "https://runnywhere.example"))
+    overview = payload["widget"]["children"][1]["children"][1]
+    tags, title, footer = overview["children"]
+
+    assert " · ".join(tag["label"] for tag in tags["children"]) == (
+        "🌤️ 완만한 경사 · 🌒 조명 어두움 · 🏪 7 · 🚻 2"
+    )
+    assert title["value"] == "🐱 봉천역 야옹런"
+    metrics, action = footer["children"]
+    assert [item["value"] for item in metrics["children"]] == [
+        "7.5km · 약 53분", "오르막 106m",
+    ]
+    assert action["label"] == "지도 보기"
+    assert action["onClickAction"]["payload"]["target"]["url"] == (
+        f"https://runnywhere.example/c/{course_id}"
+    )
