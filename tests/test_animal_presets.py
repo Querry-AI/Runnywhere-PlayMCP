@@ -1,5 +1,7 @@
 import gzip
 import json
+import networkx as nx
+import pytest
 
 from runart import animal_presets
 from runart.course import (MAX_COURSE_START_OFFSET_M, Course,
@@ -11,6 +13,15 @@ from runart.shapes import SHAPES
 from runart.stations import SEOUL_METRO_STATIONS
 
 
+@pytest.fixture(autouse=True)
+def _isolate_loaded_presets():
+    animal_presets._load.cache_clear()
+    animal_presets.all_verified_animal_presets.cache_clear()
+    yield
+    animal_presets._load.cache_clear()
+    animal_presets.all_verified_animal_presets.cache_clear()
+
+
 def _params(shape="dog"):
     return CourseParams(lat=37.56658, lon=126.97824,
                         location_name="시청역", distance_km=9, shape=shape)
@@ -19,8 +30,10 @@ def _params(shape="dog"):
 def test_preset_roundtrip_and_known_unavailable(tmp_path, monkeypatch):
     monkeypatch.setenv("RUNART_ALLOW_UNVERIFIED_DATA", "1")
     params = _params()
+    point1 = (params.lat + 0.0002, params.lon)
+    point2 = (params.lat + 0.0001, params.lon)
     course = Course(params=params, path=[1, 2, 1],
-                    points=[(37.5, 127.0), (37.51, 127.01), (37.5, 127.0)],
+                    points=[point1, point2, point1],
                     length_m=9000, ascent_m=12, rfs={"score": 80},
                     shape_similarity=0.8)
     entries = {
@@ -34,12 +47,17 @@ def test_preset_roundtrip_and_known_unavailable(tmp_path, monkeypatch):
                    "graph_fingerprint": "test", "entries": entries}, f)
     monkeypatch.setattr(animal_presets, "PRESET_PATH", path)
     monkeypatch.setattr(animal_presets, "graph_fingerprint", lambda: "test")
+    graph = nx.Graph()
+    graph.add_node(1, lat=point1[0], lon=point1[1])
+    graph.add_node(2, lat=point2[0], lon=point2[1])
+    graph.add_edge(1, 2, length=4500, highway="residential", slope_pct=0)
+    monkeypatch.setattr(animal_presets.graphmod, "get_graph", lambda: graph)
     animal_presets._load.cache_clear()
 
     loaded = animal_presets.get_animal_preset(params)
     assert isinstance(loaded, Course)
     assert loaded.path == [2, 1, 2]
-    assert loaded.points[0] == loaded.points[-1] == (37.51, 127.01)
+    assert loaded.points[0] == loaded.points[-1] == point2
     assert loaded.shape_similarity == 0.8
     assert animal_presets.get_animal_preset(_params("cat")) is None
     assert animal_presets.get_animal_preset(_params("whale")) is animal_presets.MISSING
@@ -93,7 +111,7 @@ def test_bundled_presets_cover_every_station_shape_slot_and_match_metadata():
     }
     assert set(entries) == expected_keys
     for key, raw in entries.items():
-        if raw is None:
+        if raw is None or raw is animal_presets.BLOCKED:
             continue
         station_key, _ = key.rsplit(",", 1)
         assert raw["params"]["location_name"] == stations[station_key]

@@ -31,6 +31,7 @@ def test_cold_detail_link_restores_the_verified_preset(monkeypatch):
     )
     monkeypatch.setattr(server, "_course_cache", {})
     monkeypatch.setattr(server, "get_animal_preset", lambda _: preset)
+    monkeypatch.setattr(server, "ensure_course_runnable", lambda _: None)
 
     def must_not_regenerate(*args, **kwargs):
         raise AssertionError("a cold detail link must restore its preset")
@@ -55,6 +56,7 @@ def test_concurrent_identical_course_requests_share_one_generation(monkeypatch):
     monkeypatch.setattr(server, "_course_cache", {})
     monkeypatch.setattr(server, "_course_inflight", {})
     monkeypatch.setattr(server, "get_animal_preset", lambda _: None)
+    monkeypatch.setattr(server, "ensure_course_runnable", lambda _: None)
 
     def fake_offload(*args, **kwargs):
         nonlocal calls

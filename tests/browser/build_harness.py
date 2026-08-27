@@ -59,7 +59,9 @@ KAKAO_DOUBLE = """<script>
   Map.prototype.removeControl=function(c){ this.controls = this.controls.filter(x => x !== c); };
   Map.prototype.setBounds=function(){};
   Map.prototype.getCenter=function(){ return this.center || new LatLng(37.5665, 126.978); };
-  Map.prototype.getLevel=function(){ return 6; };
+  Map.prototype.getLevel=function(){ return this.level === undefined ? 6 : this.level; };
+  Map.prototype.setLevel=function(level,opts){ this.level=level; this.lastZoomOptions=opts;
+    this.zoomCount=(this.zoomCount||0)+1; };
   Map.prototype.setCenter=function(pos){ this.center=pos; this.centerCount=(this.centerCount||0)+1; };
   Map.prototype.setDraggable=function(v){ this.draggable=v; };
   Map.prototype.setZoomable=function(v){ this.zoomable=v; };

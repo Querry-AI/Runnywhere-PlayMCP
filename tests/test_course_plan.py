@@ -1,14 +1,6 @@
-"""Case matrix for an animal course request: what we offer when the exact
-course does not exist at the requested start.
+"""Full matches first, then start/effort > shape > optional characteristics.
 
-The product rule the plan encodes (three cases, three ordered choices each):
-
-1. exact  — the requested animal exists at the requested start
-            → requested animal, another animal here, plain course here
-2. nearby — not here, but a verified preset is within 2km
-            → nearest same-animal, nearest any-animal, plain course here
-3. far    — nothing within 2km
-            → plain course here, nearest same-animal, nearest any-animal
+The same ordering applies to the primary card and every alternative.
 """
 
 import pytest
@@ -47,14 +39,12 @@ def test_exact_case_leads_with_the_requested_animal_then_offers_alternatives():
     assert plan.case == "exact"
     assert plan.primary.course is exact
     assert plan.primary.kind == "requested_animal"
-    assert [choice.kind for choice in plan.alternatives] == [
-        "other_animal", "standard"]
-    assert plan.alternatives[0].course is here_rabbit
-    assert plan.alternatives[1].course is standard
-    assert "강남역" in plan.lead and "강아지" in plan.lead
+    assert {c.course_id for c in plan.alternatives} == {
+        encode_course_id(here_rabbit.params), encode_course_id(standard.params)}
+    assert "강남역" in plan.lead
 
 
-def test_nearby_case_leads_with_the_closest_same_animal_and_names_the_detour():
+def test_local_plain_course_precedes_nearby_animals_and_names_their_detours():
     near_dog = _course(location_name="낙성대(강감찬)역", shape="dog")
     near_cat = _course(location_name="봉천역", shape="cat", km=6.0)
     standard = _course(location_name="서울대입구역", shape=None)
@@ -66,16 +56,15 @@ def test_nearby_case_leads_with_the_closest_same_animal_and_names_the_detour():
         standard=standard,
     )
 
-    assert plan.case == "nearby"
-    assert plan.primary.course is near_dog
-    assert plan.primary.kind == "requested_animal"
-    assert plan.primary.distance_m == pytest.approx(400.0)
+    assert plan.case == "far"
+    assert plan.primary.course is standard
+    assert plan.primary.kind == "standard"
+    assert plan.primary.distance_m == 0
     assert [choice.kind for choice in plan.alternatives] == [
-        "other_animal", "standard"]
-    assert plan.alternatives[0].course is near_cat
-    # The lead must never let the model claim the requested start.
-    assert "낙성대(강감찬)역" in plan.lead
-    assert "0.4km" in plan.lead
+        "requested_animal", "other_animal"]
+    assert plan.alternatives[0].course is near_dog
+    assert "0.4km 이동" in plan.alternatives[0].match_note
+    assert "장소·시간(거리)을 먼저" in plan.lead
 
 
 def test_far_case_leads_with_the_plain_course_and_says_nothing_is_within_2km():
@@ -95,10 +84,10 @@ def test_far_case_leads_with_the_plain_course_and_says_nothing_is_within_2km():
     assert plan.primary.course is standard
     assert plan.primary.kind == "standard"
     assert [choice.kind for choice in plan.alternatives] == [
-        "requested_animal", "other_animal"]
-    assert plan.alternatives[0].course is far_dog
-    assert plan.alternatives[1].course is far_whale
-    assert "1~2km" in plan.lead and "강아지" in plan.lead
+        "other_animal", "requested_animal"]
+    assert plan.alternatives[0].course is far_whale
+    assert plan.alternatives[1].course is far_dog
+    assert "일반 코스 대안" in plan.lead
     assert "응암역" in plan.lead
 
 
@@ -113,7 +102,9 @@ def test_nearby_radius_boundary_is_two_kilometres():
     outside = build_course_plan(
         shape_matches=[PresetMatch(dog, NEARBY_RADIUS_M + 1.0)], **kwargs)
 
-    assert inside.case == "nearby"
+    assert inside.primary.course is standard
+    assert outside.primary.course is standard
+    assert inside.case == "far"
     assert outside.case == "far"
 
 
@@ -131,7 +122,7 @@ def test_plan_never_repeats_one_course_across_choices():
 
     ids = [plan.primary.course_id] + [c.course_id for c in plan.alternatives]
     assert len(ids) == len(set(ids))
-    assert [choice.kind for choice in plan.alternatives] == ["standard"]
+    assert [choice.kind for choice in plan.alternatives] == ["requested_animal"]
 
 
 def test_plan_degrades_when_the_plain_course_is_unavailable():
@@ -201,4 +192,62 @@ def test_a_course_a_real_walk_away_is_still_called_nearby():
     )
 
     assert plan.case == CASE_NEARBY
-    assert "1.0km 떨어진 봉천역" in plan.lead
+    assert "봉천역" in plan.lead and "1.0km 이동" in plan.lead
+
+
+def test_actual_distance_beats_requested_shape_even_at_the_same_start():
+    dog = _course(location_name="시청", shape="dog", km=12)
+    dog.params.distance_km = 5  # Input metadata is not the routed distance.
+    plain = _course(location_name="시청", shape=None, km=5.1)
+    plan = build_course_plan(requested_name="시청", shape="dog", exact=dog,
+        shape_matches=[], animal_matches=[], standard=plain, distance_km=5)
+    assert plan.primary.course is plain
+    assert "요청 5km → 12.0km" in plan.alternatives[0].match_note
+
+
+def test_shape_beats_preferences_once_start_and_effort_match():
+    dog = _course(location_name="시청", shape="dog", km=5.2)
+    plain = _course(location_name="시청", shape=None, km=5)
+    plain.rfs = {"components": {"lighting": .9, "cctv": .9}}
+    plan = build_course_plan(requested_name="시청", shape="dog", exact=dog,
+        shape_matches=[], animal_matches=[], standard=plain, distance_km=5,
+        night_mode=True)
+    assert plan.primary.course is dog
+    assert "선택 특징 일부" in plan.primary.match_note
+
+
+def test_full_match_wins_and_optional_features_break_shape_ties():
+    dog = _course(location_name="시청", shape="dog", km=5)
+    lit_dog = _course(location_name="시청", shape="dog", km=5.3)
+    lit_dog.rfs = {"components": {"lighting": .9, "cctv": .9}}
+    plan = build_course_plan(requested_name="시청", shape="dog", exact=dog,
+        shape_matches=[PresetMatch(lit_dog, 0)], animal_matches=[], standard=None,
+        distance_km=5, night_mode=True)
+    assert plan.primary.course is lit_dog
+    assert plan.primary.match_note == "요청 조건 일치"
+
+
+@pytest.mark.parametrize("kind", ["dog", "best_animal", "standard"])
+def test_time_request_uses_requested_effort_for_every_course_type(kind):
+    short = _course(location_name="시청", shape=None, km=5)
+    correct = _course(location_name="시청", shape="dog", km=6.2)
+    plan = build_course_plan(requested_name="시청", shape=kind, exact=correct,
+        shape_matches=[], animal_matches=[], standard=short, duration_min=40)
+    assert plan.primary.course is correct
+    assert "요청 40분" in plan.alternatives[0].match_note
+    plan = build_course_plan(requested_name="시청", shape=kind, exact=correct,
+        shape_matches=[], animal_matches=[], standard=short, duration_min=40, distance_km=5)
+    assert plan.primary.course is short
+
+
+def test_all_alternatives_rank_start_and_effort_before_shape():
+    plain = _course(location_name="시청", shape=None)
+    far_dog = _course(location_name="강남", shape="dog")
+    here_cat = _course(location_name="시청", shape="cat")
+    plan = build_course_plan(requested_name="시청", shape="dog", exact=None,
+        shape_matches=[PresetMatch(far_dog, 5000)],
+        animal_matches=[PresetMatch(far_dog, 5000), PresetMatch(here_cat, 0)],
+        standard=plain, distance_km=5)
+    assert {plan.primary.course_id, plan.alternatives[0].course_id} == {
+        encode_course_id(plain.params), encode_course_id(here_cat.params)}
+    assert plan.alternatives[-1].course is far_dog

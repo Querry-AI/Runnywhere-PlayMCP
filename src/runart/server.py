@@ -8,6 +8,7 @@
 """
 
 import concurrent.futures
+import contextvars
 import functools
 import html
 import asyncio
@@ -25,20 +26,22 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from . import graph as graphmod
 from .animal_presets import (MISSING as PRESET_MISSING, PresetMatch,
+                             animal_preset_is_blocked,
                              find_nearby_animal_presets,
                              find_nearest_animal_preset, get_animal_preset,
                              preset_status)
-from .course import (MAX_VIA_POINTS, Course, CourseError, DistanceMissError,
-                     course_from_path, generate_course, reroute_segment,
-                     route_via_points, snap_drawn_segment)
-from .courseplan import (CASE_EXACT, CASE_FAR, CASE_NEARBY, NEARBY_RADIUS_M,
-                         SAME_START_M, CoursePlan, build_course_plan)
+from .course import (MAX_VIA_POINTS, Course, CourseAccessError, CourseError,
+                     DistanceMissError, course_from_path,
+                     ensure_course_runnable, generate_course, reroute_segment,
+                     route_via_points, snap_drawn_segment, snap_drawn_strokes)
+from .courseplan import (SAME_START_M, CoursePlan, build_course_plan,
+                         requested_distance)
 from .facilities import LABELS_KO, facilities_along
 from .geocode import resolve_location
 from .geo import haversine_m
@@ -172,6 +175,9 @@ _POOL_LOCK = threading.Lock()
 _POOL_BROKEN = False
 MCP_OUTER_RESPONSE_BUDGET_S = 2.85
 ANIMAL_RESPONSE_BUDGET_S = 2.65
+# Card requests reserve time for the higher-priority local/effort candidate.
+# Context-local so concurrent requests and direct generator calls are isolated.
+_ANIMAL_CARD_DEADLINE = contextvars.ContextVar("animal_card_deadline", default=None)
 # Plain-course generation must also stay inside the PlayMCP p99 3s budget.
 GENERAL_RESPONSE_BUDGET_S = 2.65
 ROUTE_EDIT_RESPONSE_BUDGET_S = 2.65
@@ -203,11 +209,6 @@ def _budget_left(started: float) -> float:
 # Seoul is ~30km across, so this bounds the "nearest verified preset anywhere"
 # scan without excluding any real start point.
 PRESET_SEARCH_RADIUS_M = 30_000.0
-PLAN_RESULT_CODES = {
-    CASE_EXACT: "course_ready",
-    CASE_NEARBY: "nearby_course_ready",
-    CASE_FAR: "exact_shape_unavailable",
-}
 
 
 class _GenerationTimeout(RuntimeError):
@@ -420,7 +421,14 @@ def _cached_course(course_id: str) -> Course | None:
     """Read the performance cache without restoring or regenerating a route."""
     with _CACHE_LOCK:
         cached = _course_cache.get(course_id)
-    return cached if isinstance(cached, Course) else None
+    if not isinstance(cached, Course):
+        return None
+    try:
+        ensure_course_runnable(cached)
+    except CourseAccessError as exc:
+        _cache_put(course_id, exc)
+        return None
+    return cached
 
 
 def _widget_lead_text(text: str) -> str:
@@ -510,10 +518,24 @@ def _plain_course_here(probe: CourseParams, distance_km: float | None,
             "shape": None, "distance_km": distance_km or 5.0})
     except ValidationError:
         return None
+    started = time.monotonic()
     try:
         return _get_course(params, timeout_s=timeout_s)
-    except (CourseError, _GenerationTimeout):
+    except _GenerationTimeout:
         return None
+    except CourseError:
+        # Preferences are optional: never change start or requested effort to
+        # make a park/hill preference fit. Retry the same request without them.
+        remaining = timeout_s - (time.monotonic() - started)
+        if remaining < PLAIN_OPTION_MIN_BUDGET_S or not (
+                params.include_hills or params.night_mode or params.need_facilities):
+            return None
+        relaxed = params.model_copy(update={
+            "include_hills": False, "night_mode": False, "need_facilities": []})
+        try:
+            return _get_course(relaxed, timeout_s=remaining)
+        except (CourseError, _GenerationTimeout):
+            return None
 
 
 def _exact_animal_course(text: str, shape: str,
@@ -539,33 +561,48 @@ def _exact_animal_course(text: str, shape: str,
 
 def _animal_course_plan(request: dict, shape: str, text: str,
                         timeout_s: float) -> CoursePlan | None:
-    """Order the three choices for one animal request, inside the budget."""
+    """Shared priority order for standard, named and unspecified animal asks."""
+    started = time.monotonic()
+    target = requested_distance(request.get("distance_km"), request.get("duration_min"))
     try:
         lat, lon, name = resolve_location(
             request.get("location"), request.get("lat"), request.get("lon"),
             timeout_s=min(timeout_s, ADDRESS_TRY_BUDGET_S))
         probe = CourseParams(
             lat=lat, lon=lon, location_name=name,
-            distance_km=SHAPES[shape].min_km, shape=shape,
+            distance_km=target if target is not None else 5.0,
+            shape=shape if shape in SHAPES else None,
             include_hills=bool(request.get("include_hills")),
             night_mode=bool(request.get("night_mode")),
             need_facilities=request.get("need_facilities") or [],
         )
     except (CourseError, ValidationError):
         return None
-    # Nearest first throughout: a runner standing at the requested start
-    # judges an alternative by how far they have to walk to it, and the
-    # Markdown fallback names the same course for the same reason.
-    near = find_nearby_animal_presets(probe, NEARBY_RADIUS_M)
-    radius = NEARBY_RADIUS_M if near else PRESET_SEARCH_RADIUS_M
+    cached = [c for cid in _extract_course_ids(text)
+              if (c := _cached_course(cid)) is not None]
+    standard = next((c for c in cached if c.params.shape is None and
+                     haversine_m(lat, lon, c.params.lat, c.params.lon) < SAME_START_M), None)
+    if standard is None:
+        standard = _plain_course_here(
+            probe, target, max(0, timeout_s - (time.monotonic() - started)))
+    # Do not preselect by nearest shape: the closest preset may be 12km for a
+    # 5km ask. Rank every available candidate by actual start and route length.
+    # The preset lookup treats preferences as exclusions; the card planner
+    # must instead keep these candidates and assess their measured features.
+    preset_probe = probe.model_copy(update={
+        "include_hills": False, "night_mode": False, "need_facilities": []})
+    animals = _any_animal_matches(preset_probe, PRESET_SEARCH_RADIUS_M) if shape != "standard" else []
+    animals.extend(PresetMatch(c, haversine_m(lat, lon, c.params.lat, c.params.lon))
+                   for c in cached if c.params.shape)
     plan = build_course_plan(
         requested_name=name,
         shape=shape,
-        exact=_exact_animal_course(text, shape, lat, lon),
-        shape_matches=near or find_nearby_animal_presets(
-            probe, PRESET_SEARCH_RADIUS_M),
-        animal_matches=_any_animal_matches(probe, radius),
-        standard=_plain_course_here(probe, request.get("distance_km"), timeout_s),
+        exact=_exact_animal_course(text, shape, lat, lon) if shape in SHAPES else None,
+        shape_matches=[], animal_matches=animals, standard=standard,
+        distance_km=request.get("distance_km"), duration_min=request.get("duration_min"),
+        include_hills=bool(request.get("include_hills")),
+        night_mode=bool(request.get("night_mode")),
+        need_facilities=request.get("need_facilities") or [],
     )
     if plan is not None:
         for choice in (plan.primary, *plan.alternatives):
@@ -578,7 +615,7 @@ def _plan_widget(plan: CoursePlan) -> str | None:
     try:
         widget = build_course_widget(
             plan.primary.course, plan.primary.course_id, BASE_URL,
-            alternatives=plan.alternatives)
+            alternatives=plan.alternatives, primary_note=plan.primary.match_note)
     except WidgetTooLargeError:
         log.warning("mcp_widget tool=create_seoul_running_course "
                     f"state=fallback reason=too_large case={plan.case}")
@@ -595,15 +632,16 @@ def _plan_widget(plan: CoursePlan) -> str | None:
 
 def _planned_course_result(text: str, *, course_type: str, request: dict,
                            timeout_s: float) -> CallToolResult | None:
-    """Answer an animal request with the full choice matrix, or None."""
-    if not KAKAO_WIDGETS_ENABLED or course_type not in SHAPES:
+    """Answer any course request with consistently ranked candidates, or None."""
+    if not KAKAO_WIDGETS_ENABLED or course_type not in {*SHAPES, "best_animal", "standard"}:
         return None
-    # A timeout has already spent the budget, so never start a plan on top of
-    # one. Everything else is worth planning: a course request is answered
+    # An animal timeout may still leave the reserved local-candidate budget.
+    # Only skip when that budget is gone. A course request is answered
     # with a card whenever a route can be built, and "this distance draws a
     # poor silhouette" is a request we can still answer with real courses.
     # When nothing can be built the plan returns None and the copy stands.
-    if text.startswith("⏱️") and not _extract_course_ids(text):
+    if (text.startswith("⏱️") and not _extract_course_ids(text)
+            and timeout_s < PLAIN_OPTION_MIN_BUDGET_S):
         return None
     plan = _animal_course_plan(request, course_type, text, timeout_s)
     if plan is None:
@@ -616,7 +654,8 @@ def _planned_course_result(text: str, *, course_type: str, request: dict,
     if widget is None:
         return None
     return _mcp_result(
-        widget, code=PLAN_RESULT_CODES[plan.case], assistant_text=lead
+        widget, code=("nearby_course_ready" if plan.primary.is_detour else "course_ready"),
+        assistant_text=lead
     )
 
 
@@ -660,6 +699,11 @@ def _get_course(params: CourseParams, timeout_s: float | None = None) -> Course:
     with _CACHE_LOCK:
         hit = _course_cache.get(cid)
         if isinstance(hit, Course):
+            try:
+                ensure_course_runnable(hit)
+            except CourseAccessError as exc:
+                _course_cache[cid] = exc
+                raise
             return hit
         if isinstance(hit, CourseError):
             raise hit
@@ -676,6 +720,8 @@ def _get_course(params: CourseParams, timeout_s: float | None = None) -> Course:
             raise _GenerationTimeout from exc
 
     try:
+        if animal_preset_is_blocked(params):
+            raise CourseAccessError()
         # Course ids encode parameters, not the routed node path. After a
         # process restart a detail URL therefore has no hot-cache entry.
         # Restore the build-verified station preset before generating.
@@ -711,6 +757,8 @@ def _get_course(params: CourseParams, timeout_s: float | None = None) -> Course:
 
 
 def _cache_put(cid: str, value) -> None:
+    if isinstance(value, Course):
+        ensure_course_runnable(value)
     with _CACHE_LOCK:
         if len(_course_cache) >= _CACHE_MAX:
             _course_cache.pop(next(iter(_course_cache)))
@@ -733,6 +781,7 @@ def _cache_animal_recommendation(
     under those coordinates would repeat the full exact-start search for an
     identical arbitrary-address request on every call.
     """
+    ensure_course_runnable(course)
     with _CACHE_LOCK:
         if len(_animal_recommendation_cache) >= _CACHE_MAX:
             _animal_recommendation_cache.pop(next(iter(_animal_recommendation_cache)))
@@ -741,8 +790,18 @@ def _cache_animal_recommendation(
 
 
 def _get_animal_recommendation(params: CourseParams) -> Course | None:
+    key = _animal_recommendation_key(params)
     with _CACHE_LOCK:
-        return _animal_recommendation_cache.get(_animal_recommendation_key(params))
+        course = _animal_recommendation_cache.get(key)
+    if course is not None:
+        try:
+            ensure_course_runnable(course)
+        except CourseAccessError:
+            with _CACHE_LOCK:
+                if _animal_recommendation_cache.get(key) is course:
+                    _animal_recommendation_cache.pop(key, None)
+            return None
+    return course
 
 
 def _build_params(location, lat, lon, distance_km, duration_min, include_hills,
@@ -1123,7 +1182,10 @@ def generate_animal_course(
     started = time.monotonic()
 
     def remaining() -> float:
-        return max(0.01, ANIMAL_RESPONSE_BUDGET_S - (time.monotonic() - started))
+        now = time.monotonic()
+        deadline = _ANIMAL_CARD_DEADLINE.get()
+        budget = ANIMAL_RESPONSE_BUDGET_S - (now - started)
+        return max(0.01, min(budget, deadline - now) if deadline is not None else budget)
 
     if shape_token and not shape:
         try:
@@ -1143,7 +1205,7 @@ def generate_animal_course(
                 location, lat, lon, timeout_s=remaining())
         except CourseError as e:
             return f"⚠️ {e}"
-        return _animal_survey(rlat, rlon, name, distance_km,
+        return _animal_survey(rlat, rlon, name, requested_distance(distance_km, duration_min),
                               timeout_s=remaining())
     if distance_km is None and duration_min is None and shape in SHAPES:
         # Shape chosen, distance left open → quality-first: draw at the
@@ -1265,6 +1327,19 @@ def generate_animal_course(
     return out
 
 
+def _animal_text_for_cards(*args, **kwargs) -> str:
+    """Leave a bounded generation slot for the local plain-course option."""
+    if not KAKAO_WIDGETS_ENABLED:
+        return generate_animal_course(*args, **kwargs)
+    reserve = PLAIN_OPTION_MIN_BUDGET_S + 0.35
+    token = _ANIMAL_CARD_DEADLINE.set(
+        time.monotonic() + MCP_OUTER_RESPONSE_BUDGET_S - reserve)
+    try:
+        return generate_animal_course(*args, **kwargs)
+    finally:
+        _ANIMAL_CARD_DEADLINE.reset(token)
+
+
 def create_seoul_running_course(
     course_type: Annotated[
         Literal["standard", "best_animal", "dog", "cat", "rabbit", "whale"],
@@ -1307,7 +1382,10 @@ def create_seoul_running_course(
     그려줘, 추천해줘, or animal/GPS-art request only after the user supplied
     a Seoul start. Use standard for an ordinary run, best_animal when no
     animal is named, or dog/cat/rabbit/whale for the named animal. Never invent
-    a missing start; ask for it without calling. Do not use this for an
+    a start or change the requested effort to preserve a shape: full matches
+    come first, otherwise prioritize start and time/distance, then shape,
+    then optional hills/night/facilities. Cards state any unmet conditions.
+    Ask for a missing start without calling. Do not use this for an
     existing course_id, "이 코스 근처 화장실", map/GPX repetition, completion,
     or relays. The final response MUST start with
     structuredContent.assistant_text verbatim before introducing the widget;
@@ -1320,9 +1398,10 @@ def create_seoul_running_course(
     started = time.monotonic()
     if course_type == "standard":
         return _course_tool_result(
-            generate_running_course(**common), course_type=course_type)
+            generate_running_course(**common), course_type=course_type,
+            request=common, timeout_s=_budget_left(started))
     shape = None if course_type == "best_animal" else course_type
-    text = generate_animal_course(shape=shape, **common)
+    text = _animal_text_for_cards(shape=shape, **common)
     return _course_tool_result(text, course_type=course_type, request=common,
                                timeout_s=_budget_left(started))
 
@@ -1330,8 +1409,13 @@ def create_seoul_running_course(
 @functools.wraps(generate_running_course)
 def _legacy_generate_running_course(*args, **kwargs) -> CallToolResult:
     """Bridge a cached pre-unification Preview call to the latest response."""
+    started = time.monotonic()
+    keys = ("location", "lat", "lon", "distance_km", "duration_min",
+            "include_hills", "night_mode", "need_facilities")
+    request = {**dict(zip(keys, args)), **kwargs}
     return _course_tool_result(
-        generate_running_course(*args, **kwargs), course_type="standard"
+        generate_running_course(*args, **kwargs), course_type="standard",
+        request=request, timeout_s=_budget_left(started),
     )
 
 
@@ -1343,10 +1427,10 @@ def _legacy_generate_animal_course(*args, **kwargs) -> CallToolResult:
         shape = args[0]
     course_type = shape if shape in SHAPES else "best_animal"
     started = time.monotonic()
-    text = generate_animal_course(*args, **kwargs)
+    text = _animal_text_for_cards(*args, **kwargs)
     # Positional calls only ever carry the shape, so the start is in kwargs.
     request = {key: kwargs.get(key) for key in (
-        "location", "lat", "lon", "distance_km", "include_hills",
+        "location", "lat", "lon", "distance_km", "duration_min", "include_hills",
         "night_mode", "need_facilities")}
     if request["location"] is None and request["lat"] is None:
         return _course_tool_result(text, course_type=course_type)
@@ -1609,6 +1693,9 @@ async def share_card(request: Request) -> Response:
     try:
         params = decode_course_id(request.path_params["course_id"])
         course = _get_course(params, timeout_s=GENERAL_RESPONSE_BUDGET_S)
+    except CourseAccessError as exc:
+        return PlainTextResponse(str(exc), status_code=403,
+                                 headers={"Cache-Control": "no-store"})
     except Exception:
         return PlainTextResponse("잘못된 코스 링크입니다.", status_code=404)
     return Response(card_svg(course), media_type="image/svg+xml",
@@ -1621,6 +1708,9 @@ async def course_thumbnail(request: Request) -> Response:
     try:
         params = decode_course_id(request.path_params["course_id"])
         course = _get_course(params, timeout_s=GENERAL_RESPONSE_BUDGET_S)
+    except CourseAccessError as exc:
+        return PlainTextResponse(str(exc), status_code=403,
+                                 headers={"Cache-Control": "no-store"})
     except Exception:
         return PlainTextResponse("잘못된 코스 링크입니다.", status_code=404)
     return Response(course_thumbnail_svg(course), media_type="image/svg+xml",
@@ -1632,8 +1722,14 @@ async def course_route_json(request: Request) -> Response:
     """Course polyline for the animal-atlas overlay (verified presets only:
     the atlas must never trigger CPU generation from an unauthenticated URL)."""
     try:
-        params = decode_course_id(request.path_params["course_id"])
+        cid = request.path_params["course_id"]
+        params = decode_course_id(cid)
+        if animal_preset_is_blocked(params):
+            raise CourseAccessError()
         course = get_animal_preset(params)
+    except CourseAccessError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=403,
+                            headers={"Cache-Control": "no-store"})
     except Exception:
         return JSONResponse({"error": "bad course id"}, status_code=404)
     if not isinstance(course, Course):
@@ -1660,16 +1756,14 @@ def _unchanged_note(before: list[int], after: list[int]) -> str:
 
 
 def _save_drawn_draft(params, from_index: int | None, to_index: int | None,
-                      path: list[int], stroke: list[CourseWaypoint],
+                      path: list[int], strokes: list[list[CourseWaypoint]],
                       name: str) -> Course:
     """Snap a freehand draft to walkable roads at the moment it is saved.
 
-    snap_drawn_segment does not refuse: it degrades to the best course it can
-    still build and explains the shortfall in ``note``. That note has to travel
-    with the saved course, or the runner is shown a route they did not draw
-    with no idea why.
+    Connectivity is authoritative here: an incomplete draft stays editable in
+    the browser, but cannot become a saved course.
     """
-    snapped = snap_drawn_segment(params, path, from_index, to_index, stroke)
+    snapped = snap_drawn_strokes(params, path, from_index, to_index, strokes)
     saved = course_from_path(params, snapped.path, name)
     saved.note = snapped.note
     return saved
@@ -1681,6 +1775,8 @@ class _CourseEditPayload(BaseModel):
     path: list[int] = Field(min_length=3, max_length=1200)
     stroke: list[CourseWaypoint] = Field(
         default_factory=list, max_length=STROKE_MAX_POINTS)
+    strokes: list[list[CourseWaypoint]] = Field(
+        default_factory=list, max_length=STROKE_MAX_POINTS)
     # Points tapped on the map for the span to pass through. Bounded by the
     # same cap route_via_points enforces, so an oversized request is refused
     # by validation rather than after the routing work.
@@ -1689,6 +1785,18 @@ class _CourseEditPayload(BaseModel):
     name: str = Field(default="", max_length=COURSE_NAME_MAX_CHARS)
     from_index: int | None = None
     to_index: int | None = None
+
+    @model_validator(mode="after")
+    def validate_strokes(self):
+        if self.stroke and self.strokes:
+            raise ValueError("stroke와 strokes를 동시에 보낼 수 없어요")
+        total = len(self.stroke) + sum(len(part) for part in self.strokes)
+        if total > STROKE_MAX_POINTS:
+            raise ValueError(f"그린 선의 점이 {total}개로 너무 많아요")
+        return self
+
+    def drawn_strokes(self) -> list[list[CourseWaypoint]]:
+        return self.strokes or ([self.stroke] if self.stroke else [])
 
 
 def _payload_problem(error: Exception, body: object) -> str:
@@ -1700,15 +1808,25 @@ def _payload_problem(error: Exception, body: object) -> str:
     if not isinstance(body, dict):
         return "코스 편집 요청 형식이 올바르지 않아요. 새로고침한 뒤 다시 시도해 주세요."
     stroke = body.get("stroke")
+    strokes = body.get("strokes")
     path = body.get("path")
     if isinstance(stroke, list) and len(stroke) > STROKE_MAX_POINTS:
         return (f"그린 선의 점이 {len(stroke)}개로 너무 많아요. "
                 "조금 짧게 나눠 그려 주세요.")
-    if isinstance(stroke, list) and any(
+    if isinstance(strokes, list):
+        total = sum(len(part) for part in strokes if isinstance(part, list))
+        if total > STROKE_MAX_POINTS:
+            return (f"그린 선의 점이 {total}개로 너무 많아요. "
+                    "조금 짧게 나눠 그려 주세요.")
+    supplied_points = list(stroke) if isinstance(stroke, list) else []
+    if isinstance(strokes, list):
+        supplied_points.extend(
+            point for part in strokes if isinstance(part, list) for point in part)
+    if any(
         not isinstance(point, dict)
         or not (37.4 <= float(point.get("lat", 0) or 0) <= 37.72)
         or not (126.76 <= float(point.get("lon", 0) or 0) <= 127.19)
-        for point in stroke
+        for point in supplied_points
     ):
         return "그린 선이 서울 밖으로 나갔어요. 지도 안쪽 도로를 따라 그려 주세요."
     if isinstance(path, list) and len(path) > 1200:
@@ -1745,12 +1863,10 @@ async def edit_course_route(request: Request) -> Response:
     try:
         with anyio.fail_after(ROUTE_EDIT_RESPONSE_BUDGET_S):
             if payload.action == "snap":
-                if payload.from_index is None or payload.to_index is None:
-                    return JSONResponse({"error": "지운 구간의 양 끝을 확인해 주세요."}, status_code=400)
                 course = await anyio.to_thread.run_sync(
                     functools.partial(
-                        snap_drawn_segment, edited, payload.path,
-                        payload.from_index, payload.to_index, payload.stroke,
+                        snap_drawn_strokes, edited, payload.path,
+                        payload.from_index, payload.to_index, payload.drawn_strokes(),
                     ), abandon_on_cancel=True,
                 )
             elif payload.action == "reroute":
@@ -1784,7 +1900,7 @@ async def edit_course_route(request: Request) -> Response:
                     functools.partial(
                         _save_drawn_draft, edited,
                         payload.from_index, payload.to_index,
-                        payload.path, payload.stroke, payload.name,
+                        payload.path, payload.drawn_strokes(), payload.name,
                     ),
                     abandon_on_cancel=True,
                 )
@@ -1850,6 +1966,9 @@ async def preview(request: Request) -> Response:
     try:
         params = decode_course_id(cid)
         course = _get_course(params, timeout_s=GENERAL_RESPONSE_BUDGET_S)
+    except CourseAccessError as exc:
+        return PlainTextResponse(str(exc), status_code=403,
+                                 headers={"Cache-Control": "no-store"})
     except Exception:
         return PlainTextResponse("잘못된 코스 링크입니다.", status_code=404)
     if is_gpx:
@@ -1881,6 +2000,9 @@ def _course_subpage(request: Request, page: str) -> Response:
     try:
         params = decode_course_id(request.path_params["course_id"])
         course = _get_course(params, timeout_s=GENERAL_RESPONSE_BUDGET_S)
+    except CourseAccessError as exc:
+        return PlainTextResponse(str(exc), status_code=403,
+                                 headers={"Cache-Control": "no-store"})
     except Exception:
         return PlainTextResponse("잘못된 코스 링크입니다.", status_code=404)
     return _course_page(course, page)
@@ -1953,6 +2075,9 @@ async def shape_relay_page(request: Request) -> Response:
                 else _get_course(params, timeout_s=GENERAL_RESPONSE_BUDGET_S)
             )
         page = relay_html(token, courses, BASE_URL)
+    except CourseAccessError as exc:
+        return PlainTextResponse(str(exc), status_code=403,
+                                 headers={"Cache-Control": "no-store"})
     except Exception:
         return PlainTextResponse("잘못된 Shape Relay 링크입니다.", status_code=404)
     return HTMLResponse(page, headers={"Cache-Control": "public, max-age=3600"})

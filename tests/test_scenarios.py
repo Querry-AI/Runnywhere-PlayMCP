@@ -65,7 +65,8 @@ def test_failed_shape_does_not_poison_another_animal_or_standard_course():
     assert "토끼" in rabbit_guidance and "일반 코스만 가능" not in rabbit_guidance
     assert '"widget"' in rabbit_text and "/c/" in rabbit_text
     assert "댕댕런" in rabbit_text or "야옹런" in rabbit_text or "고래런" in rabbit_text
-    assert rabbit.structuredContent["result_code"] == "nearby_course_ready"
+    # A same-start alternative now outranks relocating for the requested shape.
+    assert rabbit.structuredContent["result_code"] == "course_ready"
     assert '"widget"' in dog_text and "/c/" in dog_text and "댕댕런" in dog_text
     assert '"widget"' in standard_text and "/c/" in standard_text
     assert "기본 5km" in standard_guidance

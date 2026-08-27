@@ -194,11 +194,8 @@ def test_edit_endpoint_snaps_and_saves_a_connected_draft_only_on_save():
     assert saved.custom_name == "자유 드로잉런"
 
 
-def test_a_draft_only_has_to_touch_the_course_not_the_erased_ends():
-    """Requiring the stroke to land within 60m of both ends of the erased gap
-    made the commonest edit impossible: rubbing out a spur and redrawing past
-    it, where the gap ends are exactly the place you are getting away from.
-    What gets replaced is read off wherever the stroke meets the green line."""
+def test_a_draft_cannot_expand_the_explicit_erased_gap():
+    """Drawing somewhere else must never silently widen deletion."""
     source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
     cid = encode_course_id(source.params)
     response = asyncio.run(server.edit_course_route(_json_request(cid, {
@@ -216,35 +213,26 @@ def test_a_draft_only_has_to_touch_the_course_not_the_erased_ends():
     })))
     payload = json.loads(response.body)
 
-    assert response.status_code == 200
-    assert "preview_url" in payload
-    saved = decode_course_id(payload["course_id"])
-    assert saved.manual_path[0] == saved.manual_path[-1]
-    # The erased gap is folded into the replaced span, so it cannot survive.
-    assert saved.manual_path != source.path
-    assert source.path[10:40] != saved.manual_path[10:40]
+    assert response.status_code == 422
+    assert "지운 구간" in payload["error"] or "이어지지" in payload["error"]
 
 
-def test_a_draft_saves_even_with_no_erased_span_at_all():
-    """A drawn line on its own is a complete instruction."""
+def test_an_unconnected_draft_is_kept_editable_but_cannot_be_saved():
     source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
     cid = encode_course_id(source.params)
     response = asyncio.run(server.edit_course_route(_json_request(cid, {
         "action": "save_draft",
         "path": source.path,
         "stroke": [
-            {"lat": source.points[i][0], "lon": source.points[i][1]}
-            for i in (12, 16, 20, 24)
+            {"lat": 37.61, "lon": 127.08},
+            {"lat": 37.611, "lon": 127.081},
         ],
     })))
-    assert response.status_code == 200
-    assert "preview_url" in json.loads(response.body)
+    assert response.status_code == 422
+    assert "이어지지" in json.loads(response.body)["error"]
 
 
-def test_editing_never_refuses_the_runner():
-    """Free editing is the point of the screen. Every shortfall degrades to
-    the best course still buildable and explains itself in `note`; none of
-    them comes back as a refusal."""
+def test_disconnected_drawings_are_refused_without_replacing_the_course():
     source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
     cid = encode_course_id(source.params)
     lat, lon = source.points[20]
@@ -265,10 +253,8 @@ def test_editing_never_refuses_the_runner():
             "from_index": 10, "to_index": 40, "stroke": stroke,
         })))
         payload = json.loads(response.body)
-        assert response.status_code == 200, f"{label}: {payload.get('error')}"
-        assert "preview_url" in payload, label
-        # A no-op still has to say so rather than pretend it drew something.
-        assert "note" in payload, label
+        assert response.status_code == 422, f"{label}: {payload}"
+        assert "이어지지" in payload["error"] or "지운 구간" in payload["error"]
 
 
 def test_a_long_drawing_is_followed_to_its_end_not_trimmed():
@@ -572,8 +558,8 @@ def test_editor_erases_a_swept_range_and_draws_its_replacement():
     assert "const appendFreeDraw" in page
     assert "const previewDrawnRoute" in page
     assert "action:'snap'" in page
-    # Saving an unconfirmed sketch snaps it on the way rather than refusing.
-    assert "action:'save_draft'" in page
+    # A sketch must be reviewed as a walkable route before naming and saving.
+    assert "먼저 도보 경로를 확인해 주세요" in page
 
 
 def test_revert_is_undoable_and_separated_from_save():
@@ -1008,7 +994,9 @@ def test_an_unsteady_hand_still_draws_a_straight_route():
         stroke = []
         for i in range(60):
             t = i / 59
-            wobble = random.uniform(-jitter_m, jitter_m)
+            # The hand may wobble between connections. Its two ends still
+            # genuinely touch the existing line; proximity cannot invent them.
+            wobble = 0 if i in (0, 59) else random.uniform(-jitter_m, jitter_m)
             stroke.append(CourseWaypoint(
                 lat=pa["lat"] + (pb["lat"] - pa["lat"]) * t + wobble / 111_000.0,
                 lon=pa["lon"] + (pb["lon"] - pa["lon"]) * t + wobble / 88_000.0))
@@ -1090,20 +1078,17 @@ def test_a_replacement_that_cannot_differ_says_why():
     assert _unchanged_note(same, [1, 5, 4]) == ""
 
 
-def test_the_editor_never_blocks_a_draft_for_where_it_was_drawn():
-    """Free editing is the point of the screen. A sketch that does not reach
-    the ends of the erased gap is joined to the course where it does touch,
-    and one that was never confirmed is snapped on the way to being saved."""
+def test_the_editor_keeps_incomplete_drafts_but_blocks_preview_and_save():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
-    assert "draftConnection" not in page
-    assert "코스 선이 이어지지 않았어요" not in page
-    assert "먼저 도보 경로를 확인해 주세요" not in page
+    assert "draftConnection" in page
+    assert "코스 선이 이어지지 않았어요" in page
+    assert "먼저 도보 경로를 확인해 주세요" in page
     assert "먼저 지우기로 바꿀 구간을 붉게 표시해 주세요" not in page
-    # The gap travels as a hint; the span comes from where the stroke landed.
+    # The gap is authoritative; drawing cannot expand deletion.
     assert "if(gapRange){body.from_index=gapRange[0];body.to_index=gapRange[1];}" in page
-    assert "const draftStroke" in page
+    assert "strokes:draftStrokes" in page
 
 
 def test_the_primary_button_is_whatever_the_editor_is_in_the_middle_of():
@@ -1382,10 +1367,9 @@ def _doubled_share(path) -> float:
     return repeated / total if total else 0.0
 
 
-def test_a_closed_drawing_becomes_the_course_not_a_patch_on_it():
-    """Splicing a closed shape into the short span between the two ends it
-    happens to touch made the route run out around the shape and back: a 고구마
-    drawn over a 5km loop came back as 10.4km with 48% of it walked twice."""
+def test_a_closed_drawing_never_deletes_unerased_original_edge_occurrences():
+    """A closed pencil stroke is an addition, never a replacement."""
+    from collections import Counter
     from runart.course import snap_drawn_segment
     for name, lat, lon in (("서울시청", 37.5665, 126.9780),
                            ("잠실", 37.5133, 127.1000)):
@@ -1395,11 +1379,102 @@ def test_a_closed_drawing_becomes_the_course_not_a_patch_on_it():
                    for la, lo in source.points[::2]]
         drawn = snap_drawn_segment(source.params, source.path, None, None, outline)
 
+        original = Counter(zip(source.path, source.path[1:]))
+        result = Counter(zip(drawn.path, drawn.path[1:]))
         assert drawn.path[0] == drawn.path[-1]
-        assert drawn.length_km < source.length_km * 1.4, (
-            f"{name}: {drawn.length_km:.2f}km against a {source.length_km:.2f}km outline")
-        assert _doubled_share(drawn.path) < 0.15, (
-            f"{name}: {_doubled_share(drawn.path):.0%} of the loop walked twice")
+        assert not (original - result), f"{name}: drawing deleted {original - result}"
+
+
+def test_geometric_intersection_is_exact_and_one_metre_of_clearance_is_not_a_touch():
+    """Screen hit slop is for selecting UI, never for joining route topology."""
+    from runart.course import _segment_intersection_point
+
+    crossing = _segment_intersection_point(
+        (37.5665, 126.9780), (37.5665, 126.9790),
+        (37.5660, 126.9785), (37.5670, 126.9785))
+    half_metre_gap = _segment_intersection_point(
+        (37.5665, 126.9780), (37.5665, 126.9790),
+        (37.5660, 126.9785), (37.5665 - .5 / 111_320, 126.9785))
+    one_metre_gap = _segment_intersection_point(
+        (37.5665, 126.9780), (37.5665, 126.9790),
+        (37.5660, 126.9785), (37.5665 - 1 / 111_320, 126.9785))
+
+    assert crossing is not None
+    assert half_metre_gap is None
+    assert one_metre_gap is None
+
+
+def test_a_grade_separated_geometric_crossing_is_not_a_topological_connection():
+    import networkx as nx
+    from runart.course import _topological_intersection_nodes
+
+    graph = nx.Graph()
+    # Horizontal route and vertical drawn way cross geometrically but have no
+    # shared graph node: this models a bridge over a road.
+    graph.add_node(1, lat=37.5665, lon=126.9780)
+    graph.add_node(2, lat=37.5665, lon=126.9790)
+    graph.add_node(3, lat=37.5660, lon=126.9785)
+    graph.add_node(4, lat=37.5670, lon=126.9785)
+    graph.add_edge(1, 2)
+    graph.add_edge(3, 4)
+
+    assert _topological_intersection_nodes(
+        graph, [1, 2], [3, 4],
+        [(37.5660, 126.9785), (37.5670, 126.9785)]) == []
+
+    # Splitting both ways at one shared junction makes the same drawing a
+    # real connection.
+    graph.add_node(5, lat=37.5665, lon=126.9785)
+    graph.remove_edge(1, 2)
+    graph.remove_edge(3, 4)
+    graph.add_edges_from([(1, 5), (5, 2), (3, 5), (5, 4)])
+    assert _topological_intersection_nodes(
+        graph, [1, 5, 2], [3, 5, 4],
+        [(37.5660, 126.9785), (37.5670, 126.9785)]) == [5]
+
+
+def test_an_explicit_gap_is_the_only_original_edge_occurrence_drawing_may_remove():
+    from collections import Counter
+    from runart.course import snap_drawn_segment
+
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    lo, hi = 10, 40
+    stroke = [CourseWaypoint(lat=source.points[i][0], lon=source.points[i][1])
+              for i in range(lo, hi + 1, 4)]
+    stroke.append(CourseWaypoint(lat=source.points[hi][0], lon=source.points[hi][1]))
+    edited = snap_drawn_segment(source.params, source.path, lo, hi, stroke)
+
+    protected = Counter(zip(source.path[:lo], source.path[1:lo + 1]))
+    protected.update(zip(source.path[hi:], source.path[hi + 1:]))
+    result = Counter(zip(edited.path, edited.path[1:]))
+    assert not (protected - result)
+
+
+def test_multiple_strokes_are_sent_and_validated_as_independent_components():
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    cid = encode_course_id(source.params)
+    response = asyncio.run(server.edit_course_route(_json_request(cid, {
+        "action": "snap", "path": source.path,
+        "strokes": [
+            [{"lat": source.points[i][0], "lon": source.points[i][1]}
+             for i in (8, 10, 12)],
+            [{"lat": source.points[i][0], "lon": source.points[i][1]}
+             for i in (18, 20, 22)],
+        ],
+    })))
+    assert response.status_code != 400
+
+
+def test_total_points_across_strokes_are_capped_before_routing():
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    cid = encode_course_id(source.params)
+    point = {"lat": 37.5665, "lon": 126.9780}
+    response = asyncio.run(server.edit_course_route(_json_request(cid, {
+        "action": "snap", "path": source.path,
+        "strokes": [[point] * 301, [point] * 300],
+    })))
+    assert response.status_code == 400
+    assert "601" in json.loads(response.body)["error"]
 
 
 def test_a_spur_appears_only_where_the_runner_drew_one():

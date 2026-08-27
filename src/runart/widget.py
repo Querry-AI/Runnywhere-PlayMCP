@@ -11,7 +11,7 @@ import urllib.parse
 
 from .course import Course
 from .courseplan import CourseChoice
-from .insights import CourseFacts, course_facts, is_loop
+from .insights import CourseFacts, course_facts
 from .naming import RUN_NAMES_KO, TRACK_EMOJI, short_place
 from .pace import DEFAULT_PACE_S, effort
 from .shapes import SHAPES
@@ -185,9 +185,12 @@ def _choice_label(choice: CourseChoice) -> str:
 
 def _widget_title(course: Course) -> str:
     shape = SHAPES.get(course.params.shape or "")
-    if shape:
-        return _plain_text(f"{shape.emoji} {RUN_NAMES_KO[shape.key]}", 40)
     place = short_place(course.params.location_name or "")
+    if shape:
+        return _plain_text(
+            f"{shape.emoji} {place + RUN_NAMES_KO[shape.key] if place else RUN_NAMES_KO[shape.key]}",
+            40,
+        )
     return _plain_text(f"{TRACK_EMOJI} {place + '런' if place else '러닝 코스'}", 40)
 
 
@@ -247,24 +250,13 @@ def _section_heading(title: str, *, lead: bool) -> dict:
     )
 
 
-def _category(course: Course) -> str:
-    """The kind of run, the way a listing names the kind of product."""
-    return "동물 코스" if course.params.shape else "일반 코스"
+def _ascent_line(course: Course) -> str:
+    """A quiet secondary metric below the distance/time pair."""
+    return _plain_text(f"오르막 {course.ascent_m:.0f}m", 80)
 
 
-def _where_line(course: Course) -> str:
-    """Where it starts and how far it climbs.
-
-    The two meta lines have to say different things: the grade and the
-    surface belong to the character line below, so this one carries the
-    facts that line cannot -- the start and the climb.
-    """
-    location = _plain_text(course.params.location_name or "지정한 출발점", 60)
-    start = f"{location} 출발·도착" if is_loop(course) else f"{location} 출발"
-    return _plain_text(f"{start} · 오르막 {course.ascent_m:.0f}m", 120)
-
-
-def _course_card_row(course: Course, course_id: str, origin: str) -> dict:
+def _course_card_row(course: Course, course_id: str, origin: str,
+                     match_note: str = "") -> dict:
     """One course as a listing row: thumbnail, facts, action.
 
     Three columns, like every travel or commerce listing: the picture on the
@@ -275,7 +267,6 @@ def _course_card_row(course: Course, course_id: str, origin: str) -> dict:
     """
     preview_url = f"{origin}/c/{course_id}"
     title = _widget_title(course)
-    location = _plain_text(course.params.location_name or "지정한 출발점", 120)
     facts = course_facts(course)
     button = _button("코스 보기", preview_url)
     button.update({"style": "primary", "variant": "solid", "size": "sm"})
@@ -287,7 +278,7 @@ def _course_card_row(course: Course, course_id: str, origin: str) -> dict:
             {
                 "type": "Image",
                 "src": f"{preview_url}/thumb.svg",
-                "alt": _plain_text(f"{location} {title} 실제 지도 코스", 120),
+                "alt": _plain_text(f"{title} 실제 지도 코스", 120),
                 "width": 88,
                 "height": 88,
                 "fit": "contain",
@@ -299,22 +290,12 @@ def _course_card_row(course: Course, course_id: str, origin: str) -> dict:
                 "gap": "xs",
                 "flex": 1,
                 "children": [
-                    {
-                        "type": "Caption", "value": _category(course),
-                        "size": "sm", "maxLines": 1,
-                    },
-                    {"type": "Title", "value": title, "size": "md", "maxLines": 1},
-                    {
-                        "type": "Caption", "value": _where_line(course),
-                        "size": "sm", "maxLines": 1,
-                    },
+                    {"type": "Title", "value": title, "size": "lg", "weight": "bold", "maxLines": 1},
+                    {"type": "Text", "value": _effort_line(course), "size": "md", "weight": "bold", "maxLines": 1},
+                    {"type": "Caption", "value": _ascent_line(course), "size": "sm", "maxLines": 1},
                     {
                         "type": "Caption", "value": _character_line(facts),
                         "size": "sm", "maxLines": 1,
-                    },
-                    {
-                        "type": "Text", "value": _effort_line(course), "size": "md",
-                        "weight": "bold", "maxLines": 1,
                     },
                 ],
             },
@@ -329,6 +310,7 @@ def build_course_widget(
     base_url: str,
     *,
     alternatives: tuple[CourseChoice, ...] = (),
+    primary_note: str = "",
 ) -> str:
     """Return a compact Kakao Card envelope for one confirmed course.
 
@@ -350,7 +332,7 @@ def build_course_widget(
     # runner cannot tell which one answered their request.
     children: list[dict] = [
         _section_heading("추천 코스", lead=True),
-        _course_card_row(course, course_id, origin),
+        _course_card_row(course, course_id, origin, primary_note),
     ]
     if alternatives:
         children.append({"type": "Divider", "spacing": "xs"})
@@ -359,7 +341,7 @@ def build_course_widget(
             if index:
                 children.append({"type": "Divider", "spacing": "xs"})
             children.append(_course_card_row(
-                choice.course, choice.course_id, origin
+                choice.course, choice.course_id, origin, choice.match_note
             ))
 
     copy_title = _copy_value(title, 80)
@@ -371,9 +353,12 @@ def build_course_widget(
         f"- 지도: {preview_url}",
         "- 경로 데이터: © OpenStreetMap contributors · ODbL 1.0",
     ]
+    if primary_note:
+        copy_lines.insert(1, f"- {_copy_value(primary_note, 160)}")
     if alternatives:
         copy_lines.extend(
             f"- {_copy_value(_choice_label(choice), LABEL_MAX_CHARS)}"
+            + (f" · {_copy_value(choice.match_note, 160)}" if choice.match_note else "")
             for choice in alternatives
         )
     copy_text = "\n".join(copy_lines)

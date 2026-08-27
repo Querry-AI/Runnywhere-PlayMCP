@@ -86,7 +86,7 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     assert image == {
         "type": "Image",
         "src": f"https://runnywhere.example/c/{course_id}/thumb.svg",
-        "alt": "강남역 🐶 댕댕런 실제 지도 코스",
+            "alt": "🐶 강남역댕댕런 실제 지도 코스",
         "width": 88,
         "height": 88,
         "fit": "contain",
@@ -95,17 +95,13 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     }
     assert overview["type"] == "Col"
     assert [child["type"] for child in overview["children"]] == [
-        "Caption", "Title", "Caption", "Caption", "Text",
+        "Title", "Text", "Caption", "Caption",
     ]
-    assert overview["children"][0]["value"] == "동물 코스"
-    assert overview["children"][1]["value"] == "🐶 댕댕런"
-    where = overview["children"][2]["value"]
-    assert "강남역" in where and "오르막" in where
-    # The two meta lines must not repeat each other.
-    assert overview["children"][3]["value"] != where
+    assert overview["children"][0]["value"] == "🐶 강남역댕댕런"
+    assert overview["children"][1]["value"] == "9.0km · 약 63분"
+    assert overview["children"][2]["value"] == f"오르막 {course.ascent_m:.0f}m"
     assert "평지 위주" in overview["children"][3]["value"]
     # Distance pairs with time, not ascent: time is what a runner plans around.
-    assert overview["children"][4]["value"] == "9.0km · 약 63분"
     buttons = _components(card, "Button")
     assert [button["label"] for button in buttons] == ["코스 보기"]
     target = buttons[0]["onClickAction"]["payload"]["target"]
@@ -372,8 +368,9 @@ def test_course_widget_offers_every_alternative_as_a_full_matching_card():
                for child in _components(children, "Text"))
     course_titles = [value for value in titles if value != "추천 코스"]
     assert "야옹런" in course_titles[1]
-    starts = [caption.split(" 출발")[0] for caption in captions if " 출발" in caption]
-    assert starts == ["낙성대(강감찬)역", "봉천역", "서울대입구역"]
+    assert "낙성대(강감찬)역" in titles[1]
+    assert "봉천역" in titles[2]
+    assert "서울대입구역" in titles[3]
     assert all(image["width"] == image["height"] == 88 for image in images)
     targets = [button["onClickAction"]["payload"]["target"]["url"]
                for button in buttons]
@@ -403,8 +400,8 @@ def test_widget_primary_link_decodes_to_the_same_detail_start_and_course():
 
     assert linked_id == course_id
     assert decode_course_id(linked_id).canonical() == course.params.canonical()
-    assert any("경복궁역 출발" in child.get("value", "")
-               for child in _components(payload["widget"], "Caption"))
+    assert any("경복궁역" in child.get("value", "")
+               for child in _components(payload["widget"], "Title"))
 
 
 def test_course_widget_without_alternatives_keeps_one_primary_action():
@@ -430,7 +427,7 @@ def test_course_card_reads_like_a_recommendation_not_a_data_dump():
 
     # Heading, then identity, start, effort, character -- in that order.
     assert "추천 코스" in joined
-    assert "성수역 출발" in joined
+    assert "성수역" in joined
     assert "약 63분" in joined
     # Character chips carry the words, not bare emoji.
     assert "평지 위주" in joined or "오르막 포함" in joined or "완만한 경사" in joined
@@ -499,13 +496,13 @@ def test_card_rows_read_as_a_listing_not_a_stack_of_paragraphs():
         kinds = [child["type"] for child in row["children"]]
         assert kinds == ["Image", "Col", "Button"]
         column = row["children"][1]
-        # Category, name, where, character, then the number that decides it.
+        # Identity, distance/time, ascent, then the hashtag-like traits.
         assert [child["type"] for child in column["children"]] == [
-            "Caption", "Title", "Caption", "Caption", "Text",
+            "Title", "Text", "Caption", "Caption",
         ]
         assert all(child.get("maxLines") == 1 for child in column["children"])
 
-    categories = [row["children"][1]["children"][0]["value"] for row in rows]
-    assert categories == ["동물 코스", "일반 코스"]
-    # Headings are one line each; the explanatory captions are gone.
+    # Headings are one line each; the explanatory category captions are gone.
+    assert "동물 코스" not in json.dumps(payload, ensure_ascii=False)
+    assert "일반 코스" not in json.dumps(payload, ensure_ascii=False)
     assert "요청 조건에 가장 잘 맞는" not in json.dumps(payload, ensure_ascii=False)

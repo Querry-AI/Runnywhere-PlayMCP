@@ -71,6 +71,10 @@ def test_editor_page_is_only_the_editor():
 
     assert 'id="editSave"' in edit and 'id="eraserTool"' in edit
     assert "edit-steps" in edit
+    assert "<code>지우기</code>를 누른 뒤 바꾸고 싶은 코스 구간을 선택하고, <code>선택 구간 지우기</code>를 눌러주세요." in edit
+    assert "<code>그리기</code>를 누르고 새로운 코스를 지도 위에 그린 뒤, <code>도보 경로 확인</code>을 눌러주세요." in edit
+    assert "<code>저장</code>을 누르면 나만의 코스가 완성돼요." in edit
+    assert "구간 선택을 누르고 바꾸고 싶은 코스 선을 탭하세요." not in edit
     assert 'id="paceRange"' not in edit
     assert "이 코스는 이런 코스예요" not in edit
     # The old in-map entry point is gone; the tab is the way in.
@@ -207,7 +211,7 @@ def test_the_drawing_tool_keeps_freehand_local_until_walkable_preview():
     assert "const previewDrawnRoute" in edit
     assert "action:'snap'" in edit
     assert "if(action==='verify'){await previewDrawnRoute();return;}" in edit
-    assert "action:'save_draft'" in edit
+    assert "먼저 도보 경로를 확인해 주세요" in edit
     assert "const eraseAt" in edit
     assert "coordsFromContainerPoint" in edit
 
@@ -257,10 +261,13 @@ def test_mobile_editor_has_a_dedicated_one_finger_pan_surface():
     mobile, so 지도 이동 must not depend on the SDK receiving the gesture."""
     edit = _page(_course(), "edit")
 
-    assert "mobile-edit-pan:not(.tool-active) .edit-overlay" in edit
+    assert "mobile-edit-pan:not(.tool-active) .map-pan-surface" in edit
     assert "navigator.maxTouchPoints>0" in edit
     assert "if(!editMode){" in edit
     assert "panByPixels(previous.x-point.x,previous.y-point.y)" in edit
+    assert "mapPanSurface.addEventListener('touchmove'" in edit
+    assert "map.setLevel(level,{anchor,animate:false})" in edit
+    assert "rebaseGesture(sampleTouches(event))" in edit
 
 
 @pytest.mark.parametrize("page", COURSE_PAGES)

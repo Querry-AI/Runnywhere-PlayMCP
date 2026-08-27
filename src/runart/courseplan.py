@@ -1,45 +1,23 @@
-"""Ordered course choices for one animal request.
-
-Pure decision layer between the courses that are already available and the
-Kakao widget.  It never generates or restores a course: callers hand it the
-candidates they could afford inside the latency budget, and it decides which
-one to lead with, which two to offer beside it, and how to say why.
-
-The product rule it encodes -- three cases, three ordered choices each:
-
-1. exact  -- the requested animal exists at the requested start
-             -> requested animal, another animal here, plain course here
-2. nearby -- not here, but a verified preset is within NEARBY_RADIUS_M
-             -> nearest same animal, nearest any animal, plain course here
-3. far    -- nothing within NEARBY_RADIUS_M
-             -> plain course here, nearest same animal, nearest any animal
-
-A request that has nothing to offer returns None; the caller keeps its own
-Markdown guidance in that case.
-"""
-
+"""Rank real courses by start/effort, then shape, then optional preferences."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from itertools import groupby
 from typing import Sequence
 
 from .animal_presets import PresetMatch
 from .course import Course
-from .models import encode_course_id
+from .facilities import facility_requirement_score
+from .models import DEFAULT_PACE_MIN_PER_KM, encode_course_id
 from .naming import TRACK_EMOJI, course_title
 from .shapes import SHAPES
 
-# A verified course this far from the requested start still reads as "here,
-# roughly" to a runner; beyond it the request has effectively failed.
 NEARBY_RADIUS_M = 2000.0
-# Different exits of one station sit tens of metres apart. That is the same
-# departure, not a detour worth naming.
 SAME_START_M = 150.0
-
+EFFORT_TOLERANCE = 0.10
 CASE_EXACT = "exact"
 CASE_NEARBY = "nearby"
 CASE_FAR = "far"
-
 KIND_REQUESTED = "requested_animal"
 KIND_OTHER = "other_animal"
 KIND_STANDARD = "standard"
@@ -47,12 +25,11 @@ KIND_STANDARD = "standard"
 
 @dataclass(frozen=True)
 class CourseChoice:
-    """One clickable course, with the detour it costs from the request."""
-
     course: Course
     course_id: str
     kind: str
     distance_m: float = 0.0
+    match_note: str = ""
 
     @property
     def emoji(self) -> str:
@@ -80,99 +57,119 @@ class CoursePlan:
     alternatives: tuple[CourseChoice, ...]
 
 
-def _shape_name(shape: str) -> str:
-    spec = SHAPES.get(shape)
-    return spec.name_ko if spec else "동물"
+def requested_distance(distance_km: float | None,
+                       duration_min: float | None) -> float | None:
+    """Use the same conversion as generation; explicit distance wins."""
+    if distance_km is not None:
+        return distance_km
+    return round(duration_min / DEFAULT_PACE_MIN_PER_KM, 1) if duration_min else None
 
 
-def _lead_text(case: str, name: str, shape_ko: str, primary: CourseChoice) -> str:
-    if case == CASE_EXACT:
-        return f"{name}에서 바로 뛸 수 있는 검증된 {shape_ko} 코스를 찾았어요."
-    if case == CASE_NEARBY:
-        km = primary.distance_m / 1000.0
-        return (f"{name}에는 검증된 {shape_ko} 코스가 없어서, "
-                f"{km:.1f}km 떨어진 {primary.start_name}의 {shape_ko} 코스를 "
-                "골랐어요.")
-    missing = f"{name} 주변 1~2km 안에는 검증된 {shape_ko} 코스가 없어요."
-    if primary.kind == KIND_STANDARD:
-        return f"{missing} 대신 {name}에서 가장 뛰기 좋은 코스를 준비했어요."
-    km = primary.distance_m / 1000.0
-    return (f"{missing} 가장 가까운 {shape_ko} 코스는 "
-            f"{km:.1f}km 떨어진 {primary.start_name}에 있어요.")
+def _preference_misses(course: Course, *, include_hills: bool,
+                       night_mode: bool, need_facilities: Sequence[str]) -> int:
+    # Measured route properties, not the flags with which it was requested.
+    hits, wanted = facility_requirement_score(course.points, list(need_facilities))
+    misses = wanted - hits
+    if include_hills and course.is_flat:
+        misses += 1
+    # Use the same 0.6 threshold as RFS highlights; absent data is unverified.
+    if night_mode and any(course.rfs.get("components", {}).get(key, 0) < 0.60
+                          for key in ("lighting", "cctv")):
+        misses += 1
+    return misses
 
 
 def build_course_plan(
-    *,
-    requested_name: str | None,
-    shape: str,
-    exact: Course | None,
-    shape_matches: Sequence[PresetMatch],
-    animal_matches: Sequence[PresetMatch],
-    standard: Course | None,
+    *, requested_name: str | None, shape: str | None,
+    exact: Course | None, shape_matches: Sequence[PresetMatch],
+    animal_matches: Sequence[PresetMatch], standard: Course | None,
+    distance_km: float | None = None, duration_min: float | None = None,
+    include_hills: bool = False, night_mode: bool = False,
+    need_facilities: Sequence[str] = (),
 ) -> CoursePlan | None:
-    """Order the choices for one animal request.
+    """Full matches first; rank all alternatives with the same priority.
 
-    ``shape_matches`` are verified presets of the requested animal and
-    ``animal_matches`` verified presets of any animal, both nearest first and
-    both allowed to be empty.  ``exact`` is the requested animal drawn from
-    the requested start, and ``standard`` the plain course there; either may
-    be None when it could not be produced inside the budget.
+    Start (150m station-exit tolerance) and actual distance (±10%) form the
+    first tier. Among matches in that tier shape wins, then preferences.
+    If no candidate matches both, fewer violations and smaller normalized
+    deviations win before shape or preferences. Unspecified animal distance
+    stays open rather than silently imposing a new 5km constraint.
     """
+    target = requested_distance(distance_km, duration_min)
+    wants_animal = shape not in (None, "standard")
     name = requested_name or "요청한 출발지"
-    shape_ko = _shape_name(shape)
-    taken: set[str] = set()
+    candidates: dict[str, CourseChoice] = {}
 
-    def take(course: Course | None, kind: str, distance_m: float
-             ) -> CourseChoice | None:
+    def add(course: Course | None, moved: float) -> None:
         if course is None:
-            return None
-        course_id = encode_course_id(course.params)
-        if course_id in taken:
-            return None
-        taken.add(course_id)
-        return CourseChoice(course, course_id, kind, distance_m)
+            return
+        kind = (KIND_STANDARD if not course.params.shape else
+                KIND_REQUESTED if shape == "best_animal" or course.params.shape == shape
+                else KIND_OTHER)
+        cid = encode_course_id(course.params)
+        if cid not in candidates or moved < candidates[cid].distance_m:
+            candidates[cid] = CourseChoice(course, cid, kind, moved)
 
-    nearest_shape = shape_matches[0] if shape_matches else None
+    add(exact, 0)
+    add(standard, 0)
+    for match in (*shape_matches, *animal_matches):
+        add(match.course, match.distance_m)
 
-    if exact is not None:
-        case = CASE_EXACT
-        primary = take(exact, KIND_REQUESTED, 0.0)
-    elif nearest_shape is not None and nearest_shape.distance_m <= NEARBY_RADIUS_M:
-        # A verified preset standing at the requested start is that start's
-        # course, not a trip to somewhere else. Splitting on NEARBY_RADIUS_M
-        # alone made the lead argue with itself: "시청에는 검증된 고양이 코스가
-        # 없어서, 0.0km 떨어진 시청역의 고양이 코스를 골랐어요." SAME_START_M
-        # already draws this line for the card; the case has to use it too.
-        case = (CASE_EXACT if nearest_shape.distance_m < SAME_START_M
-                else CASE_NEARBY)
-        primary = take(nearest_shape.course, KIND_REQUESTED,
-                       nearest_shape.distance_m)
-    else:
-        case = CASE_FAR
-        primary = take(standard, KIND_STANDARD, 0.0)
-        if primary is None and nearest_shape is not None:
-            primary = take(nearest_shape.course, KIND_REQUESTED,
-                           nearest_shape.distance_m)
-    if primary is None:
-        return None
+    def evaluate(choice: CourseChoice, *, with_preferences: bool = True) -> tuple[tuple, CourseChoice]:
+        course = choice.course
+        error = abs(course.length_km - target) / target if target else 0
+        effort_miss = error > EFFORT_TOLERANCE + 1e-9
+        moved = choice.is_detour
+        shape_miss = (not course.params.shape if shape == "best_animal" else
+                      course.params.shape != (shape if wants_animal else None))
+        features = (_preference_misses(course, include_hills=include_hills,
+                    night_mode=night_mode, need_facilities=need_facilities)
+                    if with_preferences else 0)
+        notes = []
+        if moved:
+            notes.append(f"출발지 {choice.distance_m / 1000:.1f}km 이동")
+        if effort_miss:
+            if duration_min and distance_km is None:
+                minutes = round(course.length_km * DEFAULT_PACE_MIN_PER_KM)
+                notes.append(f"요청 {duration_min:g}분 → 약 {minutes}분")
+            else:
+                notes.append(f"요청 {target:g}km → {course.length_km:.1f}km")
+        if shape_miss:
+            notes.append("일반 코스 대안" if not course.params.shape else "다른 모양 대안")
+        if features:
+            notes.append("선택 특징 일부 미충족·미확인")
+        if not notes:
+            notes.append("요청 조건 일치" if target else "요청 장소·모양 일치")
+        score = (
+            int(moved) + int(effort_miss),
+            max(max(0, choice.distance_m / SAME_START_M - 1) if moved else 0,
+                max(0, error / EFFORT_TOLERANCE - 1) if effort_miss else 0),
+            int(shape_miss), features, choice.distance_m, error, choice.course_id,
+        )
+        return score, replace(choice, match_note=" · ".join(notes))
 
-    alternatives: list[CourseChoice] = []
-    if case == CASE_FAR:
-        if nearest_shape is not None:
-            alternatives.append(
-                take(nearest_shape.course, KIND_REQUESTED,
-                     nearest_shape.distance_m))
-    for match in animal_matches:
-        choice = take(match.course, KIND_OTHER, match.distance_m)
-        if choice is not None:
-            alternatives.append(choice)
+    # Facilities need a geometry scan. Only evaluate tied priority groups that
+    # can reach the three visible cards, never hundreds of already-lower tiers.
+    ordered = sorted((evaluate(c, with_preferences=False) for c in candidates.values()),
+                     key=lambda pair: pair[0])
+    ranked = []
+    for _, group in groupby(ordered, key=lambda pair: pair[0][:3]):
+        ranked.extend(sorted((evaluate(c) for _, c in group), key=lambda pair: pair[0]))
+        if len(ranked) >= 3:
             break
-    if case != CASE_FAR:
-        alternatives.append(take(standard, KIND_STANDARD, 0.0))
-
-    return CoursePlan(
-        case=case,
-        lead=_lead_text(case, name, shape_ko, primary),
-        primary=primary,
-        alternatives=tuple(c for c in alternatives if c is not None),
-    )
+    if not ranked:
+        return None
+    primary_score, primary = ranked[0]
+    case = (CASE_NEARBY if primary.is_detour else
+            CASE_EXACT if not primary_score[0] and not primary_score[2] else CASE_FAR)
+    spec = SHAPES.get(shape or "")
+    shape_name = spec.name_ko if spec else "동물 모양" if wants_animal else "일반"
+    target_text = (f"약 {duration_min:g}분" if duration_min and distance_km is None else
+                   f"{target:g}km" if target else "거리 지정 없이" if wants_animal else "기본 5km")
+    if primary_score[0] == 0 and primary_score[2] == 0 and primary_score[3] == 0:
+        lead = f"{name}에서 {target_text} 기준으로 {shape_name} 코스를 먼저 골랐어요."
+    else:
+        lead = (f"요청한 {shape_name} 코스를 찾되, {name}의 장소·시간(거리)을 먼저, "
+                "모양과 선택 특징을 그다음으로 고려했어요. "
+                f"첫 코스: {primary.start_name} · {primary.match_note}.")
+    return CoursePlan(case, lead, primary, tuple(c for _, c in ranked[1:3]))

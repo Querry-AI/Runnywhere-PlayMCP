@@ -11,6 +11,7 @@
 | 스크립트 완주 | 네 페이지 모두 `kakao.maps.load()` 콜백이 끝까지 돈다(암묵적 전역 `ReferenceError` 회귀 방지) |
 | 배지 툴팁 | 호버 없는 기기에서 탭으로 열리고, 바깥 탭으로 닫히고, 설명 문구가 실제로 보인다 |
 | 지도 드래그 | 편의시설 마커 위에서 시작한 드래그도 지도를 즉시 움직인다(`panBy` 애니메이션 금지) |
+| 모바일 지도 이동 | 320px·390px에서 실제 브라우저 터치 입력으로 한 손가락 이동, 핀치 확대·축소, 핀치→이동 전환, 취소·도구 전환 후 재시작을 확인한다 |
 | 동물 실루엣 | 동물 코스의 코스 정보는 실루엣으로 열리고, 일반 코스는 러닝 안내로 열린다 |
 | 코스 선 일치 | 편집 화면 선이 노드 수보다 많은 점을 갖는다 = 실제 도로 형상을 따른다 |
 | 지우개 | 훑은 구간이 반투명 빨간 선으로 남고, 저장 전에는 네트워크 요청을 보내지 않는다 |
@@ -25,12 +26,13 @@
 ```bash
 .venv/bin/python tests/browser/build_harness.py /tmp/runart-harness
 NODE_PATH=$(npm root -g) node tests/browser/run_scenarios.js /tmp/runart-harness
+NODE_PATH=$(npm root -g) node tests/browser/mobile_gestures.js /tmp/runart-harness
 ```
 
-`46/46 passed`가 나와야 하고, 실패가 있으면 종료 코드가 0이 아니다. Playwright(`npm i -g playwright`)가 필요하다.
+시나리오는 `59/59 passed`, 모바일 제스처는 두 화면 크기 모두 `PASS`가 나와야 한다. 실패 시 종료 코드는 0이 아니다. Playwright(`npm i -g playwright`)가 필요하다.
 
 ## 한계
 
 - 카카오 대역의 투영(projection)은 의도적으로 단순한 대체물이다. 제스처·요청 상태 머신을 검증하며 지도 투영 정확도는 검증하지 않는다.
-- 실제 멀티터치·pan/zoom 충돌·안전 영역은 등록 도메인과 `KAKAO_JAVASCRIPT_KEY`가 있는 실기기 검증에서만 확인된다.
+- 모바일 테스트는 Chromium의 터치 hit-testing과 멀티터치를 사용한다(요소에 직접 `dispatchEvent`하지 않는다). 실제 카카오 지도 타일·SDK 및 iOS/Android 기기별 동작·안전 영역은 등록 도메인과 `KAKAO_JAVASCRIPT_KEY`가 있는 실기기 검증이 별도로 필요하다.
 - 아직 `pytest`에 연결되어 있지 않다. 러너를 CI에 넣을 때 종료 코드를 그대로 쓰면 된다.

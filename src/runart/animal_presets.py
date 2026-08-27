@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from .course import Course, rebase_closed_course_start
+from . import graph as graphmod
+from .course import Course, course_route_issues, rebase_closed_course_start
 from .data_integrity import verify_data_file
 from .models import CourseParams
 
@@ -42,6 +43,7 @@ PRESET_PATH = _data_path("animal_station_presets.json.gz")
 GRAPH_PATH = _data_path("seoul_graph.pkl")
 FORMAT_VERSION = 1
 MISSING = object()
+BLOCKED = object()
 
 
 @dataclass(frozen=True)
@@ -76,8 +78,17 @@ def preset_key(lat: float, lon: float, shape: str) -> str:
 _load_status = "not loaded yet"
 
 
-@lru_cache(maxsize=1)
 def _load() -> dict | None:
+    """Load presets for the graph currently active in this process.
+
+    Keying the cache by graph identity prevents a temporary/test graph from
+    poisoning later requests after the real graph is restored.
+    """
+    return _load_for_graph(graphmod.get_graph())
+
+
+@lru_cache(maxsize=1)
+def _load_for_graph(graph) -> dict | None:
     """Verified preset entries, or None with the failure recorded in
     preset_status() — a silent None here previously made a broken deploy
     (stale image, regenerated graph) indistinguishable from 'no presets'."""
@@ -111,15 +122,47 @@ def _load() -> dict | None:
                         "(rebuild with scripts/build_animal_presets.py)")
         return None
     entries = payload.get("entries", {})
-    verified = sum(1 for value in entries.values() if value)
-    _load_status = f"ok: {verified} verified courses ({len(entries)} entries)"
+    # A matching data fingerprint proves node compatibility, not that routes
+    # satisfy today's access rules. Audit once per process load, not once per
+    # nearby lookup, and retain blocked slots as unavailable for new requests.
+    blocked = set()
+    for key, raw in entries.items():
+        if raw is None:
+            continue
+        try:
+            issues = course_route_issues(_deserialize_course(raw), graph)
+        except (KeyError, TypeError, ValueError):
+            issues = ["invalid_route"]
+        if issues:
+            blocked.add(key)
+            entries[key] = BLOCKED
+    verified = sum(1 for value in entries.values()
+                   if value is not None and value is not BLOCKED)
+    _load_status = (f"ok: {verified} verified courses ({len(entries)} entries, "
+                    f"{len(blocked)} blocked by current routing rules)")
     return entries
+
+
+# Preserve the small cache-control surface used by startup checks and tests.
+_load.cache_clear = _load_for_graph.cache_clear
+_load.cache_info = _load_for_graph.cache_info
 
 
 def preset_status() -> str:
     """Human-readable preset availability for startup logs and diagnostics."""
     _load()
     return _load_status
+
+
+def animal_preset_is_blocked(params: CourseParams) -> bool:
+    """Old links must explain a blocked route instead of silently replacing it."""
+    if (not params.shape or params.include_hills or params.night_mode
+            or params.need_facilities or params.manual_path or params.manual_waypoints):
+        return False
+    entries = _load()
+    if entries is None:
+        return False
+    return entries.get(preset_key(params.lat, params.lon, params.shape)) is BLOCKED
 
 
 def get_animal_preset(params: CourseParams):
@@ -133,6 +176,8 @@ def get_animal_preset(params: CourseParams):
     raw = entries.get(preset_key(params.lat, params.lon, params.shape), MISSING)
     if raw is MISSING:
         return MISSING
+    if raw is BLOCKED:
+        return None
     if raw is None:
         return None
     return _deserialize_course(raw)
@@ -175,7 +220,7 @@ def find_nearby_animal_presets(params: CourseParams,
     suffix = f",{params.shape}"
     matches: list[PresetMatch] = []
     for key, raw in entries.items():
-        if raw is None or not key.endswith(suffix):
+        if raw is None or raw is BLOCKED or not key.endswith(suffix):
             continue
         try:
             lat_text, lon_text, _ = key.split(",", 2)
@@ -220,7 +265,7 @@ def all_verified_animal_presets() -> tuple[Course, ...]:
         return ()
     courses = []
     for raw in entries.values():
-        if raw is None:
+        if raw is None or raw is BLOCKED:
             continue
         courses.append(_deserialize_course(raw))
     return tuple(courses)

@@ -67,6 +67,16 @@ class CourseError(Exception):
     """User-facing generation failure; message must say what to do next."""
 
 
+class CourseAccessError(CourseError):
+    """An existing route cannot be served under the current access rules."""
+
+    def __init__(self):
+        super().__init__(
+            "이 코스는 군사시설 등 통행이 제한되거나 보행을 확인할 수 없는 "
+            "구간이 포함되어 차단했어요. 새 코스를 요청해 주세요."
+        )
+
+
 class DistanceMissError(CourseError):
     """No loop close enough to the target; the nearest one is this long.
 
@@ -175,6 +185,8 @@ def highway_class(attrs: dict) -> str:
 
 def edge_is_runnable(attrs: dict) -> bool:
     """Conservative runtime gate for edges whose pedestrian status is clear."""
+    if attrs.get("military"):
+        return False
     highway = highway_class(attrs)
     if highway in NON_RUNNABLE_HIGHWAYS:
         return False
@@ -184,6 +196,27 @@ def edge_is_runnable(attrs: dict) -> bool:
     if highway == "path" and abs(float(attrs.get("slope_pct", 0.0) or 0.0)) > 10.0:
         return False
     return True
+
+
+def path_access_issues(path: list[int], graph) -> list[str]:
+    """Audit current graph access, including old paths made by older code."""
+    issues = set()
+    for u, v in zip(path, path[1:]):
+        if not graph.has_edge(u, v):
+            issues.add("missing_edge")
+            continue
+        attrs = graph.edges[u, v]
+        if attrs.get("military"):
+            issues.add("blocked_military")
+        elif not edge_is_runnable(attrs):
+            issues.add(f"blocked_highway:{highway_class(attrs) or 'unknown'}")
+    return sorted(issues)
+
+
+def ensure_course_runnable(course: Course) -> None:
+    """Cache/protocol boundaries must not trust old build-time validation."""
+    if path_access_issues(course.path, graphmod.get_graph()):
+        raise CourseAccessError()
 
 
 def course_route_issues(course: Course, graph) -> list[str]:
@@ -198,12 +231,7 @@ def course_route_issues(course: Course, graph) -> list[str]:
         )
         if nearest > MAX_COURSE_START_OFFSET_M:
             issues.append("start_too_far")
-    blocked = {
-        highway_class(graph.edges[u, v])
-        for u, v in zip(course.path, course.path[1:])
-        if not edge_is_runnable(graph.edges[u, v])
-    }
-    issues.extend(f"blocked_highway:{value or 'unknown'}" for value in sorted(blocked))
+    issues.extend(path_access_issues(course.path, graph))
     if course.length_km and not course.params.include_hills:
         if course.ascent_m / course.length_km > MAX_DEFAULT_ASCENT_PER_KM:
             issues.append("excessive_ascent")
@@ -340,6 +368,8 @@ def course_from_path(params: CourseParams, path: list[int],
         raise CourseError("현재 보행 지도에서 찾을 수 없는 코스 구간이 있어요.")
     if any(not g.has_edge(a, b) for a, b in zip(path, path[1:])):
         raise CourseError("보행로로 연결되지 않은 구간이 있어요. 해당 구간을 다시 선택해 주세요.")
+    if path_access_issues(path, g):
+        raise CourseAccessError()
     length, ascent = _path_metrics(g, path)
     if not 1000.0 <= length <= 42195.0:
         raise CourseError("수정한 코스는 1km 이상 42.195km 이하로 만들어 주세요.")
@@ -658,161 +688,264 @@ def _connect_through(g, weight, start: int, waypoints: list[int],
     return route or [start]
 
 
-def _course_from_closed_stroke(params: CourseParams,
-                               points: list[tuple[float, float]]) -> Course:
-    """Build a loop out of a shape the runner drew closed."""
-    g = graphmod.get_graph()
-    weight = easy_route_weight(_routing_weight_for(params), prefer_named_walkways=True)
+# Geometry decides whether two visible lines really meet. UI hit slop and road
+# snapping are deliberately absent here: even a 1m gap must remain a gap.
+INTERSECTION_EPSILON_M = 1e-4
+
+
+def _segment_intersection_point(a: tuple[float, float], b: tuple[float, float],
+                                c: tuple[float, float], d: tuple[float, float],
+                                epsilon_m: float = INTERSECTION_EPSILON_M
+                                ) -> tuple[float, float] | None:
+    """Return the exact planar intersection of two short geographic segments.
+
+    Seoul-scale coordinates are projected to local metres.  The epsilon is
+    arithmetic tolerance only (0.1mm by default), never interaction hit slop.
+    Collinear contact returns a shared endpoint; separated parallel segments
+    return ``None``.
+    """
+    origin_lat = (a[0] + b[0] + c[0] + d[0]) / 4.0
+    scale_x = 111_320.0 * math.cos(math.radians(origin_lat))
+    scale_y = 111_320.0
+
+    def xy(point):
+        return point[1] * scale_x, point[0] * scale_y
+
+    p, p2, q, q2 = map(xy, (a, b, c, d))
+    r = (p2[0] - p[0], p2[1] - p[1])
+    s = (q2[0] - q[0], q2[1] - q[1])
+    cross = lambda u, v: u[0] * v[1] - u[1] * v[0]
+    rxs = cross(r, s)
+    qp = (q[0] - p[0], q[1] - p[1])
+    scale = max(math.hypot(*r), math.hypot(*s), 1.0)
+    if abs(rxs) <= epsilon_m * scale:
+        # Only actual collinear contact counts.  A nearby parallel line does
+        # not become connected merely because it is within a screen radius.
+        if abs(cross(qp, r)) > epsilon_m * max(math.hypot(*r), 1.0):
+            return None
+        rr = r[0] * r[0] + r[1] * r[1]
+        if rr <= epsilon_m * epsilon_m:
+            if math.hypot(p[0] - q[0], p[1] - q[1]) <= epsilon_m:
+                return a
+            return None
+        values = sorted(((q[0] - p[0]) * r[0] + (q[1] - p[1]) * r[1]) / rr
+                        for q in (q, q2))
+        t = max(0.0, values[0])
+        if t > min(1.0, values[1]) + epsilon_m / max(math.sqrt(rr), 1.0):
+            return None
+    else:
+        t = cross(qp, s) / rxs
+        u = cross(qp, r) / rxs
+        tolerance = epsilon_m / scale
+        if not (-tolerance <= t <= 1.0 + tolerance
+                and -tolerance <= u <= 1.0 + tolerance):
+            return None
+        t = min(1.0, max(0.0, t))
+    x, y = p[0] + t * r[0], p[1] + t * r[1]
+    return y / scale_y, x / scale_x
+
+
+def _point_on_raw_stroke(point: tuple[float, float],
+                         raw: list[tuple[float, float]]) -> bool:
+    return any(_perpendicular_m(point, a, b) <= INTERSECTION_EPSILON_M
+               for a, b in zip(raw, raw[1:]))
+
+
+def _topological_intersection_nodes(g, base_path: list[int], drawn_path: list[int],
+                                    raw: list[tuple[float, float]]) -> list[int]:
+    """Shared graph junctions that the raw pencil line truly passes through.
+
+    Geometry alone would connect a bridge to the road below it. Shared graph
+    nodes alone would let road snapping turn a near miss into a connection.
+    Requiring both properties avoids both failures.
+    """
+    if len(raw) < 2:
+        return []
+    base_nodes = set(base_path)
+    found: list[int] = []
+    for node in drawn_path:
+        if node not in base_nodes or node in found:
+            continue
+        data = g.nodes[node]
+        if _point_on_raw_stroke((data["lat"], data["lon"]), raw):
+            found.append(node)
+
+    # A stroke can meet the middle of the very same graph edge. It is a real
+    # topological connection even though the graph has no vertex at the pen's
+    # exact crossing coordinate. Choose the closest endpoint as the insertion
+    # anchor; no unrelated crossing edge is accepted.
+    base_edges = {frozenset((u, v)): (u, v) for u, v in zip(base_path, base_path[1:])}
+    for u, v in zip(drawn_path, drawn_path[1:]):
+        edge = base_edges.get(frozenset((u, v)))
+        if edge is None:
+            continue
+        shape = graphmod.edge_points(g, u, v)
+        touched = any(
+            _segment_intersection_point(a, b, c, d) is not None
+            for a, b in zip(raw, raw[1:])
+            for c, d in zip(shape, shape[1:])
+        )
+        if not touched:
+            continue
+        for node in (u, v):
+            if node in base_nodes and node not in found:
+                found.append(node)
+    return found
+
+
+def _raw_stroke_closed(points: list[tuple[float, float]]) -> bool:
+    if len(points) < 3:
+        return False
+    if haversine_m(*points[0], *points[-1]) <= INTERSECTION_EPSILON_M:
+        return True
+    segments = list(zip(points, points[1:]))
+    for i, first in enumerate(segments):
+        for j in range(i + 2, len(segments)):
+            if i == 0 and j == len(segments) - 1:
+                continue
+            if _segment_intersection_point(*first, *segments[j]) is not None:
+                return True
+    return False
+
+
+def _route_one_stroke(g, weight, stroke: list[CourseWaypoint], *, close: bool
+                      ) -> list[int]:
+    raw = [(point.lat, point.lon) for point in stroke]
+    samples = [raw[0], *stroke_waypoints(stroke), raw[-1]]
     drawn: list[int] = []
-    for lat, lon in stroke_waypoints(
-            [CourseWaypoint(lat=lat, lon=lon) for lat, lon in points]):
+    for lat, lon in samples:
         node, snap_m = graphmod.nearest_node(lat, lon)
         if node is None or snap_m > STROKE_SNAP_MAX_M:
             continue
         if not drawn or drawn[-1] != node:
             drawn.append(node)
-    if len(drawn) < 3:
-        raise CourseError(
-            "그린 모양 가까이에 걸을 수 있는 길이 없어요. "
-            "지도에 보이는 길 위로 그려 주세요.")
-    loop = _connect_through(g, weight, drawn[0], drawn[1:], drawn[0])
-    if loop is None or len(loop) < 3:
-        raise CourseError("그린 모양을 보행로로 잇지 못했어요. 조금 더 크게 그려 주세요.")
-    trimmed = drop_backtracking(
-        loop, keep_span=lambda span: _within_drawn_corridor(g, span, points))
-    for candidate in (trimmed, loop):
-        if candidate[0] != candidate[-1]:
-            candidate = [*candidate, candidate[0]]
-        try:
-            course = course_from_path(params, candidate)
-        except CourseError:
+    if len(drawn) < 2:
+        raise CourseError("그린 선이 기존 코스와 이어지지 않았어요. 실제 코스 선과 교차하도록 이어 그려 주세요.")
+    finish = drawn[0] if close else drawn[-1]
+    via = drawn[1:] if close else drawn[1:-1]
+    routed = _connect_through(g, weight, drawn[0], via, finish)
+    if routed is None or len(routed) < 2:
+        raise CourseError("그린 선을 도보 가능한 길로 잇지 못했어요. 지도에 보이는 길 위로 다시 그려 주세요.")
+    return routed
+
+
+def snap_drawn_strokes(params: CourseParams, path: list[int],
+                       from_index: int | None, to_index: int | None,
+                       strokes: list[list[CourseWaypoint]]) -> Course:
+    """Apply independent pencil strokes without deleting untouched route edges.
+
+    An eraser gap is the only span drawing may replace. Without a gap, a
+    connected drawing is inserted as an excursion and every original directed
+    edge occurrence remains. Connections require exact geometry *and* shared
+    pedestrian-graph topology.
+    """
+    course_from_path(params, path)
+    clean = [stroke for stroke in strokes if len(stroke) >= 2]
+    if not clean:
+        raise CourseError("그린 선이 기존 코스와 이어지지 않았어요. 실제 코스 선과 교차하도록 이어 그려 주세요.")
+    g = graphmod.get_graph()
+    weight = easy_route_weight(_routing_weight_for(params), prefer_named_walkways=True)
+    current = list(path)
+    gap = None
+    if from_index is not None or to_index is not None:
+        if (from_index is None or to_index is None
+                or not 0 <= from_index < to_index < len(path)):
+            raise CourseError("지운 구간의 양 끝을 다시 확인해 주세요.")
+        gap = (from_index, to_index)
+
+    pending = list(clean)
+    if gap:
+        lo, hi = gap
+        if hi - lo > max(400, (len(path) - 1) * 3 // 4):
+            raise CourseError("한 번에 지운 구간이 너무 길어요. 더 짧게 나눠 수정해 주세요.")
+        replacement = None
+        used = None
+        for index, stroke in enumerate(pending):
+            raw = [(point.lat, point.lon) for point in stroke]
+            routed = _route_one_stroke(g, weight, stroke, close=False)
+            connections = _topological_intersection_nodes(g, path, routed, raw)
+            if path[lo] not in connections or path[hi] not in connections:
+                continue
+            a = routed.index(path[lo])
+            b = len(routed) - 1 - routed[::-1].index(path[hi])
+            if a > b:
+                routed.reverse()
+                a = routed.index(path[lo])
+                b = len(routed) - 1 - routed[::-1].index(path[hi])
+            if a < b:
+                replacement = routed[a:b + 1]
+                if not stroke_is_doubled(stroke):
+                    replacement = drop_backtracking(
+                        replacement,
+                        keep_span=lambda span: _within_drawn_corridor(g, span, raw))
+                used = index
+                break
+        if replacement is None:
+            raise CourseError(
+                "그린 선이 지운 구간의 양 끝과 실제로 이어지지 않았어요. 붉은 선 양 끝을 교차하도록 다시 그려 주세요.")
+        current = path[:lo] + replacement + path[hi + 1:]
+        pending.pop(used)
+
+    # Add every remaining stroke independently. Never flatten two strokes:
+    # flattening invents a straight connector between separate finger lifts.
+    for stroke in pending:
+        raw = [(point.lat, point.lon) for point in stroke]
+        base_points = {
+            (g.nodes[node]["lat"], g.nodes[node]["lon"])
+            for node in current
+        }
+        if all(point in base_points for point in raw):
             continue
-        return rebase_closed_course_start(course)
-    raise CourseError("그린 모양으로 순환 코스를 만들지 못했어요.")
+        closed = _raw_stroke_closed(raw)
+        routed = _route_one_stroke(g, weight, stroke, close=closed)
+        connections = _topological_intersection_nodes(g, current, routed, raw)
+        if closed:
+            if not connections:
+                raise CourseError(
+                    "그린 선이 기존 코스와 이어지지 않았어요. 실제 코스 선과 교차하도록 이어 그려 주세요.")
+            # Re-tracing the existing nodes is not a new loop. Treat it as a
+            # no-op so confirming a line drawn over green does not triple the
+            # distance with an invented duplicate traversal.
+            anchor = connections[0]
+            core = routed[:-1] if routed[0] == routed[-1] else routed
+            anchor_at = core.index(anchor)
+            loop = core[anchor_at:] + core[:anchor_at] + [anchor]
+            # Drawing over an already-present loop is a no-op. Adding it again
+            # would preserve the original technically while making the runner
+            # traverse the same course twice.
+            from collections import Counter
+            existing_edges = Counter(zip(current, current[1:]))
+            loop_edges = Counter(zip(loop, loop[1:]))
+            if not (loop_edges - existing_edges):
+                continue
+            insert_at = current.index(anchor)
+            current = current[:insert_at] + loop + current[insert_at + 1:]
+            continue
+
+        positions = [(i, node) for i, node in enumerate(routed)
+                     if node in set(connections)]
+        if len({node for _, node in positions}) < 2:
+            raise CourseError(
+                "그린 선이 기존 코스와 이어지지 않았어요. 선이 실제 코스와 두 곳에서 교차하도록 이어 그려 주세요.")
+        first_i, anchor = positions[0]
+        last_i, _ = next(item for item in reversed(positions)
+                         if item[1] != anchor)
+        if first_i > last_i:
+            first_i, last_i = last_i, first_i
+            anchor = routed[first_i]
+        addition = routed[first_i:last_i + 1]
+        excursion = addition + list(reversed(addition[:-1]))
+        insert_at = current.index(anchor)
+        current = current[:insert_at] + excursion + current[insert_at + 1:]
+
+    return course_from_path(params, current)
 
 
 def snap_drawn_segment(params: CourseParams, path: list[int],
                        from_index: int | None, to_index: int | None,
                        stroke: list[CourseWaypoint]) -> Course:
-    """Rebuild the stretch of route the runner drew over.
-
-    Two rules, both learned the hard way:
-
-    *The drawn line only has to touch the course.* It used to have to land
-    within 60m of both ends of the erased gap, which made rubbing out a spur
-    and redrawing past it fail over and over -- the gap ends are exactly the
-    place a runner is trying to get away from. The span that gets replaced is
-    now read off wherever the stroke meets the green line, and the erased gap
-    is folded in so it cannot survive the edit.
-
-    *It does not refuse.* Editing is the whole point of the screen, so every
-    failure below degrades to the best course it can still build, and says what
-    it could not honour in ``course.note``.
-    """
-    course_from_path(params, path)
-    g = graphmod.get_graph()
-    last = len(path) - 2
-    gap = None
-    if from_index is not None and to_index is not None and 0 <= from_index < to_index <= last + 1:
-        gap = (from_index, min(to_index, last + 1))
-
-    note = ""
-    # The whole drawing, however long. Trimming it to the first few kilometres
-    # threw away most of what the runner drew and told them so afterwards,
-    # which is the worst of both. Inside Seoul the line is followed to its end;
-    # the coordinate bounds on CourseWaypoint already keep it in the city.
-    points = [(point.lat, point.lon) for point in stroke]
-
-    # A closed drawing is a course in its own right. Splicing one into the
-    # short span between the two ends it happens to touch made the route run
-    # out around the shape and back again: a 고구마 drawn over a 5km loop came
-    # back as 10.4km with 48% of it walked twice.
-    walked = sum(haversine_m(a[0], a[1], b[0], b[1])
-                 for a, b in zip(points, points[1:]))
-    if (len(points) >= 8 and walked >= CLOSED_STROKE_MIN_M
-            and haversine_m(points[0][0], points[0][1],
-                            points[-1][0], points[-1][1]) <= CLOSED_STROKE_M):
-        return _course_from_closed_stroke(params, points)
-
-    # Where the stroke meets the course decides what gets replaced.
-    span = gap
-    if len(points) >= 2:
-        head, head_d = nearest_route_index(g, path, *points[0])
-        tail, tail_d = nearest_route_index(g, path, *points[-1])
-        if head > tail:
-            points.reverse()
-            head, tail = tail, head
-            head_d, tail_d = tail_d, head_d
-        lo, hi = head, max(tail, head + 1)
-        if gap:
-            lo, hi = min(lo, gap[0]), max(hi, gap[1])
-        span = (lo, hi)
-        if min(head_d, tail_d) > STROKE_TOUCH_M:
-            note = note or (
-                "그린 선이 코스 선에서 조금 떨어져 있어 가장 가까운 지점에 이었어요.")
-    if not span:
-        raise CourseError(
-            "바꿀 구간을 찾지 못했어요. 지우개로 구간을 고르거나 코스 선 위에 그려 주세요.")
-
-    lo, hi = max(0, span[0]), min(last + 1, span[1])
-    if lo >= hi:
-        lo, hi = max(0, min(lo, last - 1)), min(last + 1, max(hi, lo + 1))
-    if hi - lo > max(400, (len(path) - 1) * 3 // 4):
-        hi = lo + max(400, (len(path) - 1) * 3 // 4)
-        note = note or "한 번에 바꿀 수 있는 만큼만 반영했어요."
-
-    drawn_nodes: list[int] = []
-    if len(points) >= 2:
-        for point in stroke_waypoints(
-                [CourseWaypoint(lat=lat, lon=lon) for lat, lon in points]):
-            node, snap_m = graphmod.nearest_node(point[0], point[1])
-            if node is None or snap_m > STROKE_SNAP_MAX_M:
-                continue
-            if not drawn_nodes or drawn_nodes[-1] != node:
-                drawn_nodes.append(node)
-
-    weight = easy_route_weight(_routing_weight_for(params), prefer_named_walkways=True)
-    replacement = _connect_through(g, weight, path[lo], drawn_nodes, path[hi])
-    if replacement is None:
-        # The drawn line cannot be honoured at all. Close the gap the eraser
-        # opened rather than hand back a broken route.
-        try:
-            closed = reroute_segment(params, path, lo, hi)
-            closed.note = ("그린 길로는 이을 수 없어 지운 자리를 다른 보행로로 "
-                           "이었어요.")
-            return closed
-        except CourseError:
-            unchanged = course_from_path(params, path)
-            unchanged.note = ("이 구간을 대신할 보행로가 없어 원래 코스를 그대로 "
-                              "두었어요. 다른 구간을 지워 보세요.")
-            return unchanged
-
-    # Trimming the router's own there-and-back is an improvement, not a
-    # requirement: on a route that already doubles back on itself it can cut a
-    # junction the rest of the path needs. Prefer the trimmed line, fall back
-    # to the untrimmed one, and only then give up on the drawing.
-    candidates = [replacement]
-    if drawn_nodes and not stroke_is_doubled(
-            [CourseWaypoint(lat=lat, lon=lon) for lat, lon in points]):
-        candidates.insert(0, drop_backtracking(
-            replacement,
-            keep_span=lambda span: _within_drawn_corridor(g, span, points)))
-    for candidate in candidates:
-        try:
-            course = course_from_path(params, path[:lo] + candidate + path[hi + 1:])
-        except CourseError:
-            continue
-        course.note = note or unreached_point_note(
-            g, course.path, points[:1] + points[-1:] if len(points) >= 2 else [])
-        return course
-    try:
-        closed = reroute_segment(params, path, lo, hi)
-        closed.note = "그린 길로는 이을 수 없어 지운 자리를 다른 보행로로 이었어요."
-        return closed
-    except CourseError:
-        unchanged = course_from_path(params, path)
-        unchanged.note = "그린 선을 코스로 만들지 못해 원래 코스를 그대로 두었어요."
-        return unchanged
+    """Backward-compatible one-stroke entry point."""
+    return snap_drawn_strokes(params, path, from_index, to_index, [stroke])
 
 
 # A drawn line says where to go, not which junction to touch. Waypoints closer
@@ -841,10 +974,6 @@ STROKE_SIMPLIFY_TOLERANCE_M = 45.0
 STROKE_WAYPOINT_PER_M = 120.0
 STROKE_WAYPOINT_MIN_COUNT = 8
 STROKE_WAYPOINT_MAX = 240
-# How close a drawn line has to come to the course before it counts
-# as having touched it. Beyond this it is still joined -- to the
-# nearest point -- and the runner is told that is what happened.
-STROKE_TOUCH_M = 45.0
 # How far a drawn waypoint may sit from a walkable way before it is ignored.
 # A finger is not a surveyor and a phone's GPS-free tap has real slop.
 STROKE_SNAP_MAX_M = 220.0
@@ -993,8 +1122,6 @@ def _detour_nodes(graph, drawn: list[int], start: int, end: int) -> frozenset[in
 STROKE_CORRIDOR_M = 55.0
 # Ends this close together mean the runner drew a closed shape, and a closed
 # shape is a whole course rather than a patch on one.
-CLOSED_STROKE_M = 220.0
-CLOSED_STROKE_MIN_M = 1200.0
 # A spur the runner drew reaches somewhere. One a wobbling finger produced does
 # not: a +/-25m tremor makes out-and-backs a few tens of metres deep, and those
 # are the zigzag, not an instruction.

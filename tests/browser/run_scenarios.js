@@ -402,9 +402,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       let body = null;
       window.fetch=async(url,opts)=>{
         body=JSON.parse(opts.body);
-        return {ok:true,json:async()=>({
-          path:initialEditPath.map(q=>[...q]),geometry:initialEditGeometry.slice(),
-          length_km:4.9,note:'',summary:SUMMARY_JSON,preview_url:'#saved'})};
+        return {ok:false,json:async()=>({error:'그린 선이 지운 구간의 양 끝과 실제로 이어지지 않았어요.'})};
       };
       document.getElementById('eraserTool').click();
       fire('pointerdown',at(10));fire('pointermove',at(15));fire('pointerup',at(20));
@@ -415,13 +413,15 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       fire('pointerdown',at(13));fire('pointermove',at(15));fire('pointerup',at(17));
       document.getElementById('editSave').click();
       await new Promise(r=>setTimeout(r,60));
-      return {body,error:document.getElementById('editToastText').textContent};
+      return {body,error:document.getElementById('editToastText').textContent,
+        blue:(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#1668dc').length};
     }, SUMMARY(4.9));
-    check('a draft that misses the erased ends is still sent, not refused',
-      drawn.body && drawn.body.action === 'snap' && drawn.body.stroke.length >= 2,
+    check('a draft that misses the erased ends is checked as independent strokes',
+      drawn.body && drawn.body.action === 'snap' && drawn.body.strokes.length === 1 &&
+      drawn.body.strokes[0].length >= 2,
       JSON.stringify(drawn.body && drawn.body.action));
-    check('nothing tells the runner their line is unconnected',
-      !/이어지지|양 끝까지/.test(drawn.error), JSON.stringify(drawn.error));
+    check('an unconnected draft stays visible and is not accepted',
+      /이어지지/.test(drawn.error) && drawn.blue === 1, JSON.stringify(drawn));
     await p.close();
   }
   {
@@ -472,13 +472,15 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       return {bodies,preview};
     });
     check('a connected draft previews a walkable route before naming',
-      flow.bodies[0] && flow.bodies[0].action === 'snap' && flow.bodies[0].stroke.length >= 2 &&
+      flow.bodies[0] && flow.bodies[0].action === 'snap' &&
+      flow.bodies[0].strokes.length === 1 && flow.bodies[0].strokes[0].length >= 2 &&
       flow.preview.sheetHidden === true && flow.preview.state === 'save' &&
       flow.preview.label === '저장' && flow.preview.blue === 0 && flow.preview.red === 0,
       JSON.stringify(flow));
     check('only the reviewed snapped path is saved with a name',
       flow.bodies[1] && flow.bodies[1].action === 'save' &&
-      !('stroke' in flow.bodies[1]) && flow.bodies[1].name === 'AA런', JSON.stringify(flow.bodies));
+      !('stroke' in flow.bodies[1]) && !('strokes' in flow.bodies[1]) &&
+      flow.bodies[1].name === 'AA런', JSON.stringify(flow.bodies));
     await p.close();
   }
 
