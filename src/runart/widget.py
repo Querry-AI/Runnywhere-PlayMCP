@@ -282,14 +282,11 @@ def _section_heading(title: str, *, lead: bool) -> dict:
     already showed, and two lines of chrome per group is what made a
     three-course card scroll.
     """
-    return (
-        {"type": "Title", "value": _plain_text(title, 40), "size": "sm",
-         "color": LISTING_TEXT,
-         "maxLines": 1}
-        if lead else
-        {"type": "Text", "value": _plain_text(title, 40), "size": "sm",
-         "weight": "semibold", "color": LISTING_SECONDARY, "maxLines": 1}
-    )
+    return {
+        "type": "Title" if lead else "Text",
+        "value": _plain_text(title, 40), "size": "sm",
+        "weight": "bold", "color": "#000000", "maxLines": 1,
+    }
 
 
 def _ascent_line(course: Course) -> str:

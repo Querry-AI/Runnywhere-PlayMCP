@@ -81,6 +81,7 @@ def test_course_widget_matches_kakao_unframed_contract_and_is_deterministic():
     # The card leads with a one-line heading so the runner knows what it is.
     header = card["children"][0]
     assert header["type"] == "Title" and header["value"] == "추천 코스"
+    assert header["weight"] == "bold" and header["color"] == "#000000"
     row = card["children"][1]
     assert row["type"] == "Row"
     assert row["padding"] == {"top": "8px", "bottom": "8px"}
@@ -376,6 +377,9 @@ def test_course_widget_offers_every_alternative_as_a_full_matching_card():
     # Alternatives are introduced, not silently appended under the winner.
     assert any(child.get("value") == "다른 코스도 있어요"
                for child in _components(children, "Text"))
+    for child in children:
+        if child.get("value") in {"추천 코스", "다른 코스도 있어요"}:
+            assert child["weight"] == "bold" and child["color"] == "#000000"
     assert "야옹런" in titles[1]
     assert "낙성대역" in titles[0]
     assert "봉천역" in titles[1]
