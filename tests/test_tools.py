@@ -487,6 +487,7 @@ def test_primary_course_tool_schema_and_description_drive_selection():
     import asyncio
     tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
     tool = tools["create_seoul_running_course"]
+    assert all(server.REGISTERED_SERVICE_NAME in t.description for t in tools.values())
     course_type = tool.inputSchema["properties"]["course_type"]
     assert "course_type" in tool.inputSchema["required"]
     assert set(course_type["enum"]) == {

@@ -1643,7 +1643,7 @@ def create_seoul_running_course(
 ) -> CallToolResult:
     """Returns up to 3 distinct running courses (standard or
     animal-shaped GPS art) in ONE call with Runnywhere(러니웨어).
-    Call EXACTLY ONCE for 러닝 코스/그려줘/추천해줘, including '야간 코스 3개'.
+    Call ONCE for 러닝 코스/그려줘/추천해줘, including '야간 코스 3개'.
     Return available 1-2 courses; never repeat calls to fill 3. Only 0 is insufficient_courses.
     Parks/rivers/streams/물가: set need_facilities=['park']. Picks up to 3 of
     5 registered places, randomly without a start or nearest with a start.
@@ -1651,7 +1651,7 @@ def create_seoul_running_course(
     standard=ordinary runs; best_animal=unnamed animal art; dog/cat/rabbit/whale
     =named animal. '그려줘' alone is standard. Night: measured lighting >=0.4.
     Existing-course changes, 이 코스 근처 화장실, map/GPX and relays use other tools.
-    course_selection records ACTUAL courses; never call a rabbit a dog.
+    course_selection is factual; never call a rabbit a dog.
     Begin with assistant_text unless assistant_text_in_widget is true.
     Close with assistant_final_text verbatim, including the edit notice.
     Use actual starts, never the requested district."""
@@ -1887,6 +1887,7 @@ def extend_shape_relay(
 # Register each tool as an async offloaded wrapper (frees the event loop for
 # health checks) while keeping the sync functions above directly callable by
 # tests. offloaded() preserves the signature/docstring FastMCP needs.
+REGISTERED_SERVICE_NAME = "러니웨어:어디서든 러닝 코스 짜기! - 카카오툴"
 for _fn, _name, _title, _open_world in (
     (create_seoul_running_course, "create_seoul_running_course",
      "서울 러닝 코스 생성", True),
@@ -1906,6 +1907,9 @@ for _fn, _name, _title, _open_world in (
 ):
     mcp.add_tool(
         offloaded(_fn), name=_name,
+        # PlayMCP's refresh validator requires the registered service name,
+        # not just the short brand. Without it, old tool schemas stay active.
+        description=f"{_fn.__doc__.strip()}\n{REGISTERED_SERVICE_NAME}",
         annotations=ToolAnnotations(
             title=_title, openWorldHint=_open_world, **_RO),
     )

@@ -18,7 +18,7 @@ Mobbin MCP screens inspected:
 
 - Card root: restored after the Basic compatibility regression documented below;
   12px horizontal inset, transparent background/border override.
-- 2026-08-28 width update: change Card `size` from `md` to `full`, keeping
+- 2026-08-28 first width attempt (failed): change Card `size` from `md` to `full`, keeping
   the existing 12px internal horizontal/top padding and all row geometry.
   This fills the width allocated by the host instead of the medium card cap;
   it cannot remove margins owned by the Kakao conversation screen.
@@ -27,6 +27,18 @@ Mobbin MCP screens inspected:
   deployment and a mobile check; no DOM/style injection was used as a substitute.
   Validation: widget, course-response and park-preset tests all passed (140 tests,
   39.15s); `git diff --check` passed.
+- Subsequent incident: the deployed endpoint returned Card/full (7,727 bytes)
+  for 하이디라오 서초점/dog, but a fresh signed-in Kakao Preview conversation
+  displayed Markdown only. Upstream schema acceptance is not Kakao validation.
+  Replace `full` with `lg`, retaining the working Card structure and inner
+  padding. This candidate still needs redeployment and live verification.
+  Kakao's supplied development guide (2026-08-03, pp. 3–5, 10) requires a
+  widget envelope in content[0], no status, copy_text, and target URL payloads;
+  it does not establish that this deployed renderer accepts every upstream size.
+- PlayMCP's saved tool description was also stale. Refreshing it failed because
+  every description must contain the complete registered service name. Add
+  that exact name without changing the registration, while staying under 1,024
+  characters. No console changes have been saved yet.
 - Thumbnail: retain 88 × 88, unframed, medium corner radius; image/text gap 8px.
 - Tags: soft blue `info` badges, small and pill-shaped, 4px gaps, whole-tag wrapping.
 - Course title: small semibold Text (14px), one line, dark-mode #f5f5f5 / light-mode #202020.
