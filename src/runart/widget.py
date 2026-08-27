@@ -109,8 +109,10 @@ def _validate_envelope(payload: dict) -> None:
     card = payload["widget"]
     if not isinstance(card, dict) or card.get("type") != "Card":
         raise WidgetBuildError("widget must be a Card")
-    if set(card) != {"type", "children", "size", "padding"}:
+    if set(card) != {"type", "children", "size", "padding", "border", "background"}:
         raise WidgetBuildError("unsupported Card properties")
+    if card["border"] != 0 or card["background"] != "transparent":
+        raise WidgetBuildError("course listings must be borderless and transparent")
     children = card.get("children")
     if not isinstance(children, list) or not children:
         raise WidgetBuildError("widget Card must have children")
@@ -294,11 +296,11 @@ def _course_card_row(course: Course, course_id: str, origin: str,
                 "children": [
                     {"type": "Caption", "value": _character_line(facts), "size": "sm", "maxLines": 2},
                     {"type": "Title", "value": title, "size": "md", "weight": "semibold", "maxLines": 2},
-                    {"type": "Text", "value": _effort_line(course), "size": "md", "weight": "bold", "maxLines": 1},
                     {
                         "type": "Row", "gap": "sm", "align": "center",
                         "children": [
-                            {"type": "Col", "flex": 1, "children": [
+                            {"type": "Col", "gap": "xs", "flex": 1, "children": [
+                                {"type": "Text", "value": _effort_line(course), "size": "md", "weight": "bold", "maxLines": 2},
                                 {"type": "Caption", "value": _ascent_line(course), "size": "sm", "maxLines": 1},
                             ]},
                             button,
@@ -341,11 +343,8 @@ def build_course_widget(
         _course_card_row(course, course_id, origin, primary_note),
     ]
     if alternatives:
-        children.append({"type": "Divider", "spacing": "xs"})
         children.append(_section_heading("다른 코스도 있어요", lead=False))
-        for index, choice in enumerate(alternatives):
-            if index:
-                children.append({"type": "Divider", "spacing": "xs"})
+        for choice in alternatives:
             children.append(_course_card_row(
                 choice.course, choice.course_id, origin, choice.match_note
             ))
@@ -371,6 +370,9 @@ def build_course_widget(
     return _serialize({
         "widget": {
             "type": "Card", "size": "md", "padding": "md",
+            # Explicitly override ChatKit's default card surface. Kakao
+            # host-renderer parity still needs checking in its Preview.
+            "border": 0, "background": "transparent",
             "children": children,
         },
         "copy_text": copy_text,

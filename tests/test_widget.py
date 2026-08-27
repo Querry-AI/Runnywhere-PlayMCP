@@ -75,6 +75,8 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
 
     card = payload["widget"]
     assert card["size"] == "md" and card["padding"] == "md"
+    assert card["border"] == 0 and card["background"] == "transparent"
+    assert not _components(card, "Divider")
     # The card leads with a one-line heading so the runner knows what it is.
     header = card["children"][0]
     assert header["type"] == "Title" and header["value"] == "추천 코스"
@@ -96,13 +98,13 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     }
     assert overview["type"] == "Col"
     assert [child["type"] for child in overview["children"]] == [
-        "Caption", "Title", "Text", "Row",
+        "Caption", "Title", "Row",
     ]
     assert "평지 위주" in overview["children"][0]["value"]
     assert overview["children"][1]["value"] == "🐶 강남역 댕댕런"
-    assert overview["children"][2]["value"] == "9.0km · 약 63분"
-    assert overview["children"][2]["weight"] == "bold"
-    footer = overview["children"][3]
+    footer = overview["children"][2]
+    assert _components(footer, "Text")[0]["value"] == "9.0km · 약 63분"
+    assert _components(footer, "Text")[0]["weight"] == "bold"
     assert _components(footer, "Caption")[0]["value"] == f"오르막 {course.ascent_m:.0f}m"
     assert footer["children"][-1] is action
     # Distance pairs with time, not ascent: time is what a runner plans around.
@@ -512,7 +514,7 @@ def test_card_rows_read_as_a_listing_not_a_stack_of_paragraphs():
         column = row["children"][1]
         # Reference: badges, title, bold effort, ascent beside the action.
         assert [child["type"] for child in column["children"]] == [
-            "Caption", "Title", "Text", "Row",
+            "Caption", "Title", "Row",
         ]
         assert column["children"][0]["maxLines"] == 2
         assert column["children"][-1]["children"][-1]["type"] == "Button"
