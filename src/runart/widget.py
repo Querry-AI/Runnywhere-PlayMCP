@@ -400,6 +400,8 @@ def build_course_widget(
                 choice.course, choice.course_id, origin, choice.match_note
             ))
 
+    children.append({"type": "Text", "value": COURSE_EDIT_NOTICE, "size": "sm"})
+
     copy_title = _copy_value(title, 80)
     copy_location = _copy_value(location, 120)
     copy_lines = [

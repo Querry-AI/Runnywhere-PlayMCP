@@ -60,13 +60,11 @@ def test_failed_shape_does_not_poison_another_animal_or_standard_course():
     standard_text = standard.content[0].text
     rabbit_guidance = rabbit.structuredContent["assistant_text"]
     standard_guidance = standard.structuredContent.get("assistant_text", "")
-    # The rabbit answer keeps its own failure scoped to the rabbit, and now
-    # proves it by offering the other choices in the same response.
+    # Each named animal stays that animal, even when its real start moves.
     assert "토끼" in rabbit_guidance and "일반 코스만 가능" not in rabbit_guidance
     assert '"widget"' in rabbit_text and "/c/" in rabbit_text
-    assert "댕댕런" in rabbit_text or "야옹런" in rabbit_text or "고래런" in rabbit_text
-    # A same-start alternative now outranks relocating for the requested shape.
-    assert rabbit.structuredContent["result_code"] == "course_ready"
+    assert "깡총런" in rabbit_text
+    assert rabbit.structuredContent["result_code"] == "nearby_course_ready"
     assert '"widget"' in dog_text and "/c/" in dog_text and "댕댕런" in dog_text
     if standard.structuredContent["result_code"] == "insufficient_courses":
         assert standard.structuredContent["available_count"] == 0
@@ -92,7 +90,7 @@ def test_p4_night_runner():
 # 모호/무리 입력 — 거절이 아니라 안내여야 한다
 @pytest.mark.parametrize("kwargs,expect", [
     (dict(location=None), "출발 위치"),                      # 위치 없음
-    (dict(location="아무데나요"), "찾지 못했"),                # 지오코딩 실패
+    (dict(location="아무데나요"), "구 이름만"),               # 범위는 지오코딩하지 않음
     (dict(location="시청", shape="dragon"), "추후 업데이트 예정"),  # 미지원 모양
 ])
 def test_failures_guide_next_action(kwargs, expect):

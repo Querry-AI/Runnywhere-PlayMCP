@@ -13,8 +13,10 @@ import functools
 import html
 import asyncio
 import logging
+import math
 import multiprocessing
 import os
+from collections import Counter
 import re
 import threading
 import time
@@ -32,6 +34,7 @@ from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, R
 
 from . import graph as graphmod
 from .animal_presets import (MISSING as PRESET_MISSING, PresetMatch,
+                             all_verified_animal_presets,
                              animal_preset_is_blocked,
                              find_nearby_animal_presets,
                              find_nearest_animal_preset, get_animal_preset,
@@ -40,17 +43,19 @@ from .course import (MAX_VIA_POINTS, Course, CourseAccessError, CourseError,
                      DistanceMissError, course_from_path,
                      ensure_course_runnable, generate_course, reroute_segment,
                      route_via_points, snap_drawn_segment, snap_drawn_strokes)
-from .courseplan import (CASE_EXACT, RECOMMENDATION_COUNT, SAME_START_M,
+from .courseplan import (CASE_EXACT, EFFORT_TOLERANCE, KIND_REQUESTED, NEARBY_RADIUS_M,
+                         RECOMMENDATION_COUNT, SAME_START_M,
                          CourseChoice, CoursePlan, build_course_plan, requested_distance,
                          route_signature)
 from .facilities import LABELS_KO, facilities_along
-from .geocode import resolve_location
+from .geocode import (DISTRICT_STATIONS, STATION_DISTRICTS, district_scope,
+                      is_citywide_scope, resolve_location)
 from .geo import haversine_m
 from .gpx import to_gpx
 from .exploration import (atlas_html, create_relay, decode_relay,
                           passport_html, home_html, legal_html, record_run,
                           relay_html)
-from .models import (COURSE_NAME_MAX_CHARS, CourseParams, CourseWaypoint,
+from .models import (COURSE_NAME_MAX_CHARS, FACILITY_TYPES, CourseParams, CourseWaypoint,
                      DEFAULT_PACE_MIN_PER_KM, decode_course_id,
                      decode_shape_token, encode_course_id)
 from .render import (card_svg, course_edit_summary, course_markdown,
@@ -79,18 +84,26 @@ LOCATION_FIELD_KO = (
     "사용자가 말한 서울 내 출발 위치를 한 글자도 추론하지 말고 그대로 전달하세요. "
     f"{LOCATION_FORMS_KO}를 모두 지원합니다. "
     "사용자가 상호명이나 주소를 말했다면 가까운 역 이름으로 바꾸지 말고 말한 그대로 넘기세요. "
-    "대화에 출발지가 없으면 임의 위치를 만들지 말고 사용자에게 물어보며, 이 툴을 "
-    "호출하지 마세요. 단, 공원·강변·하천·물가 추천(need_facilities에 park)은 "
-    "출발지 없이 바로 호출하세요: 등록된 5곳 중 조건에 맞는 최대 3곳을 무작위로 반환합니다. "
-    "출발지가 있으면 가까운 순으로 최대 3곳을 고릅니다. lat/lon을 모두 전달해도 생략 가능합니다."
+    "대화에 출발지가 없으면 임의 위치를 지어내지 말고 생략한 채로 호출하세요. "
+    "거리·동물·야간 조건만으로는 출발지를 대신할 수 없어 서버가 되묻습니다(missing). "
+    "'서울 시내', '아무데나'도 그대로 전달하면 되묻습니다. "
+    "구 이름(강남구, 마포구)은 유효한 범위(district)이며 그 구의 출발지로 최대 3개를 고릅니다. "
+    "역·주소·상호명은 specific입니다. 공원 요청은 출발지 없이 바로 호출할 수 있습니다. "
+    "lat/lon을 모두 전달해도 생략 가능합니다."
 )
 LOCATION_FIELD_EN = (
     "Exact Seoul start place stated by the user: a subway station, a shop or "
     "building name, a road-name address, or a lot-number address. Pass it "
     "verbatim -- do not substitute a nearby station for a shop name or "
-    "address. Never infer, invent, or default a missing location; ask the "
-    "user instead. Exception: park/waterside recommendations with need_facilities=['park'] "
-    "may omit a start for three random registered destinations; an explicit start ranks them by proximity."
+    "address. Never invent a location: when the user did not state one, omit "
+    "this field and call: missing or city-wide wording (서울 시내, 아무데나) "
+    "asks for a start. A Seoul district (강남구) is a valid district scope; "
+    "a named place/address is specific. Only park requests can omit a start."
+)
+REFINE_LOCATION_FIELD_EN = (
+    "Specific new Seoul start: station, shop/building, road-name or lot-number address. "
+    "Pass it verbatim; never invent or substitute a nearby station. "
+    "District-only or city-wide wording is not a specific replacement start."
 )
 
 
@@ -134,13 +147,14 @@ mcp = FastMCP(
         "substitute poorly lit or unknown-lighting routes. Do not claim safety "
         "merely because night_mode was requested. "
         "Use this tool for 러닝 코스/달리기 코스/그려줘/짜줘/만들어줘/추천해줘/GPS 아트 "
-        "with an explicit Seoul start place or both coordinates for ordinary runs. "
+        "with a Seoul district (district), a specific place/address or both coordinates (specific). "
         "Exception: park/waterside requests set need_facilities=['park'] and may omit "
         "a start: the server picks up to 3 eligible registered destinations randomly. With a "
         "start, it picks up to 3 nearest eligible places; do not preselect or call 3 times. "
         "Copy an explicit start exactly; never invent, infer, "
-        "or substitute a location. If it is missing, ask the user for the "
-        "start and do not call a course tool, except the park/waterside case above. A location-only reply is valid "
+        "or substitute a location. If it is missing, omit location and call once; "
+        "the server asks for a start (missing_start), even with distance/animal/night conditions. "
+        "Pass city-wide wording (서울 시내, 아무데나) unchanged; it also means missing. A location-only reply is valid "
         "only immediately after the user established course-creation intent "
         "or was asked for the missing start. Use standard for ordinary runs, "
         "best_animal only for animal/GPS-art requests without a named animal, "
@@ -150,9 +164,9 @@ mcp = FastMCP(
         "explicitly asks for 공원, 강변, 한강, 하천, 호수, 물가, 수변 or 물 보면서 running. "
         "These all use the same five-destination catalogue. Drinking water/음수대 "
         "uses water, not park. Never infer park mode merely from nearby green space. "
-        "(2) Existing-course changes use refine_course. (3) Questions about 화장실, 편의점, 물, "
-        "공원, or facilities near the current course use "
-        "find_facilities_near_course with its most recent course_id. (4) "
+        "(2) Direct users to the linked web editor for changes. refine_course and "
+        "find_facilities_near_course require an explicitly supplied valid course_id; "
+        "never infer an ID from an earlier widget or assume it survived in context. (3) "
         "Requests to show the same summary, map, or GPX use get_course_status. "
         "Never regenerate a course for rules 2-4. Never claim that a Seoul "
         "course is unsupported before the appropriate new-course call. When "
@@ -164,7 +178,7 @@ mcp = FastMCP(
         "repeat it, and do not copy that guidance into the card. "
         "For closing prose use structuredContent.assistant_final_text verbatim, "
         "as the complete closing response, without extra paraphrases or a completion claim. "
-        "Always end a course response with '러닝 코스는 직접 수정할 수 있어요.'. "
+        f"Always end a successful course response with '{COURSE_EDIT_NOTICE}'. "
         "Describe locations only from course_selection.actual_start_names. A requested "
         "district or park_selection.origin is a search reference, not proof that the "
         "returned routes are inside that district or start at that origin. Never say "
@@ -430,6 +444,7 @@ def _mcp_result(text: str, *, code: str, is_error: bool = False,
     structured = {
         "result_code": code,
         "retryable": retryable,
+        "release_sha": RELEASE_SHA,
     }
     if assistant_text:
         # Kakao reads the widget envelope from content[0]. Keep that position;
@@ -574,24 +589,10 @@ def _plain_course_here(probe: CourseParams, distance_km: float | None,
             "shape": None, "distance_km": distance_km or 5.0})
     except ValidationError:
         return None
-    started = time.monotonic()
     try:
         return _get_course(params, timeout_s=timeout_s)
-    except _GenerationTimeout:
+    except (CourseError, _GenerationTimeout):
         return None
-    except CourseError:
-        # Preferences are optional: never change start or requested effort to
-        # make a park/hill preference fit. Retry the same request without them.
-        remaining = timeout_s - (time.monotonic() - started)
-        if remaining < PLAIN_OPTION_MIN_BUDGET_S or not (
-                params.include_hills or params.need_facilities):
-            return None
-        relaxed = params.model_copy(update={
-            "include_hills": False, "need_facilities": []})
-        try:
-            return _get_course(relaxed, timeout_s=remaining)
-        except (CourseError, _GenerationTimeout):
-            return None
 
 
 def _exact_animal_course(text: str, shape: str,
@@ -618,21 +619,36 @@ def _exact_animal_course(text: str, shape: str,
 def _standard_alternatives(probe: CourseParams, standard: Course | None,
                            timeout_s: float) -> list[PresetMatch]:
     """Find distinct routes in one tool budget, keeping start/effort/preferences."""
-    started = time.monotonic()
-    seen = {route_signature(standard)} if standard is not None else set()
+    if standard is None or timeout_s < PLAIN_OPTION_MIN_BUDGET_S:
+        return []
+    seen = {route_signature(standard)}
     matches: list[PresetMatch] = []
     # Try opposite directions first. A route's variant travels in its ID so
     # map/GPX restoration does not silently revert to the primary route.
-    for variant in (2, 4, 6, 1, 3, 5, 7):
-        if len(matches) + int(standard is not None) >= RECOMMENDATION_COUNT:
-            break
-        remaining = timeout_s - (time.monotonic() - started)
-        if remaining < PLAIN_OPTION_MIN_BUDGET_S:
-            break
-        course = _plain_course_here(
-            probe.model_copy(update={"route_variant": variant}),
-            probe.distance_km, remaining)
-        if course is None:
+    probes = {variant: probe.model_copy(update={"shape": None, "route_variant": variant})
+              for variant in (2, 4, 6)}
+    courses = {}
+    missing = {}
+    for variant, params in probes.items():
+        cid = encode_course_id(params)
+        with _CACHE_LOCK:
+            cached = _course_cache.get(cid)
+        if isinstance(cached, CourseError):
+            continue
+        course = _cached_course(cid)
+        if course is not None:
+            courses[variant] = course
+        else:
+            missing[variant] = params
+    if missing:
+        generated = _offload_map(generate_course, missing, timeout_s=timeout_s)
+        for variant, course in generated.items():
+            if isinstance(course, Course):
+                _cache_put(encode_course_id(probes[variant]), course)
+        courses.update(generated)
+    for variant in probes:
+        course = courses.get(variant)
+        if not isinstance(course, Course):
             continue
         if probe.night_mode and not has_sufficient_night_lighting(course.rfs):
             continue
@@ -650,7 +666,7 @@ def _animal_course_plan(request: dict, shape: str, text: str,
     started = time.monotonic()
     target = requested_distance(request.get("distance_km"), request.get("duration_min"))
     try:
-        lat, lon, name = resolve_location(
+        lat, lon, name = request.get("_resolved") or _resolve_start(
             request.get("location"), request.get("lat"), request.get("lon"),
             timeout_s=min(timeout_s, ADDRESS_TRY_BUDGET_S))
         probe = CourseParams(
@@ -668,28 +684,37 @@ def _animal_course_plan(request: dict, shape: str, text: str,
     standard = next((c for c in cached if c.params.shape is None and
                      haversine_m(lat, lon, c.params.lat, c.params.lon) < SAME_START_M
                      and (not probe.night_mode or has_sufficient_night_lighting(c.rfs))), None)
-    if standard is None:
-        standard = _plain_course_here(
-            probe, target, max(0, timeout_s - (time.monotonic() - started)))
+    # No base route means no variants: never spend the remaining budget
+    # re-running an already failed standard generation.
+    if shape == "standard" and standard is None:
+        return None
+    if shape == "standard" and not _eligible_matches([PresetMatch(standard, 0)], request, shape):
+        return None
     # Do not preselect by nearest shape: the closest preset may be 12km for a
     # 5km ask. Rank every available candidate by actual start and route length.
     # The preset lookup treats preferences as exclusions; the card planner
     # must instead keep these candidates and assess their measured features.
     preset_probe = probe.model_copy(update={
         "include_hills": False, "night_mode": False, "need_facilities": []})
-    animals = _any_animal_matches(preset_probe, PRESET_SEARCH_RADIUS_M) if shape != "standard" else []
+    animals = [] if probe.night_mode else _any_animal_matches(preset_probe, NEARBY_RADIUS_M)
     animals.extend(PresetMatch(c, haversine_m(lat, lon, c.params.lat, c.params.lon))
                    for c in cached if c.params.shape)
-    if probe.night_mode:
-        animals = [match for match in animals if has_sufficient_night_lighting(match.course.rfs)]
+    animals = _eligible_matches(animals, request, shape, allow_animal_alternatives=shape == "standard")
+    if shape != "standard":
+        standard = None
     standards = []
-    if shape == "standard" or len(animals) + int(standard is not None) < RECOMMENDATION_COUNT:
-        standards = _standard_alternatives(
-            probe, standard, max(0, timeout_s - (time.monotonic() - started)))
+    # Count distinct roads, not duplicate presets, before deciding whether
+    # the two remaining slots need CPU work.
+    signatures = {route_signature(m.course) for m in animals}
+    if standard is not None:
+        signatures.add(route_signature(standard))
+    if shape == "standard" and len(signatures) < RECOMMENDATION_COUNT:
+        standards = _eligible_matches(_standard_alternatives(
+            probe, standard, max(0, timeout_s - (time.monotonic() - started))), request, shape)
     plan = build_course_plan(
         requested_name=name,
         shape=shape,
-        exact=_exact_animal_course(text, shape, lat, lon) if shape in SHAPES else None,
+        exact=None,  # Cached exact animals are already measured/filtered above.
         shape_matches=[], animal_matches=animals, standard=standard,
         standard_matches=standards,
         distance_km=request.get("distance_km"), duration_min=request.get("duration_min"),
@@ -766,12 +791,19 @@ def _plan_final_text(selection: dict) -> str:
     return prefix + "\n\n" + "\n\n".join(_course_summary(c) for c in choices) + f"\n\n{COURSE_EDIT_NOTICE}"
 
 
-def _recommendation_shortage(count: int, *, night_mode: bool = False) -> CallToolResult:
+def _recommendation_shortage(count: int, *, night_mode: bool = False,
+                             district: str | None = None) -> CallToolResult:
     condition = "가로등 데이터가 야간 최소 기준을 충족하는 " if night_mode else "서로 다른 "
+    text = f"현재 조건에서 {condition}코스를 찾지 못했어요. 출발지나 거리 조건을 조정해 다시 요청해 주세요."
+    if night_mode:
+        counts = Counter(_course_district(c) for c in all_verified_animal_presets()
+                         if has_sufficient_night_lighting(c.rfs))
+        alternatives = sorted((d for d in counts if d and d != district), key=lambda d: (-counts[d], d))[:3]
+        text = f"{district + '에서는' if district else '이 출발지에서는'} 조명이 확인된 야간 코스를 찾지 못했어요. 야간 최소 기준에 못 미치거나 조명이 미확인인 코스는 제외했어요."
+        if alternatives:
+            text += "\n" + ", ".join(alternatives) + " 쪽에는 조명이 확인된 코스가 있어요. 다른 거리·시설 조건도 맞는지는 새 요청에서 확인해요."
     incomplete = _mcp_result(
-        f"현재 조건에서 {condition}코스를 찾지 못했어요. "
-        + ("조명이 부족하거나 확인되지 않은 코스는 야간 추천에서 제외했어요. " if night_mode else "")
-        + "출발지나 거리 조건을 조정해 다시 요청해 주세요.",
+        text,
         code="insufficient_courses", is_error=True, retryable=False)
     incomplete.structuredContent.update(
         requested_count=RECOMMENDATION_COUNT, available_count=count,
@@ -844,19 +876,22 @@ def _plan_result(plan: CoursePlan, course_type: str) -> CallToolResult:
 def _park_course_result(request: dict, course_type: str = "standard") -> CallToolResult:
     """Serve up to three eligible catalogue destinations, without routing."""
     location = request.get("location")
+    district = request.get("_district")
     has_coordinates = request.get("lat") is not None or request.get("lon") is not None
     # A theme is not a secretly defaulted departure at 여의도.
     generic = {"공원", "한강", "한강공원", "강변", "하천", "물", "물가", "수변", "호수", "서울"}
-    named_start = bool(location and location.strip() and location.replace(" ", "") not in generic)
+    named_start = bool(location and location.strip() and not district
+                       and not is_citywide_scope(location) and location.replace(" ", "") not in generic)
     origin = None
     origin_name = None
     if named_start or has_coordinates:
         try:
-            lat, lon, origin_name = resolve_location(
+            lat, lon, origin_name = _resolve_start(
                 location, request.get("lat"), request.get("lon"), timeout_s=ADDRESS_TRY_BUDGET_S)
             origin = (lat, lon)
         except CourseError as exc:
-            return _mcp_result(f"⚠️ {exc}", code="location_not_found", is_error=True)
+            code = "invalid_coordinates" if "서울 지역 좌표만" in str(exc) else "location_not_found"
+            return _mcp_result(f"⚠️ {markdown_text(str(exc))}", code=code, is_error=True)
     distance = request.get("distance_km")
     duration = request.get("duration_min")
     if ((distance is not None and not 1 <= distance <= 42.195)
@@ -865,13 +900,30 @@ def _park_course_result(request: dict, course_type: str = "standard") -> CallToo
                            code="invalid_request", is_error=True)
     night = bool(request.get("night_mode"))
     try:
-        selected = select_park_courses(origin, night_mode=night)
+        catalogue = list(park_courses())
+        if district:
+            catalogue = [(s, c) for s, c in catalogue if s.district == district]
+        # Park is the destination category, not a request for a nearby POI.
+        # Other explicitly requested facilities still need actual 10m hits.
+        park_request = {**request, "need_facilities": [k for k in request.get("need_facilities", []) if k != "park"]}
+        eligible = _eligible_matches([PresetMatch(c, 0) for _, c in catalogue], park_request,
+                                     "standard" if course_type == "best_animal" else course_type)
+        for key in ("_stats", "_seen_candidates"):
+            request[key] = park_request[key]
+        ids = {encode_course_id(m.course.params) for m in eligible}
+        candidates = [(s, c) for s, c in catalogue if encode_course_id(c.params) in ids]
+        if district:
+            # District results are deterministic; the no-start legacy park
+            # catalogue alone retains its existing random destination picks.
+            selected = sorted(candidates, key=lambda pair: pair[0].id)[:RECOMMENDATION_COUNT]
+        else:
+            selected = select_park_courses(origin, night_mode=night, candidates=candidates)
     except (CourseError, OSError, ValueError, RuntimeError, KeyError) as exc:
         log.warning("park catalogue unavailable: %s", exc)
         return _mcp_result("등록된 공원·강변 코스 데이터를 확인하지 못했어요. 잠시 후 다시 요청해 주세요.",
                            code="park_catalog_unavailable", is_error=True, retryable=False)
     if not selected:
-        return _recommendation_shortage(len(selected), night_mode=night)
+        return _recommendation_shortage(len(selected), night_mode=night, district=district)
     choices = []
     destinations = []
     for spot, template in selected:
@@ -888,16 +940,9 @@ def _park_course_result(request: dict, course_type: str = "standard") -> CallToo
     lead = "각 공원·강변에서 출발하는 코스를 추천해요."
     if night:
         lead += " 야간 조명이 많은 코스만 포함했어요."
-    if distance is not None or duration is not None:
-        requested = f"{distance:g}km" if distance is not None else f"{duration:g}분"
-        lead += f" 등록된 고정 코스라 요청 조건({requested})과 실제 거리·시간이 다를 수 있어요."
-    if course_type != "standard":
-        lead += " 이번 추천은 동물 모양이 아닌 공원·강변 일반 코스예요."
-    if request.get("include_hills") or set(request.get("need_facilities") or []) - {"park"}:
-        lead += " 추가 오르막·시설 조건의 충족 여부는 각 코스 정보에서 확인해 주세요."
     result = _plan_result(CoursePlan("park_catalog", lead, choices[0], tuple(choices[1:])), course_type)
     result.structuredContent["park_selection"] = {
-        "mode": "nearest" if origin else "random", "distance_basis": "straight_line_to_course_start",
+        "mode": "district" if district else "nearest" if origin else "random", "distance_basis": "straight_line_to_course_start",
         "origin": {"name": origin_name, "lat": origin[0], "lon": origin[1]} if origin else None,
         "catalog_size": len(PARK_SPOTS), "destinations": destinations,
         "requested_location": location,
@@ -907,18 +952,210 @@ def _park_course_result(request: dict, course_type: str = "standard") -> CallToo
     return _complete_recommendation(result, night_mode=night)
 
 
+StartScope = Literal["missing", "district", "specific", "invalid_coordinates"]
+
+
+def _classify_start_scope(request: dict) -> StartScope:
+    if request.get("lat") is not None and request.get("lon") is not None:
+        return "specific"
+    if request.get("lat") is not None or request.get("lon") is not None:
+        return "invalid_coordinates"
+    location = request.get("location")
+    if not location or not location.strip() or is_citywide_scope(location):
+        return "missing"
+    return "district" if district_scope(location) else "specific"
+
+
+def _course_district(course: Course) -> str | None:
+    for spot in PARK_SPOTS:
+        if course.params.location_name == spot.name and course.params.manual_path:
+            return spot.district
+    return STATION_DISTRICTS.get((round(course.params.lat, 5), round(course.params.lon, 5)))
+
+
+def _eligible_matches(matches: list[PresetMatch], request: dict, course_type: str,
+                      *, allow_animal_alternatives: bool = False) -> list[PresetMatch]:
+    """Hard gates at the recommendation boundary; never mutate preset IDs."""
+    target = requested_distance(request.get("distance_km"), request.get("duration_min"))
+    district = request.get("_district")
+    stats = request.setdefault("_stats", {"candidate_count": 0, "eligible_count": 0,
+                                          "rejection_counts": Counter()})
+    seen = request.setdefault("_seen_candidates", set())
+    eligible = []
+    for match in matches:
+        course = match.course
+        if request.get("_resolved"):
+            lat, lon, _ = request["_resolved"]
+            match = PresetMatch(course, haversine_m(lat, lon, course.params.lat, course.params.lon))
+        reasons = []
+        if district and _course_district(course) != district:
+            reasons.append("district")
+        if match.distance_m > NEARBY_RADIUS_M:
+            reasons.append("start_distance")
+        if target and abs(course.length_km - target) / target > EFFORT_TOLERANCE + 1e-9:
+            reasons.append("distance")
+        hills = request.get("include_hills")
+        if hills is not None and course.is_flat == hills:
+            reasons.append("terrain")
+        if request.get("night_mode") and not has_sufficient_night_lighting(course.rfs):
+            reasons.append("lighting")
+        # A daytime animal preset cannot acquire night parameters: its URL
+        # would regenerate a different route after cache eviction/restart.
+        if request.get("night_mode") and course.params.shape and not course.params.night_mode:
+            reasons.append("night_animal")
+        actual = course.params.shape or "standard"
+        if (course_type == "best_animal" and actual == "standard"
+                or course_type != "best_animal" and actual != course_type
+                and not (course_type == "standard" and allow_animal_alternatives)):
+            reasons.append("shape")
+        facilities = sorted(set(request.get("need_facilities") or []))
+        if facilities:
+            # No result-list truncation: the 25th restroom must not hide the
+            # first drinking fountain. Use the same road geometry as the map.
+            found = {f["type"] for f in facilities_along(route_points(course), facilities, limit=None)}
+            reasons.extend(kind for kind in facilities if kind not in found)
+        cid = encode_course_id(course.params)
+        if cid not in seen:
+            seen.add(cid)
+            stats["candidate_count"] += 1
+            stats["rejection_counts"].update(reasons)
+            stats["eligible_count"] += int(not reasons)
+        if not reasons:
+            eligible.append(match)
+    return eligible
+
+
+def _district_course_result(request: dict, course_type: str) -> CallToolResult:
+    district = request["_district"]
+    pool = [c for c in all_verified_animal_presets() if _course_district(c) == district]
+    night = bool(request.get("night_mode"))
+    if course_type != "standard" and not night:
+        eligible = _eligible_matches([PresetMatch(c, 0) for c in pool], request, course_type)
+        eligible.sort(key=lambda m: (-(m.course.shape_similarity or 0),
+                                     m.course.length_km, encode_course_id(m.course.params)))
+        choices = []
+        seen = set()
+        for match in eligible:
+            course = match.course
+            signature = route_signature(course)
+            name = course.params.location_name
+            if signature in seen or name in seen:
+                continue
+            seen.update((signature, name))
+            cid = encode_course_id(course.params)
+            _cache_put(cid, course)
+            choices.append(CourseChoice(course, cid, KIND_REQUESTED))
+            if len(choices) == RECOMMENDATION_COUNT:
+                break
+        if not choices:
+            return _recommendation_shortage(0)
+        return _plan_result(CoursePlan("district", f"{district} 안의 출발지에서 조건에 맞는 코스를 골랐어요.",
+                                       choices[0], tuple(choices[1:])), course_type)
+    stations = DISTRICT_STATIONS[district]
+    if night:
+        lit_points = Counter((round(c.params.lat, 5), round(c.params.lon, 5))
+                             for c in pool if has_sufficient_night_lighting(c.rfs))
+        stations = [s for s in stations if (round(s[0], 5), round(s[1], 5)) in lit_points]
+        stations = sorted(stations, key=lambda s: (-lit_points[(round(s[0], 5), round(s[1], 5))], s[2], s[:2]))
+    else:
+        stations = sorted(stations, key=lambda s: (s[2], s[:2]))
+    if not stations:
+        return _recommendation_shortage(0, night_mode=night, district=district)
+    # ponytail: one deterministic station, no cross-district retries; expand
+    # only after measured coverage justifies spending another routing budget.
+    lat, lon, name = stations[0]
+    request.update(location=name, lat=lat, lon=lon, _resolved=(lat, lon, name))
+    return _specific_course_result(request, course_type)
+
+
+def _specific_course_result(request: dict, course_type: str) -> CallToolResult:
+    started = time.monotonic()
+    try:
+        lat, lon, name = request.get("_resolved") or _resolve_start(
+            request.get("location"), request.get("lat"), request.get("lon"),
+            timeout_s=ADDRESS_TRY_BUDGET_S)
+    except CourseError as exc:
+        return _course_tool_result(f"⚠️ {markdown_text(str(exc))}", course_type=course_type, request=request)
+    request.update(_resolved=(lat, lon, name))
+    common = {k: request.get(k) for k in ("location", "lat", "lon", "distance_km",
+              "duration_min", "include_hills", "night_mode", "need_facilities")}
+    common["include_hills"] = bool(common["include_hills"])
+    common["night_mode"] = bool(common["night_mode"])
+    common.update(location=name, lat=lat, lon=lon)
+    text = (generate_running_course(**common) if course_type == "standard" else
+            _animal_text_for_cards(shape=None if course_type == "best_animal" else course_type, **common))
+    return _course_tool_result(text, course_type=course_type, request=request,
+                               timeout_s=_budget_left(started))
+
+
+def _dispatch_course_request(course_type: str, request: dict) -> CallToolResult:
+    """All three public tool names share validation, selection and telemetry."""
+    started = time.monotonic()
+    request = dict(request)
+    scope = _classify_start_scope(request)
+    district = district_scope(request.get("location")) if scope == "district" else None
+    request["_district"] = district
+    valid_effort = all(value is None or isinstance(value, (int, float)) and not isinstance(value, bool)
+                       and math.isfinite(value) and lo <= value <= hi
+                       for value, lo, hi in ((request.get("distance_km"), 1, 42.195),
+                                            (request.get("duration_min"), 10, 360)))
+    result = None
+    try:
+        if scope == "invalid_coordinates":
+            result = _mcp_result("위도와 경도를 함께 알려주세요.", code="invalid_coordinates", is_error=True)
+        elif course_type not in {*SHAPES, "standard", "best_animal"}:
+            result = _mcp_result("일반 코스 또는 강아지·고양이·토끼·고래를 골라 주세요.", code="invalid_request", is_error=True)
+        elif not valid_effort:
+            result = _mcp_result("거리는 1~42.195km, 시간은 10~360분 범위로 알려주세요.", code="invalid_request", is_error=True)
+        elif set(request.get("need_facilities") or []) - set(FACILITY_TYPES):
+            result = _mcp_result("편의점·화장실·음수대·공원 중 필요한 시설을 알려주세요.", code="invalid_request", is_error=True)
+        elif "park" in (request.get("need_facilities") or []):
+            result = _park_course_result(request, course_type)
+        elif scope == "missing":
+            text = "어디에서 출발할지 알려주세요.\n구 이름(강남구), 역 이름(성수역), 가게 이름, 도로명·지번 주소 모두 좋아요."
+            if is_citywide_scope(request.get("location")):
+                text += "\n서울 전체에서 고르기보다 조금 좁혀 주시면 실제로 갈 수 있는 코스를 찾아드릴 수 있어요. 구 이름만 알려주셔도 충분해요."
+            result = _mcp_result(text, code="missing_start", is_error=True)
+        elif district:
+            result = _district_course_result(request, course_type)
+        else:
+            result = _specific_course_result(request, course_type)
+        stats = request.get("_stats", {"candidate_count": 0, "eligible_count": 0, "rejection_counts": {}})
+        conditions = {"course_type": course_type,
+                      "distance_km": requested_distance(request.get("distance_km"), request.get("duration_min")) if valid_effort else None,
+                      "terrain": None if request.get("include_hills") is None else "hills" if request["include_hills"] else "flat",
+                      "facilities": request.get("need_facilities") or [], "night_mode": bool(request.get("night_mode"))}
+        result.structuredContent.update(release_sha=RELEASE_SHA, start_scope=scope, district=district,
+            **stats, conditions_requested=conditions, conditions_satisfied=not result.isError,
+            unmet_conditions=sorted(stats["rejection_counts"]) if result.isError else [])
+        return result
+    finally:
+        stats = request.get("_stats", {})
+        log.info("course_selection release_sha=%s start_scope=%s district=%s candidate_count=%d eligible_count=%d rejection_counts=%s result_code=%s duration_ms=%d",
+                 RELEASE_SHA, scope, district, stats.get("candidate_count", 0), stats.get("eligible_count", 0),
+                 dict(stats.get("rejection_counts", {})), (result.structuredContent or {}).get("result_code") if result else "internal_error",
+                 round((time.monotonic() - started) * 1000))
+
+
 def _course_tool_result(text: str, *, course_type: str,
                         request: dict | None = None,
                         timeout_s: float = 0.0) -> CallToolResult:
     """Classify controlled tool copy into a stable MCP result contract."""
+    # Input/location failures must not start another generation in the planner.
+    if text.startswith("⚠️"):
+        if "위치를 찾지 못" in text or "출발 위치가 필요" in text:
+            return _mcp_result(text, code="location_not_found", is_error=True)
+        if "서울 지역 좌표만" in text or "위도와 경도" in text:
+            return _mcp_result(text, code="invalid_coordinates", is_error=True)
+        if "거리는 1km에서 42.195km" in text or "시간은 10~360분" in text:
+            return _mcp_result(text, code="invalid_request", is_error=True)
+        if "지도 검색 서비스" in text:
+            return _mcp_result(text, code="location_unavailable", is_error=True, retryable=True)
     if request is not None:
         planned = _planned_course_result(
             text, course_type=course_type, request=request, timeout_s=timeout_s)
         if planned is not None:
             return _complete_recommendation(planned, night_mode=bool(request.get("night_mode")))
-        if request.get("night_mode") and not text.startswith(("⚠️", "⏱️")):
-            # Never fall through to unfiltered generator/preset Markdown.
-            return _recommendation_shortage(0, night_mode=True)
     # Whether a course came back decides success, not the leading emoji. The
     # prefix convention is still how failures tell themselves apart, but a
     # course request is answered with a card whenever a route exists, and one
@@ -926,6 +1163,9 @@ def _course_tool_result(text: str, *, course_type: str,
     if text.startswith("⏱️") and not _extract_course_ids(text):
         return _mcp_result(
             text, code="generation_timeout", is_error=True, retryable=True)
+    if request is not None:
+        return _recommendation_shortage(0, night_mode=bool(request.get("night_mode")),
+                                        district=request.get("_district"))
     if text.startswith("🔎"):
         code = "nearby_course_ready" if "/c/" in text else "exact_shape_unavailable"
         result = _mcp_result(text, code=code)
@@ -939,7 +1179,7 @@ def _course_tool_result(text: str, *, course_type: str,
         # not an infrastructure failure.
         if "추천 거리" in text:
             return _mcp_result(text, code="exact_shape_unavailable")
-        return _mcp_result(text, code="invalid_request", is_error=True)
+        return _recommendation_shortage(0)
     cached_result = _try_course_result(text, course_type)
     if cached_result is not None:
         if request is not None:
@@ -1060,13 +1300,23 @@ def _get_animal_recommendation(params: CourseParams) -> Course | None:
     return course
 
 
+def _resolve_start(location, lat, lon, timeout_s=None):
+    if lat is not None and lon is not None:
+        try:
+            CourseWaypoint(lat=lat, lon=lon)
+        except ValidationError as exc:
+            raise CourseError("서울 지역 좌표만 지원해요. 위도와 경도를 확인해 주세요.") from exc
+        return lat, lon, location or "지정한 좌표"
+    return resolve_location(location, lat, lon, timeout_s=timeout_s)
+
+
 def _build_params(location, lat, lon, distance_km, duration_min, include_hills,
                   night_mode, need_facilities, shape=None,
                   timeout_s: float | None = None) -> tuple[CourseParams, str]:
     """Returns (params, note). note explains any interpretation we made
     (e.g. duration→distance conversion) so the user sees the reasoning."""
     note = ""
-    rlat, rlon, name = resolve_location(location, lat, lon, timeout_s=timeout_s)
+    rlat, rlon, name = _resolve_start(location, lat, lon, timeout_s=timeout_s)
     if distance_km is None and duration_min:
         distance_km = round(duration_min / DEFAULT_PACE_MIN_PER_KM, 1)
         # 🕒, not ⏱️. The ⚠️/⏱️ prefixes mark failures, and the result
@@ -1233,7 +1483,8 @@ def _verified_animal_note(requested_name: str, shape: str,
 
 def _animal_survey(lat: float, lon: float, name: str,
                    requested_distance_km: float | None = None,
-                   timeout_s: float | None = None) -> str:
+                   timeout_s: float | None = None, *, include_hills: bool = False,
+                   night_mode: bool = False, need_facilities: list[str] | None = None) -> str:
     """Per-animal shortest clean-completion distance at this start point.
 
     The reference GPS-art routes look good because the shape picks its own
@@ -1252,7 +1503,9 @@ def _animal_survey(lat: float, lon: float, name: str,
     # survey stays within the p99 3s budget instead of taking 4x sequentially.
     probes = {
         key: CourseParams(lat=lat, lon=lon, location_name=name,
-                          distance_km=SHAPES[key].min_km, shape=key)
+                          distance_km=SHAPES[key].min_km, shape=key,
+                          include_hills=include_hills, night_mode=night_mode,
+                          need_facilities=need_facilities or [])
         for key in SURVEY_SHAPES
     }
     # Survey is a quick preview: four animals share two pool workers (two
@@ -1461,17 +1714,18 @@ def generate_animal_course(
         # No shape yet → survey: shortest clean-completion distance per
         # animal, so the user picks a shape knowing what it will cost.
         try:
-            rlat, rlon, name = resolve_location(
+            rlat, rlon, name = _resolve_start(
                 location, lat, lon, timeout_s=remaining())
         except CourseError as e:
             return f"⚠️ {e}"
         return _animal_survey(rlat, rlon, name, requested_distance(distance_km, duration_min),
-                              timeout_s=remaining())
+                              timeout_s=remaining(), include_hills=include_hills,
+                              night_mode=night_mode, need_facilities=need_facilities)
     if distance_km is None and duration_min is None and shape in SHAPES:
         # Shape chosen, distance left open → quality-first: draw at the
         # shortest distance where the silhouette completes cleanly.
         try:
-            rlat, rlon, name = resolve_location(
+            rlat, rlon, name = _resolve_start(
                 location, lat, lon, timeout_s=remaining())
         except CourseError as e:
             return f"⚠️ {e}"
@@ -1620,95 +1874,80 @@ def create_seoul_running_course(
     distance_km: Annotated[float | None, Field(description=(
         "사용자가 명시한 목표 거리(km), 1-42.195. 생략 시 standard는 기본 5km, "
         "동물 코스는 가장 선명한 검증 거리를 서버가 선택합니다. "
-        "park 추천은 등록된 고정 경로이며 실제 거리가 요청과 다르면 안내합니다."
+        "park 추천도 등록된 고정 경로 중 요청 거리 ±10%를 만족할 때만 반환합니다."
     ))] = None,
     duration_min: Annotated[float | None, Field(description=(
         "사용자가 명시한 목표 시간(분), 10-360. 말하지 않았으면 생략하며, "
         "distance_km와 함께 있으면 거리를 우선합니다."
     ))] = None,
-    include_hills: Annotated[bool, Field(description=(
-        "오르막·언덕·업힐 훈련을 요청했을 때만 true; 평지 또는 언급이 없으면 false"
-    ))] = False,
+    include_hills: Annotated[bool | None, Field(description=(
+        "오르막·언덕·업힐 요청은 true, 명시적인 평지 요청은 false, 지형 언급이 없으면 생략(null)."
+    ))] = None,
     night_mode: Annotated[bool, Field(description=(
         "야간·밤·가로등·CCTV·안전 경로를 요청했을 때 true; 언급이 없으면 false. "
         "true이면 관측된 조명 점수 0.4 이상인 코스만 추천하고 '야간 조명 많음'으로 표시합니다. "
         "0.4 미만·미확인 코스는 제외합니다. 실제 안전을 보장하는 기준은 아닙니다."
     ))] = False,
-    need_facilities: Annotated[list[str] | None, Field(description=(
+    need_facilities: Annotated[list[Literal["convenience_store", "restroom", "water", "park"]] | None, Field(description=(
         "convenience_store=편의점, restroom=화장실, water=마실 물·음수대. "
         "공원·강변·한강·하천·호수·수변·물가·물 보면서 달리는 코스를 명시한 경우에만 "
         "park를 전달하세요. 등록된 5곳 중 조건에 맞는 최대 3곳을 무작위로, 출발지가 있으면 가까운 순으로 반환합니다. "
         "일반 코스 주변에 공원이 있다는 이유로 park를 추론하지 마세요."
     ))] = None,
 ) -> CallToolResult:
-    """Returns up to 3 distinct running courses (standard or
-    animal-shaped GPS art) in ONE call with Runnywhere(러니웨어).
-    Call ONCE for 러닝 코스/그려줘/추천해줘, including '야간 코스 3개'.
-    Return available 1-2 courses; never repeat calls to fill 3. Only 0 is insufficient_courses.
-    Parks/rivers/streams/물가: set need_facilities=['park']. Picks up to 3 of
-    5 registered places, randomly without a start or nearest with a start.
-    Never invent a start. Only park requests may omit it; otherwise ask.
-    standard=ordinary runs; best_animal=unnamed animal art; dog/cat/rabbit/whale
-    =named animal. '그려줘' alone is standard. Night: measured lighting >=0.4.
-    Existing-course changes, 이 코스 근처 화장실, map/GPX and relays use other tools.
-    course_selection is factual; never call a rabbit a dog.
-    Begin with assistant_text unless assistant_text_in_widget is true.
-    Close with assistant_final_text verbatim, including the edit notice.
-    Use actual starts, never the requested district."""
+    """Runnywhere(러니웨어) returns up to 3 running courses or animal-shaped GPS art. Call ONCE for
+    러닝 코스/그려줘/추천해줘; never repeat to fill slots. Never invent a start:
+    omit location if unstated, even with distance/animal/night conditions.
+    missing or city-wide (서울 시내/아무데나): server asks for a start.
+    district (강남구): starts inside that 구. specific: pass station/shop/address
+    verbatim, or both lat/lon. Parks/rivers/물가 use need_facilities=['park'];
+    only these allow no start. standard=ordinary; best_animal=unnamed animal;
+    dog/cat/rabbit/whale=named animal. '그려줘' alone is standard.
+    Explicit conditions are required; night lighting >=0.4, not a safety guarantee.
+    0 matches=insufficient_courses. 이 코스 근처 화장실 needs a supplied course_id.
+    Use course_selection actual facts. Close with assistant_final_text verbatim.
+    Edit via the web editor."""
     common = dict(
         location=location, lat=lat, lon=lon, distance_km=distance_km,
         duration_min=duration_min, include_hills=include_hills,
         night_mode=night_mode, need_facilities=need_facilities,
     )
-    started = time.monotonic()
-    if "park" in (need_facilities or []):
-        return _park_course_result(common, course_type)
-    if course_type == "standard":
-        return _course_tool_result(
-            generate_running_course(**common), course_type=course_type,
-            request=common, timeout_s=_budget_left(started))
-    shape = None if course_type == "best_animal" else course_type
-    text = _animal_text_for_cards(shape=shape, **common)
-    return _course_tool_result(text, course_type=course_type, request=common,
-                               timeout_s=_budget_left(started))
+    return _dispatch_course_request(course_type, common)
 
 
 @functools.wraps(generate_running_course)
 def _legacy_generate_running_course(*args, **kwargs) -> CallToolResult:
     """Bridge a cached pre-unification Preview call to the latest response."""
-    started = time.monotonic()
     keys = ("location", "lat", "lon", "distance_km", "duration_min",
             "include_hills", "night_mode", "need_facilities")
     request = {**dict(zip(keys, args)), **kwargs}
-    if "park" in (request.get("need_facilities") or []):
-        return _park_course_result(request)
-    return _course_tool_result(
-        generate_running_course(*args, **kwargs), course_type="standard",
-        request=request, timeout_s=_budget_left(started),
-    )
+    if request.get("include_hills") is False:
+        request["include_hills"] = None
+    return _dispatch_course_request("standard", request)
 
 
 @functools.wraps(generate_animal_course)
 def _legacy_generate_animal_course(*args, **kwargs) -> CallToolResult:
     """Bridge a cached pre-unification animal call to the latest response."""
-    shape = kwargs.get("shape")
-    if shape is None and args:
-        shape = args[0]
-    course_type = shape if shape in SHAPES else "best_animal"
-    started = time.monotonic()
-    # Positional calls only ever carry the shape, so the start is in kwargs.
-    request = {key: kwargs.get(key) for key in (
-        "location", "lat", "lon", "distance_km", "duration_min", "include_hills",
-        "night_mode", "need_facilities")}
-    if "park" in (request.get("need_facilities") or []):
-        return _park_course_result(request, course_type)
-    text = _animal_text_for_cards(*args, **kwargs)
-    if request["location"] is None and request["lat"] is None:
-        return _course_tool_result(text, course_type=course_type)
-    return _course_tool_result(
-        text, course_type=course_type, request=request,
-        timeout_s=_budget_left(started),
-    )
+    keys = ("shape", "location", "lat", "lon", "distance_km", "duration_min",
+            "include_hills", "night_mode", "need_facilities", "shape_token")
+    request = {**dict(zip(keys, args)), **kwargs}
+    shape = request.pop("shape", None)
+    token = request.pop("shape_token", None)
+    if token and not shape:
+        try:
+            shape, request["distance_km"] = decode_shape_token(token)
+        except (ValueError, KeyError):
+            return _mcp_result("공유 토큰 형식이 올바르지 않아요. 예: whale-5k", code="invalid_request", is_error=True)
+    if request.get("include_hills") is False:
+        request["include_hills"] = None
+    return _dispatch_course_request(shape or "best_animal", request)
+
+
+# Cached schemas keep their signatures, but routing copy must agree with the
+# primary tool during the registration transition.
+_legacy_generate_running_course.__doc__ = create_seoul_running_course.__doc__
+_legacy_generate_animal_course.__doc__ = create_seoul_running_course.__doc__
 
 
 def list_available_shapes() -> str:
@@ -1725,8 +1964,7 @@ def list_available_shapes() -> str:
 
 def find_facilities_near_course(
     course_id: Annotated[str, Field(description=(
-        "Exact course_id from the most recent generated or selected Runnywhere "
-        "course in this conversation"
+        "Explicitly supplied valid Runnywhere course_id, taken from its map URL"
     ))],
     facility_types: Annotated[list[str] | None, Field(description=(
         "Requested filters only: convenience_store=편의점, restroom=화장실, "
@@ -1735,9 +1973,9 @@ def find_facilities_near_course(
 ) -> str:
     """Finds convenience stores, restrooms, drinking water, or parks within
     10m of an existing Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!)
-    course. Use this for follow-ups such as "이 코스 근처 화장실 찾아줘",
-    "이 경로에 편의점 있어?", "달리다가 물 마실 곳", or "코스 주변 공원".
-    Requires the most recent prior course_id. Return facilities for that exact
+    course. For "이 코스 근처 화장실 찾아줘", require an explicitly supplied
+    valid course_id; never assume an earlier widget left one in context.
+    Return facilities for that exact
     course; never regenerate, refine, summarize, create, or recommend a course."""
     try:
         params = decode_course_id(course_id)
@@ -1761,7 +1999,7 @@ def refine_course(
     night_mode: Annotated[bool | None, Field(description="Change night-safety mode")] = None,
     shape: Annotated[str | None, Field(description="Change animal shape, or 'none' to remove the shape")] = None,
     location: Annotated[str | None, Field(
-        description="New start place: " + LOCATION_FIELD_EN)] = None,
+        description=REFINE_LOCATION_FIELD_EN)] = None,
     need_facilities: Annotated[list[str] | None, Field(description=(
         "New facility requirements. Use park only when the user explicitly "
         "changes the course to park or riverside-park running."
@@ -1769,8 +2007,9 @@ def refine_course(
 ) -> str:
     """Refines an existing Runnywhere(러니웨어: 어디서든 러닝 코스 짜기!)
     course by changing distance, hills, night mode, animal shape, start, or
-    facilities. Requires a prior course_id; never use it for the first course
-    creation or recommendation."""
+    facilities. Requires an explicitly supplied valid course_id; do not refer
+    back to a previous recommendation. Prefer the linked web editor for edits.
+    Never use it for new course creation or recommendation."""
     started = time.monotonic()
 
     def remaining() -> float:
@@ -2573,6 +2812,7 @@ def _warm() -> None:
         graphmod.get_graph()
         graphmod._node_index()
         park_courses()
+        all_verified_animal_presets()
         # Pre-load the graph inside each pool worker so the first real animal
         # request is not stuck behind a cold ~2.5s graph load per process.
         pool = _get_pool()

@@ -605,7 +605,8 @@ def test_unavailable_animal_explanation_renders_before_recommendations(monkeypat
     result = server._planned_course_result(
         "", course_type="dog", request={"location": "서울역"}, timeout_s=5)
     payload = json.loads(result.content[0].text)
-    heading, row = payload["widget"]["children"]
+    heading, row, notice = payload["widget"]["children"]
+    assert notice["value"] == server.COURSE_EDIT_NOTICE
     lead = result.structuredContent["assistant_text"]
     assert not _components(payload["widget"], "Markdown")
     assert "서울역에서 출발하는 강아지 모양 코스를 찾지 못해" in lead

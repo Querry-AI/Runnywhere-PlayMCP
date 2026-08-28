@@ -40,6 +40,47 @@ _SEOUL_DISTRICTS = (
     "노원구", "도봉구", "동대문구", "동작구", "마포구", "서대문구", "서초구", "성동구",
     "성북구", "송파구", "양천구", "영등포구", "용산구", "은평구", "종로구", "중구", "중랑구",
 )
+
+
+def _scope_text(text: str | None) -> str:
+    return re.sub(r"[\s,.，。]", "", text or "")
+
+
+def is_citywide_scope(text: str | None) -> bool:
+    """Match whole scope expressions, never substrings of places/addresses."""
+    city = r"서울(?:특별시|시)?"
+    anywhere = r"(?:아무데나|아무곳(?:이나)?|어디(?:서든|든지?|나)|랜덤(?:으로)?|상관없(?:음|어요)|아무거나)"
+    area = rf"(?:전역|시내|내|안|안의모든코스중에서|{anywhere})"
+    return bool(re.fullmatch(
+        rf"(?:{city}(?:에서|안에서|내에서)?(?:{area})?|{area})(?:에서|로|으로|요)?",
+        _scope_text(text)))
+
+
+def district_of(text: str | None) -> str | None:
+    """Extract an administrative district from a Seoul address or scope."""
+    match = re.search("|".join(_SEOUL_DISTRICTS), text or "")
+    return match.group() if match else None
+
+
+def district_scope(text: str | None) -> str | None:
+    """Only a district alone (with a Seoul prefix/nearby suffix) is a scope."""
+    match = re.fullmatch(
+        r"(?:서울(?:특별시|시)?)?(" + "|".join(_SEOUL_DISTRICTS)
+        + r")(?:근처|인근|주변|에서|내|안)?", _scope_text(text))
+    return match[1] if match else None
+
+
+# Derived once from bundled addresses; no geocoder, new dataset or guessed POI.
+DISTRICT_STATIONS = {district: [] for district in _SEOUL_DISTRICTS}
+STATION_DISTRICTS = {}
+for _line, _name, _lat, _lon, _road, _lot in SEOUL_METRO_STATIONS:
+    _district = district_of(_road) or district_of(_lot)
+    if _district and _road.startswith("서울"):
+        _label = re.sub(r"\([^)]*\)", "", _name).strip()
+        _label = _label if _label.endswith("역") else f"{_label}역"
+        DISTRICT_STATIONS[_district].append((_lat, _lon, _label))
+        STATION_DISTRICTS[(round(_lat, 5), round(_lon, 5))] = _district
+
 _ROAD_DISTRICT_HINTS = {
     "테헤란로": "강남구",
 }
@@ -415,6 +456,12 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
         if not _in_seoul(lat, lon):
             raise CourseError("서울 지역 좌표만 지원해요. 서울 시내 위치로 다시 알려주세요.")
         return lat, lon, location or f"({lat:.4f}, {lon:.4f})"
+    if lat is not None or lon is not None:
+        raise CourseError("위도와 경도를 함께 알려주세요.")
+    if is_citywide_scope(location):
+        raise CourseError("어디에서 출발할지 조금 더 좁혀서 알려주세요. 구 이름만 알려주셔도 충분해요.")
+    if district_scope(location):
+        raise CourseError("구 단위 새 코스는 코스 추천을 요청해 주세요. 출발점 변경에는 역·주소 등 특정 위치가 필요해요.")
     if location:
         key = location.replace(" ", "")
         # Explicit station intent must use the same canonical coordinates as

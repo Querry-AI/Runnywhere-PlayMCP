@@ -23,6 +23,7 @@ class ParkSpot:
     lat: float
     lon: float
     source_url: str
+    district: str
 
 
 # Representative destinations, not a claimed ranking by visitor numbers.
@@ -30,15 +31,15 @@ class ParkSpot:
 # records its actual nearby park-path start separately.
 PARK_SPOTS = (
     ParkSpot("yeouido", "여의도한강공원", 37.5285, 126.9328,
-             "https://www.seoul.go.kr/policy/view.do?id=1017&lan=KO"),
+             "https://www.seoul.go.kr/policy/view.do?id=1017&lan=KO", "영등포구"),
     ParkSpot("banpo", "반포한강공원", 37.5100, 126.9950,
-             "https://news.seoul.go.kr/culture/archives/520899"),
+             "https://news.seoul.go.kr/culture/archives/520899", "서초구"),
     ParkSpot("ttukseom", "뚝섬한강공원", 37.5310, 127.0660,
-             "https://mediahub.seoul.go.kr/archives/2018687"),
+             "https://mediahub.seoul.go.kr/archives/2018687", "광진구"),
     ParkSpot("seoulforest", "서울숲", 37.5444, 127.0374,
-             "https://mediahub.seoul.go.kr/archives/2012980"),
+             "https://mediahub.seoul.go.kr/archives/2012980", "성동구"),
     ParkSpot("yangjae", "양재천", 37.4750, 127.0450,
-             "https://love.seoul.go.kr/articles/10626"),
+             "https://love.seoul.go.kr/articles/10626", "서초구"),
 )
 
 PRESET_PATH = _data_path("park_course_presets.json")
@@ -71,9 +72,10 @@ def park_courses() -> tuple[tuple[ParkSpot, Course], ...]:
 
 
 def select_park_courses(origin: tuple[float, float] | None = None, *,
-                        night_mode: bool = False) -> list[tuple[ParkSpot, Course]]:
+                        night_mode: bool = False,
+                        candidates: list[tuple[ParkSpot, Course]] | None = None) -> list[tuple[ParkSpot, Course]]:
     """One distinct course per destination. Distance is to the actual start."""
-    candidates = list(park_courses())
+    candidates = list(park_courses() if candidates is None else candidates)
     if night_mode:
         candidates = [item for item in candidates if has_sufficient_night_lighting(item[1].rfs)]
     if origin is None:

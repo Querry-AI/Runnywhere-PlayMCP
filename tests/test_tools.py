@@ -220,7 +220,7 @@ def test_recently_added_station_resolves_offline(monkeypatch):
 
 def test_location_error_does_not_ask_for_coordinates():
     out = server.generate_running_course(location="아무데나요")
-    assert "위치를 찾지 못했어요" in out
+    assert "구 이름만 알려주셔도 충분해요" in out
     assert "좌표" not in out
 
 
@@ -498,14 +498,16 @@ def test_primary_course_tool_schema_and_description_drive_selection():
         assert phrase in tool.description
     location_description = tool.inputSchema["properties"]["location"]["description"]
     assert "출발지가 없으면" in location_description
-    assert "호출하지 마세요" in location_description
+    # A missing start is a call with location omitted, not a refusal to call.
+    assert "생략한 채로 호출하세요" in location_description
+    assert "호출하지 마세요" not in location_description
     park_description = tool.inputSchema["properties"]["need_facilities"]["description"]
     assert "명시한 경우에만" in park_description
     assert "추론하지 마세요" in park_description
     for term in ("하천", "물가", "물 보면서", "마실 물·음수대", "최대 3곳", "무작위", "가까운 순"):
         assert term in park_description
-    assert "출발지 없이 바로 호출" in location_description
-    assert "Only park requests may omit" in tool.description
+    assert "최대 3개" in location_description
+    assert "omit location if unstated" in tool.description
 
 
 def test_followup_tool_descriptions_make_facility_routing_unambiguous():
@@ -518,7 +520,8 @@ def test_followup_tool_descriptions_make_facility_routing_unambiguous():
 
     assert "이 코스 근처 화장실" in create_description
     assert "이 코스 근처 화장실 찾아줘" in facility_description
-    assert "most recent prior course_id" in facility_description
+    assert "explicitly supplied" in facility_description
+    assert "most recent prior course_id" not in facility_description
     assert "find_facilities_near_course" in status_description
 
 

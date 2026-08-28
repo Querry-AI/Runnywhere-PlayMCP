@@ -85,7 +85,7 @@ def _facility_buckets() -> dict[tuple[int, int], list[dict]]:
 
 
 def facilities_along(points: list[tuple[float, float]], types: list[str] | None = None,
-                     limit: int = 8) -> list[dict]:
+                     limit: int | None = 8) -> list[dict]:
     """Facilities within NEAR_COURSE_M of the polyline, annotated with the km
     mark where the course passes closest. Grid-bucketed: O(points), not
     O(points x facilities) — this runs on every tool call."""

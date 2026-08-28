@@ -68,6 +68,30 @@ pickle 형식의 그래프·시설·인프라 파일은 로드 전에 `src/runar
 
 `create_seoul_running_course` · `list_available_shapes` · `find_facilities_near_course` · `refine_course` · `get_course_status` · `record_animal_completion` · `extend_shape_relay`
 
+### 새 코스 요청 계약
+
+등록된 툴은 위 7개와 캐시된 Preview 호환용 `generate_running_course`,
+`generate_animal_course`를 합쳐 9개다. 세 생성 진입점은 같은 dispatcher를 사용한다.
+
+- 출발지 없음 또는 `서울 시내`·`아무데나`: 호출은 하되 `missing_start`로 구·역·주소를 묻는다. 거리·모양·야간 조건으로 출발지를 대신하지 않는다.
+- 서울 25개 구: 해당 구에 속한 역/프리셋만 사용한다. 주소 속 구 이름은 범위로 오해하지 않는다.
+- 특정 역·상호명·주소 또는 좌표 쌍: 실제 해석한 출발점으로 생성한다. 한쪽 좌표만 있으면 `invalid_coordinates`다.
+- 공원·수변 목적지 요청(`park`)만 무출발지 카탈로그 추천을 유지한다. 구를 지정하면 그 구의 등록 목적지만 반환한다.
+- 명시 거리 ±10%, 평지/언덕, 조명 ≥0.4, 추가 시설 10m 조건은 필수다. 통과한 1~3개만 반환하며 0개면 위젯 없는 `insufficient_courses`다. 야간 조명은 안전 보장이 아니다.
+- `include_hills=null`은 지형 언급 없음, `false`는 평지, `true`는 언덕이다. 구형 두 툴의 `false`만 `null`로 해석하며 저장된 코스 파라미터 기본값은 변경하지 않는다.
+- 일반 코스의 첫 카드는 해당 출발지의 일반 코스다. 나머지는 2km 안의 조건 충족 동물 프리셋, 부족하면 병렬 변형 코스로 채운다. 첫 코스가 없으면 다른 출발점/종류로 대체하지 않는다.
+- 동물 프리셋의 파라미터를 야간으로 바꿔 재사용하지 않는다. 야간 동물은 실제 생성 결과만 허용한다.
+- 코스 수정은 지도 링크의 웹 편집기를 사용한다. `refine_course`·시설 조회는 유효한 `course_id`를 직접 전달한 경우에만 사용한다.
+
+`park`는 이 경로에서 시설 POI가 아닌 검증된 공원·수변 **목적지**를 뜻한다.
+추가 화장실·편의점·음수대는 기존 지도 경로 기준 10m로 검사한다.
+기존 POI 스냅숏에는 등록 공원 경로 5곳 모두 10m 내 `park` 포인트가 없어,
+목적지까지 POI 조건으로 검사하면 보존해야 하는 공원 추천이 전부 사라진다.
+
+검증: `.venv/bin/pytest tests/test_citywide_start.py -q`.
+이 테스트는 25개 구, 입력 분류, 조건 경계, 캐시 제거 후 복원,
+실제 ASGI MCP initialize/list/call과 지도·편집·GPX HTTP 응답을 포함한다.
+
 서울 동물지도(`/animals`)는 검증된 421개 GPS 아트를 한 화면에서 탐색하게 한다. 완주 기록은 서버 DB나 로그인 대신 자기완결형 `passport_token`으로 이어지며, 4종 도감·지역별 4종 배지·주간 최인접 미발견 동물을 제공한다. Shape Relay(`/relay/{token}`)도 최대 8개 동네의 같은 동물 course_id를 자기완결형 토큰에 담아 나란히 비교하고 공동 GPS 작품으로 겹쳐 보여준다. 따라서 PlayMCP 권장 stateless/no-session 구조를 유지한다.
 
 ## 배포 (PlayMCP in KC)
@@ -78,6 +102,24 @@ docker run -p 8000:8000 -e RUNART_BASE_URL=https://<kc-endpoint> runnywhere
 ```
 
 MCP Endpoint: `https://<kc-endpoint>/mcp` — PlayMCP 등록 전 [MCP Inspector](https://github.com/modelcontextprotocol/inspector)로 검증할 것.
+
+### 승격·롤백 게이트
+
+작업 트리의 검증 이미지는 운영 이미지가 아니다. 배포 전 변경을 커밋으로 고정하고
+`RUNART_RELEASE_SHA`를 그 SHA로 다시 빌드한다. 직전 운영 이미지 digest와
+9개 툴 스키마/설명을 함께 보관한다. 별도 스테이징에서 `/healthz.ready=true`,
+`release_sha` 일치, 9개 툴 설명(통합 툴 900자 목표·상한 1024자)을 확인한 뒤
+PlayMCP 재등록과 새 대화 Preview 발화 매트릭스를 통과해야 운영으로 승격한다.
+
+이 변경은 DB·데이터 파일 마이그레이션이 없다. 장애 시 직전 이미지 digest로
+endpoint를 되돌리고 툴 스키마/설명도 같은 버전으로 복구한다. 이후 healthz와
+특정 출발지·구·무출발지 공원 요청을 다시 확인한다. 이전 이미지가 구 정책을
+지원하지 않으면 이전 계약대로 동작함을 확인하고 구 정책 제공을 중단한다.
+
+`course_selection` 로그는 release SHA, 범위, 구, 후보/통과 수, 조건별 탈락 수,
+결과 코드, 소요 시간을 남기며 원문 주소·상호명·좌표를 기록하지 않는다.
+`missing_start` 비율과 다음 턴 요청 전환은 호스트에서 집계해야 한다.
+서버는 사용자를 연결하는 세션이나 추적 식별자를 추가하지 않는다.
 
 ## 라이선스·데이터·안전
 

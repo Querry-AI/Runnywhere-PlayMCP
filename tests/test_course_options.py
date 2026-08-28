@@ -80,7 +80,7 @@ def _course_titles(payload) -> list[str]:
             if row["type"] == "Row" and row["children"][0]["type"] == "Image"]
 
 
-def test_case1_exact_course_here_also_offers_another_animal_and_a_plain_course():
+def test_named_animal_returns_only_that_shape():
     result = server.create_seoul_running_course(course_type="dog", location="강남역")
     payload = _card(result)
     labels = _labels(payload)
@@ -91,8 +91,7 @@ def test_case1_exact_course_here_also_offers_another_animal_and_a_plain_course()
     assert labels[0] == "지도 보기"
     assert len(labels) == 3
     assert "댕댕런" in json.dumps(payload, ensure_ascii=False)
-    # (b) a different animal, (c) a plain course — both at the requested start.
-    assert any(not any(run in title for run in ANIMAL_RUNS) for title in titles[1:])
+    assert all("댕댕런" in title for title in titles)
     assert len(set(_urls(payload)[1:])) == 2
 
 
@@ -102,36 +101,26 @@ def test_case2_nearby_course_names_the_real_start_and_still_offers_three():
     payload = _card(result)
     lead = _lead(result)
 
-    assert result.structuredContent["result_code"] == "course_ready"
+    assert result.structuredContent["result_code"] == "nearby_course_ready"
     assert result.isError is False
-    assert len(_labels(payload)) == 3
+    assert 1 <= len(_labels(payload)) <= 3
     # The card names the actual start directly in its leading title.
     assert "서울대입구역" in lead
     start_text = _course_titles(payload)[0]
-    actual_start = "서울대입구역"
-    assert actual_start == "서울대입구역"
+    actual_start = result.structuredContent["course_selection"]["primary"]["start"]
+    assert actual_start != "서울대입구역"
     assert actual_start in lead
     assert "다른 추천 코스를 준비했어요" in lead
     assert actual_start in json.dumps(payload, ensure_ascii=False)
 
 
-def test_case3_no_animal_within_two_km_leads_with_the_plain_course_here():
+def test_no_animal_within_two_km_reports_shortage_without_plain_substitution():
     result = server.create_seoul_running_course(
         course_type="dog", location="도봉산역")
-    payload = _card(result)
-    lead = _lead(result)
-    labels = _labels(payload)
-    titles = _course_titles(payload)
-
-    assert "도봉산역" in lead
-    assert "다른 추천 코스를 준비했어요" in lead
-    # (a) the plain course at the requested start leads the card.
-    title = titles[0]
-    assert "도봉산" in title
-    assert not any(run in title for run in ANIMAL_RUNS)
-    # (b)/(c) the animal courses stay one click away.
-    assert len(labels) >= 3
-    assert any(run in candidate for run in ANIMAL_RUNS for candidate in titles[1:])
+    assert result.isError
+    assert result.structuredContent["result_code"] == "insufficient_courses"
+    assert not result.structuredContent["repeat_tool_call"]
+    assert "widget" not in result.content[0].text
 
 
 def test_every_choice_url_resolves_to_a_real_course_page():
@@ -164,8 +153,8 @@ def test_widget_failure_still_returns_the_markdown_answer(monkeypatch):
     result = server.create_seoul_running_course(
         course_type="whale", location="서울대입구역")
 
-    assert result.structuredContent["result_code"] == "course_ready"
-    assert result.structuredContent["course_selection"]["returned_count"] == 3
+    assert result.structuredContent["result_code"] == "nearby_course_ready"
+    assert 1 <= result.structuredContent["course_selection"]["returned_count"] <= 3
     assert "다른 코스도 있어요" in result.content[0].text
 
 
@@ -217,18 +206,22 @@ def test_the_duration_note_is_not_dressed_as_a_failure():
 
 
 @pytest.mark.parametrize("kind", ["standard", "dog", "best_animal"])
-def test_primary_card_honors_start_and_duration_before_shape(kind):
+def test_primary_card_honors_duration_and_shape_within_local_radius(kind):
     from runart.geo import haversine_m
     result = server.create_seoul_running_course(
         course_type=kind, location="시청", duration_min=40)
     cid = _urls(_card(result))[0].rsplit("/c/", 1)[1]
     course = server._cached_course(cid)
     lat, lon, _ = server.resolve_location("시청", None, None)
-    assert haversine_m(lat, lon, course.params.lat, course.params.lon) < 150
+    assert haversine_m(lat, lon, course.params.lat, course.params.lon) <= (150 if kind == "standard" else 2000)
+    if kind == "best_animal":
+        assert course.params.shape
+    else:
+        assert course.params.shape == (None if kind == "standard" else "dog")
     assert abs(course.length_km - 6.2) / 6.2 <= .10
 
 
-def test_optional_preferences_can_relax_without_changing_start_or_effort(monkeypatch):
+def test_explicit_preferences_are_never_relaxed_to_fill_a_slot(monkeypatch):
     from runart.models import CourseParams
     from runart.course import Course, CourseError
     probe = CourseParams(lat=37.5665, lon=126.978, distance_km=6.2,
@@ -241,9 +234,9 @@ def test_optional_preferences_can_relax_without_changing_start_or_effort(monkeyp
         return Course(params=params, path=[], length_m=6200)
     monkeypatch.setattr(server, "_get_course", get)
     result = server._plain_course_here(probe, 6.2, 2)
-    assert result is not None and len(calls) == 2
+    assert result is None and len(calls) == 1
     assert all(p.lat == probe.lat and p.lon == probe.lon and p.distance_km == 6.2 for p in calls)
-    assert not calls[-1].need_facilities and not calls[-1].include_hills
+    assert calls[-1].need_facilities == ["park"] and calls[-1].include_hills
 
 
 def test_legacy_animal_duration_reaches_the_shared_priority_plan(monkeypatch):
@@ -251,6 +244,7 @@ def test_legacy_animal_duration_reaches_the_shared_priority_plan(monkeypatch):
     monkeypatch.setattr(server, "generate_animal_course", lambda *a, **k: "text")
     def result(text, **kwargs):
         captured.update(kwargs)
+        return server._recommendation_shortage(0)
     monkeypatch.setattr(server, "_course_tool_result", result)
     server._legacy_generate_animal_course(shape="dog", location="시청", duration_min=40)
     assert captured["request"]["duration_min"] == 40
@@ -268,7 +262,7 @@ def test_animal_card_generation_reserves_time_and_resets_deadline(monkeypatch):
     assert server._ANIMAL_CARD_DEADLINE.get() is None
 
 
-def test_animal_timeout_still_plans_local_candidate_with_reserved_budget(monkeypatch):
+def test_animal_timeout_never_substitutes_a_plain_course(monkeypatch):
     from runart.course import Course
     from runart.models import CourseParams
     course = Course(params=CourseParams(lat=37.5665, lon=126.978,
@@ -283,11 +277,10 @@ def test_animal_timeout_still_plans_local_candidate_with_reserved_budget(monkeyp
     monkeypatch.setattr(server, "_cache_put", lambda *args: None)
     result = server._planned_course_result("⏱️ 동물 탐색 시간 초과", course_type="dog",
         request={"location": "시청", "duration_min": 40}, timeout_s=.9)
-    assert budgets and result.structuredContent["result_code"] == "course_ready"
-    assert "일반 코스 대안" in json.dumps(_card(result), ensure_ascii=False)
+    assert not budgets and result is None
 
 
-def test_optional_preferences_do_not_exclude_verified_animal_candidates(monkeypatch):
+def test_night_animal_never_reads_daytime_presets(monkeypatch):
     probes = []
     def candidates(probe, radius):
         probes.append(probe)
@@ -296,9 +289,7 @@ def test_optional_preferences_do_not_exclude_verified_animal_candidates(monkeypa
     monkeypatch.setattr(server, "_plain_course_here", lambda *args: None)
     server._animal_course_plan({"location": "시청", "include_hills": True,
         "night_mode": True, "need_facilities": ["park"]}, "dog", "", .9)
-    assert len(probes) == 1
-    assert not probes[0].include_hills and not probes[0].night_mode
-    assert probes[0].need_facilities == []
+    assert probes == []
 
 
 # Every way of asking for a course that a runner can act on immediately.
@@ -308,7 +299,6 @@ COURSE_REQUESTS = [
     dict(course_type="standard", location="시청"),
     dict(course_type="dog", location="강남역"),
     dict(course_type="dog", location="강남역", duration_min=40),
-    dict(course_type="dog", location="강남역", distance_km=3),
     dict(course_type="cat", location="시청"),
     dict(course_type="whale", location="서울대입구역"),
     dict(course_type="best_animal", location="석촌호수"),
@@ -359,7 +349,10 @@ def test_single_standard_call_returns_three_distinct_routes_with_restorable_ids(
         restored = decode_course_id(url.rsplit("/", 1)[1])
         assert restored.canonical() == course.params.canonical()
         assert course.params.location_name == "강남역"
-        assert course.params.distance_km == 5
+    assert courses[0].params.shape is None and courses[0].params.distance_km == 5
+    # No explicit distance: 2/3 can reuse a nearby animal's natural length.
+    assert all(server.haversine_m(courses[0].params.lat, courses[0].params.lon,
+                                c.params.lat, c.params.lon) <= 2000 for c in courses[1:])
 
 
 def test_park_request_without_start_samples_three_of_five_without_route_calls(monkeypatch):
@@ -424,22 +417,21 @@ def test_park_recommendations_accept_coordinates_and_preserve_night_lighting():
 
 @pytest.mark.parametrize("widget_fails", [False, True])
 def test_park_response_uses_actual_starts_not_the_requested_district(monkeypatch, widget_fails):
-    # A district keyword may geocode to a landmark. Neither is the location
-    # of all recommended routes, so neither may leak into completion claims.
-    monkeypatch.setattr(server, "resolve_location", lambda *a, **k: (37.509, 127.047, "서울선릉과정릉"))
+    monkeypatch.setattr(server, "resolve_location", lambda *a, **k: pytest.fail("district geocoded"))
     if widget_fails:
         monkeypatch.setattr(server, "_plan_widget", lambda *a: None)
     result = server.create_seoul_running_course(
-        course_type="standard", location="강남구", need_facilities=["park"])
+        course_type="standard", location="성동구", need_facilities=["park"])
     metadata = result.structuredContent
     selection = metadata["course_selection"]
     facts = [selection["primary"], *selection["alternatives"]]
     assert selection["actual_start_names"] == [c["start"] for c in facts]
-    assert {c["start"] for c in facts} == {"뚝섬한강공원", "양재천", "서울숲"}
+    assert {c["start"] for c in facts} == {"서울숲"}
     spoken = "\n".join(c.text for c in result.content)
     for forbidden in ("강남구", "서울선릉과정릉", "직선거리", "등록된 5곳"):
         assert forbidden not in spoken
-    assert metadata["park_selection"]["requested_location"] == "강남구"
+    assert metadata["park_selection"]["requested_location"] == "성동구"
+    assert metadata["park_selection"]["mode"] == "district"
     assert metadata["park_selection"]["origin_role"] == "search_reference_only"
     final = metadata["assistant_final_text"]
     for fact in facts:
@@ -466,7 +458,7 @@ def test_park_catalogue_returns_up_to_three_without_filling_with_dark_routes(mon
     courses = deepcopy(park_presets.park_courses())
     for i, (_, course) in enumerate(courses):
         course.rfs["components"]["lighting"] = .4 if i < eligible_count else .39
-    monkeypatch.setattr(park_presets, "park_courses", lambda: courses)
+    monkeypatch.setattr(server, "park_courses", lambda: courses)
     result = server.create_seoul_running_course(
         course_type="standard", need_facilities=["park"], night_mode=True, location=location)
     if not eligible_count:
@@ -493,16 +485,16 @@ def test_invalid_park_input_never_silently_becomes_random_recommendations(kwargs
     assert "park_selection" not in result.structuredContent
 
 
-def test_park_widget_fallback_preserves_actual_destinations_and_effort_disclaimer(monkeypatch):
+def test_park_widget_fallback_preserves_only_matching_distance_destinations(monkeypatch):
     monkeypatch.setattr(server, "KAKAO_WIDGETS_ENABLED", False)
     result = server.create_seoul_running_course(
-        course_type="dog", location="강남역", duration_min=60, need_facilities=["park"])
+        course_type="standard", location="강남역", distance_km=5, need_facilities=["park"])
     assert not result.isError
-    assert "요청 조건(60분)과 실제 거리·시간이 다를 수" in result.content[0].text
-    assert "동물 모양이 아닌" in result.content[0].text
+    assert "다를 수" not in result.content[0].text
     selection = result.structuredContent["course_selection"]
     for course in [selection["primary"], *selection["alternatives"]]:
         assert course["course_type"] == "standard"
+        assert 4.5 <= course["distance_km"] <= 5.5
         assert course["map_url"] in result.content[0].text
         assert course["start"] in result.content[0].text
 
@@ -519,7 +511,8 @@ def test_drinking_water_does_not_dispatch_to_the_park_catalogue(monkeypatch):
         pytest.fail("Drinking water is a facility request, not waterside scenery")
     monkeypatch.setattr(server, "_park_course_result", unexpected)
     result = server.create_seoul_running_course(course_type="standard", need_facilities=["water"])
-    assert result.isError  # An ordinary run still requires an explicit start.
+    assert result.isError and result.structuredContent["result_code"] == "missing_start"
+    assert "park_selection" not in result.structuredContent
 
 
 def test_empty_recommendation_does_not_request_repeat_calls():
@@ -543,8 +536,8 @@ def test_partial_recommendations_survive_all_course_modes(
     from runart.park_presets import park_courses
     from runart.animal_presets import PresetMatch
 
-    # Keep the real planner, response wrapper and widget. Only control the
-    # candidate supply so router timing cannot hide the 1/2-course regression.
+    # Supply a selected plan; this is the response/widget cardinality test.
+    # Candidate eligibility and no-base early exit have separate regressions.
     courses = [deepcopy(c) for _, c in park_courses()[:available_count]]
     for course in courses:
         course.params.night_mode = night_mode
@@ -553,10 +546,9 @@ def test_partial_recommendations_survive_all_course_modes(
     monkeypatch.setattr(server, "KAKAO_WIDGETS_ENABLED", widget_enabled)
     monkeypatch.setattr(server, "generate_running_course", lambda **kw: "")
     monkeypatch.setattr(server, "_animal_text_for_cards", lambda **kw: "")
-    monkeypatch.setattr(server, "_any_animal_matches", lambda *a: [])
-    monkeypatch.setattr(server, "_plain_course_here", lambda *a: courses[0])
-    monkeypatch.setattr(server, "_standard_alternatives", lambda *a: [
-        PresetMatch(c, 0) for c in courses[1:]])
+    choices = [server.CourseChoice(c, server.encode_course_id(c.params), "standard") for c in courses[:3]]
+    plan = server.CoursePlan("exact", "조건을 만족하는 코스예요.", choices[0], tuple(choices[1:]))
+    monkeypatch.setattr(server, "_animal_course_plan", lambda *a: plan)
     result = server.create_seoul_running_course(
         course_type=course_type, location="강남역", night_mode=night_mode)
 
@@ -588,7 +580,7 @@ def test_night_preferences_are_never_relaxed_to_daytime(monkeypatch):
     monkeypatch.setattr(server, "_get_course", unavailable)
     probe = CourseParams(lat=37.4986, lon=127.0281, night_mode=True, need_facilities=["park"])
     assert server._plain_course_here(probe, 5, 2) is None
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert all(p.night_mode for p in calls)
 
 
@@ -616,7 +608,7 @@ def test_night_request_returns_three_lit_routes_or_no_recommendation(monkeypatch
 
     if lighting is None or lighting < .4:
         assert result.isError
-        assert "가로등" in result.content[0].text
+        assert "조명" in result.content[0].text
         assert '"widget"' not in result.content[0].text
         return
 
