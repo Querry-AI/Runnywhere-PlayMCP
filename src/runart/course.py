@@ -883,13 +883,13 @@ def _join_connected_strokes(g, strokes: list[list[CourseWaypoint]]) -> list[list
                 continue
             an, ad = nearest[left]
             bn, bd = nearest[right]
-            exact_nodes = graphmod.nearby_nodes(
-                a.lat, a.lon, limit=3, max_distance_m=INTERSECTION_EPSILON_M)
-            if (distance <= INTERSECTION_EPSILON_M and an is not None and an == bn
-                    and len(exact_nodes) <= 1):
+            if distance <= INTERSECTION_EPSILON_M:
+                exact_nodes = graphmod.nearby_nodes(
+                    a.lat, a.lon, limit=3, max_distance_m=INTERSECTION_EPSILON_M)
+                if an is None or an != bn or len(exact_nodes) > 1:
+                    continue
                 joint = a
-            elif (distance > INTERSECTION_EPSILON_M and an is not None and an == bn
-                  and max(ad, bd) <= DRAW_JOIN_MAX_M):
+            elif an is not None and an == bn and max(ad, bd) <= DRAW_JOIN_MAX_M:
                 joint = CourseWaypoint(lat=g.nodes[an]["lat"], lon=g.nodes[an]["lon"])
             else:
                 continue
