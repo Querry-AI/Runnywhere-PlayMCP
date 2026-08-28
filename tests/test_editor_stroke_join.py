@@ -83,7 +83,13 @@ def small_graph(monkeypatch):
     def nearest(lat, lon):
         return min(((n, haversine_m(lat, lon, data["lat"], data["lon"]))
                     for n, data in g.nodes(data=True)), key=lambda row: row[1])
+    def nearby(lat, lon, *, limit=6, max_distance_m=800):
+        rows = sorted((haversine_m(lat, lon, data["lat"], data["lon"]), n)
+                      for n, data in g.nodes(data=True))
+        return [(n, distance) for distance, n in rows[:limit]
+                if distance <= max_distance_m]
     monkeypatch.setattr(graphmod, "nearest_node", nearest)
+    monkeypatch.setattr(graphmod, "nearby_nodes", nearby)
     return g
 
 
