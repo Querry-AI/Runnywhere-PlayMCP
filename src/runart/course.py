@@ -829,6 +829,95 @@ def _route_one_stroke(g, weight, stroke: list[CourseWaypoint], *, close: bool
     return routed
 
 
+# Interaction tolerance is separate from exact geometric intersection. Only
+# explicit gap endpoints / pen lifts may use it, never arbitrary crossings.
+DRAW_JOIN_MAX_M = 12.0
+
+
+def _snap_gap_endpoints(g, path: list[int], lo: int, hi: int,
+                        strokes: list[list[CourseWaypoint]]) -> list[list[CourseWaypoint]]:
+    """Bind a near-miss to its intended erased endpoint, not another road.
+
+    The closest graph node must be that endpoint or its immediate neighbour
+    on a short runnable edge. Proximity alone cannot join separate levels.
+    """
+    result = [list(stroke) for stroke in strokes]
+    anchors = {path[lo], path[hi]}
+    for stroke in result:
+        for end in (0, -1):
+            point = stroke[end]
+            node, _ = graphmod.nearest_node(point.lat, point.lon)
+            choices = sorted((haversine_m(point.lat, point.lon, g.nodes[anchor]["lat"],
+                                           g.nodes[anchor]["lon"]), anchor) for anchor in anchors)
+            for distance, anchor in choices:
+                if distance > DRAW_JOIN_MAX_M:
+                    break
+                edge = g.get_edge_data(node, anchor) if node is not None else None
+                if node == anchor or (edge is not None and edge_is_runnable(edge)
+                                      and edge.get("length", math.inf) <= DRAW_JOIN_MAX_M * 2):
+                    stroke[end] = CourseWaypoint(lat=g.nodes[anchor]["lat"], lon=g.nodes[anchor]["lon"])
+                    break
+    return result
+
+
+def _join_connected_strokes(g, strokes: list[list[CourseWaypoint]]) -> list[list[CourseWaypoint]]:
+    """Join unambiguous end-to-end pen lifts, independent of order/direction.
+
+    Never flatten separate components or invent a long road connector. Near
+    misses must resolve to the same nearby junction; exact endpoint contact
+    can also lie in the middle of an edge. Routing/topology validation follows.
+    """
+    ends = {(i, end): stroke[0 if end == 0 else -1]
+            for i, stroke in enumerate(strokes) for end in (0, 1)}
+    nearest = {key: graphmod.nearest_node(p.lat, p.lon) for key, p in ends.items()}
+    candidates = {key: [] for key in ends}
+    keys = list(ends)
+    for i, left in enumerate(keys):
+        a = ends[left]
+        for right in keys[i + 1:]:
+            if left[0] == right[0]:
+                continue
+            b = ends[right]
+            distance = haversine_m(a.lat, a.lon, b.lat, b.lon)
+            if distance > DRAW_JOIN_MAX_M:
+                continue
+            an, ad = nearest[left]
+            bn, bd = nearest[right]
+            if distance <= INTERSECTION_EPSILON_M:
+                joint = a
+            elif an is not None and an == bn and max(ad, bd) <= DRAW_JOIN_MAX_M:
+                joint = CourseWaypoint(lat=g.nodes[an]["lat"], lon=g.nodes[an]["lon"])
+            else:
+                continue
+            candidates[left].append((right, joint))
+            candidates[right].append((left, joint))
+    # A branched/ambiguous contact is not permission to choose a new route.
+    links = {key: matches[0] for key, matches in candidates.items()
+             if len(matches) == 1 and len(candidates[matches[0][0]]) == 1}
+    roots = [key for key in keys if key not in links]
+    consumed = set()
+    result = []
+    for root in [*roots, *keys]:
+        if root[0] in consumed:
+            continue
+        chain = []
+        entry = root
+        while entry[0] not in consumed:
+            index, end = entry
+            consumed.add(index)
+            part = list(strokes[index] if end == 0 else reversed(strokes[index]))
+            if entry in links:
+                part[0] = links[entry][1]
+            chain.extend(part if not chain else part[1:])
+            link = links.get((index, 1 - end))
+            if link is None:
+                break
+            entry, joint = link
+            chain[-1] = joint
+        result.append(chain)
+    return result
+
+
 def snap_drawn_strokes(params: CourseParams, path: list[int],
                        from_index: int | None, to_index: int | None,
                        strokes: list[list[CourseWaypoint]]) -> Course:
@@ -858,6 +947,8 @@ def snap_drawn_strokes(params: CourseParams, path: list[int],
         lo, hi = gap
         if hi - lo > max(400, (len(path) - 1) * 3 // 4):
             raise CourseError("한 번에 지운 구간이 너무 길어요. 더 짧게 나눠 수정해 주세요.")
+        pending = _snap_gap_endpoints(g, path, lo, hi, pending)
+        pending = _join_connected_strokes(g, pending)
         replacement = None
         used = None
         for index, stroke in enumerate(pending):
