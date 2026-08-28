@@ -67,7 +67,8 @@ from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
 from .rfs import has_sufficient_night_lighting
 from .park_presets import PARK_SPOTS, park_courses, select_park_courses
 from .naming import COURSE_EDIT_NOTICE
-from .widget import WidgetTooLargeError, build_course_widget, course_response_facts
+from .widget import (WidgetTooLargeError, build_course_widget,
+                     course_response_facts, response_start_name)
 
 DEFAULT_BASE_URL = (
     "https://runnywhere-kakaotools.playmcp-endpoint.kakaocloud.io"
@@ -728,12 +729,13 @@ def _animal_course_plan(request: dict, shape: str, text: str,
     return plan
 
 
-def _plan_widget(plan: CoursePlan) -> str | None:
+def _plan_widget(plan: CoursePlan, *, start_notice: str = "") -> str | None:
     """Serialize a plan; on failure the caller renders that SAME plan as text."""
     try:
         widget = build_course_widget(
             plan.primary.course, plan.primary.course_id, BASE_URL,
-            alternatives=plan.alternatives, primary_note=plan.primary.match_note)
+            alternatives=plan.alternatives, primary_note=plan.primary.match_note,
+            start_notice=start_notice)
     except WidgetTooLargeError:
         log.warning("mcp_widget tool=create_seoul_running_course "
                     f"state=fallback reason=too_large case={plan.case}")
@@ -774,6 +776,27 @@ def _course_summary(facts: dict) -> str:
             f"[지도 보기]({facts['map_url']})")
 
 
+def _start_change_notice(selection: dict) -> str:
+    """Disclose measured relocation without claiming a missing exact option."""
+    requested = selection.get("requested_start")
+    choices = [selection["primary"], *selection["alternatives"]]
+    relocated = [c for c in choices if c.get("is_start_alternative")]
+    if not requested or not relocated:
+        return ""
+    places = ", ".join(dict.fromkeys(c["start"] for c in relocated))
+    if selection["requested_start_offered"]:
+        exact_places = ", ".join(dict.fromkeys(
+            c["start"] for c in choices if not c["is_start_alternative"]))
+        return (f"{exact_places} 출발 코스와 {places} 출발 대안을 함께 추천해요. "
+                "대안은 요청한 출발 위치와 달라요.")
+    if any(c["start"] == requested for c in relocated):
+        # Different entrances/preset anchors may share a station name.
+        return (f"요청한 지점과 출발 위치가 다른 {places} 코스 "
+                f"{len(relocated)}개를 대안으로 추천해요.")
+    return (f"{requested} 출발 코스가 아닌, {places} 출발 대안 "
+            f"{len(relocated)}개를 추천해요.")
+
+
 def _plan_final_text(selection: dict) -> str:
     primary = selection["primary"]
     choices = [primary, *selection["alternatives"]]
@@ -788,6 +811,8 @@ def _plan_final_text(selection: dict) -> str:
     count = len(choices)
     if count > 1:
         prefix = f"서로 다른 코스 {count}개를 함께 추천해요. {prefix}"
+    if notice := selection.get("start_change_notice"):
+        prefix = notice + "\n\n" + prefix
     return prefix + "\n\n" + "\n\n".join(_course_summary(c) for c in choices) + f"\n\n{COURSE_EDIT_NOTICE}"
 
 
@@ -847,15 +872,27 @@ def _plan_result(plan: CoursePlan, course_type: str) -> CallToolResult:
     # concise chat handoff beside the widget.
     lead = plan.lead
     selection = _course_selection(
-        [course_response_facts(c.course, c.course_id, BASE_URL)
+        [dict(course_response_facts(c.course, c.course_id, BASE_URL),
+              # Straight-line displacement, not a walking distance estimate.
+              start_offset_m=round(c.distance_m),
+              is_start_alternative=bool(plan.requested_start) and c.is_detour)
          for c in (plan.primary, *plan.alternatives)], course_type)
     selection["recommendation_mode"] = plan.case
+    selection["requested_start"] = (
+        response_start_name(plan.requested_start) if plan.requested_start else None)
+    selection["requested_start_offered"] = (
+        any(not c.is_detour for c in (plan.primary, *plan.alternatives))
+        if plan.requested_start else None)
+    selection["start_change_notice"] = _start_change_notice(selection)
     final_text = _plan_final_text(selection)
-    widget = _plan_widget(plan) if KAKAO_WIDGETS_ENABLED else None
+    widget = (_plan_widget(plan, start_notice=selection["start_change_notice"])
+              if KAKAO_WIDGETS_ENABLED else None)
     if widget is None:
         # Never return the original generator's requested-animal copy once a
         # different plan was selected. Keep every actual choice and map link.
         lines = [lead, "추천 코스", _course_summary(selection["primary"])]
+        if selection["start_change_notice"]:
+            lines.insert(0, selection["start_change_notice"])
         if selection["alternatives"]:
             lines.extend(["다른 코스도 있어요", *[
                 _course_summary(c) for c in selection["alternatives"]]])

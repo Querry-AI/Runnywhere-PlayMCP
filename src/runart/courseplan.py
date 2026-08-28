@@ -64,6 +64,9 @@ class CoursePlan:
     lead: str
     primary: CourseChoice
     alternatives: tuple[CourseChoice, ...]
+    # Only an explicit point request has a start to compare against. District
+    # and park-catalogue plans keep None rather than inventing an exact origin.
+    requested_start: str | None = None
 
 
 def requested_distance(distance_km: float | None,
@@ -208,4 +211,5 @@ def build_course_plan(
         lead = (f"요청한 {shape_name} 코스를 찾되, {name}의 장소·시간(거리)을 먼저, "
                 "모양과 선택 특징을 그다음으로 고려했어요. "
                 f"첫 코스: {actual_course} · {primary.match_note}.")
-    return CoursePlan(case, lead, primary, tuple(c for _, c in ranked[1:RECOMMENDATION_COUNT]))
+    return CoursePlan(case, lead, primary,
+                      tuple(c for _, c in ranked[1:RECOMMENDATION_COUNT]), name)

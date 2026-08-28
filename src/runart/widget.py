@@ -54,6 +54,11 @@ def _copy_value(value: object, max_chars: int) -> str:
     return _COPY_MARKUP_RE.sub("", _plain_text(value, max_chars)).strip()
 
 
+def response_start_name(value: str) -> str:
+    """One bounded plain-text place label for widget and assistant facts."""
+    return _copy_value(value, 120)
+
+
 def _title_place(location_name: str) -> str:
     """Keep station titles compact by dropping parenthetical aliases."""
     place = short_place(location_name)
@@ -355,7 +360,7 @@ def course_response_facts(course: Course, course_id: str, base_url: str) -> dict
         "title": _copy_value(_widget_title(course), 80),
         "course_type": shape or "standard",
         "shape_label": f"{spec.name_ko} 모양" if spec else "일반 러닝",
-        "start": _copy_value(course.params.location_name or "지정한 출발점", 120),
+        "start": response_start_name(course.params.location_name or "지정한 출발점"),
         "distance_km": round(course.length_km, 1),
         "duration_min": effort(course.length_km, DEFAULT_PACE_S)["duration_min"],
         "ascent_m": round(course.ascent_m),
@@ -370,6 +375,7 @@ def build_course_widget(
     *,
     alternatives: tuple[CourseChoice, ...] = (),
     primary_note: str = "",
+    start_notice: str = "",
 ) -> str:
     """Return a Kakao-compatible listing for one confirmed course.
 
@@ -391,8 +397,12 @@ def build_course_widget(
     # runner cannot tell which one answered their request.
     children: list[dict] = [
         _section_heading("추천 코스", lead=True),
-        _course_card_row(course, course_id, origin, primary_note),
     ]
+    # The host may omit/rewrite accompanying assistant prose. Put a changed
+    # start in the actual widget, before any route can be mistaken for exact.
+    if start_notice:
+        children.append({"type": "Text", "value": start_notice, "size": "sm"})
+    children.append(_course_card_row(course, course_id, origin, primary_note))
     if alternatives:
         children.append(_section_heading("다른 코스도 있어요", lead=False))
         for choice in alternatives:
@@ -413,6 +423,8 @@ def build_course_widget(
     ]
     if primary_note:
         copy_lines.insert(1, f"- {_copy_value(primary_note, 160)}")
+    if start_notice:
+        copy_lines.insert(1, start_notice)
     if alternatives:
         copy_lines.extend(
             f"- {_copy_value(_choice_label(choice), LABEL_MAX_CHARS)}"
