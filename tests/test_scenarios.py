@@ -50,9 +50,9 @@ def test_p3_gps_art_share():
 
 def test_failed_shape_does_not_poison_another_animal_or_standard_course():
     rabbit = server.create_seoul_running_course(
-        course_type="rabbit", location="경복궁역")
+        course_type="rabbit", location="경복궁역", allow_nearby_start=True)
     dog = server.create_seoul_running_course(
-        course_type="dog", location="경복궁역")
+        course_type="dog", location="경복궁역", allow_nearby_start=True)
     standard = server.create_seoul_running_course(
         course_type="standard", location="성신여대역")
     rabbit_text = rabbit.content[0].text

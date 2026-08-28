@@ -89,15 +89,15 @@ def test_named_animal_returns_only_that_shape():
     assert result.structuredContent["result_code"] == "course_ready"
     assert result.isError is False
     assert labels[0] == "지도 보기"
-    assert len(labels) == 3
+    assert len(labels) == 1  # Nearby starts cannot fill slots without consent.
     assert "댕댕런" in json.dumps(payload, ensure_ascii=False)
     assert all("댕댕런" in title for title in titles)
-    assert len(set(_urls(payload)[1:])) == 2
+    assert len(set(_urls(payload))) == 1
 
 
 def test_case2_nearby_course_names_the_real_start_and_still_offers_three():
     result = server.create_seoul_running_course(
-        course_type="whale", location="서울대입구역")
+        course_type="whale", location="서울대입구역", allow_nearby_start=True)
     payload = _card(result)
     lead = _lead(result)
 
@@ -125,7 +125,7 @@ def test_no_animal_within_two_km_reports_shortage_without_plain_substitution():
 
 def test_every_choice_url_resolves_to_a_real_course_page():
     result = server.create_seoul_running_course(
-        course_type="whale", location="서울대입구역")
+        course_type="whale", location="서울대입구역", allow_nearby_start=True)
     payload = _card(result)
 
     for url in _urls(payload):
@@ -140,7 +140,7 @@ def test_plain_course_option_is_dropped_rather_than_blowing_the_budget(monkeypat
 
     monkeypatch.setattr(server, "_get_course", too_slow)
     result = server.create_seoul_running_course(
-        course_type="whale", location="서울대입구역")
+        course_type="whale", location="서울대입구역", allow_nearby_start=True)
     payload = _card(result)
 
     assert result.structuredContent["result_code"] in {"nearby_course_ready", "course_ready"}
@@ -151,7 +151,7 @@ def test_plain_course_option_is_dropped_rather_than_blowing_the_budget(monkeypat
 def test_widget_failure_still_returns_the_markdown_answer(monkeypatch):
     monkeypatch.setattr(server, "KAKAO_WIDGETS_ENABLED", False)
     result = server.create_seoul_running_course(
-        course_type="whale", location="서울대입구역")
+        course_type="whale", location="서울대입구역", allow_nearby_start=True)
 
     assert result.structuredContent["result_code"] == "nearby_course_ready"
     assert 1 <= result.structuredContent["course_selection"]["returned_count"] <= 3
@@ -188,7 +188,7 @@ def test_a_plain_course_asked_for_by_time_still_answers_with_a_card(location):
 @pytest.mark.parametrize("location", ["강남역", "서울숲"])
 def test_an_animal_course_asked_for_by_time_still_answers_with_a_card(location):
     result = server.create_seoul_running_course(
-        course_type="dog", location=location, duration_min=40)
+        course_type="dog", location=location, duration_min=40, allow_nearby_start=True)
 
     assert result.isError is False, result.content[0].text[:200]
     assert result.structuredContent["result_code"] in {
@@ -209,7 +209,7 @@ def test_the_duration_note_is_not_dressed_as_a_failure():
 def test_primary_card_honors_duration_and_shape_within_local_radius(kind):
     from runart.geo import haversine_m
     result = server.create_seoul_running_course(
-        course_type=kind, location="시청", duration_min=40)
+        course_type=kind, location="시청", duration_min=40, allow_nearby_start=True)
     cid = _urls(_card(result))[0].rsplit("/c/", 1)[1]
     course = server._cached_course(cid)
     lat, lon, _ = server.resolve_location("시청", None, None)
@@ -314,7 +314,7 @@ def test_every_answerable_course_request_comes_back_as_a_card(request_kwargs):
     Follow-up questions (facilities, status, relays) stay Markdown by design —
     they are read, not acted on with a route.
     """
-    result = server.create_seoul_running_course(**request_kwargs)
+    result = server.create_seoul_running_course(**request_kwargs, allow_nearby_start=True)
 
     assert result.isError is False, result.content[0].text[:200]
     payload = _card(result)

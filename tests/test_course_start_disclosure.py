@@ -139,6 +139,10 @@ def test_wangsimni_dog_reproduction_discloses_actual_starts(warmed_server, tool)
         result = server.create_seoul_running_course(location="왕십리역", course_type="dog")
     else:
         result = server._legacy_generate_animal_course(location="왕십리역", shape="dog")
+    assert result.structuredContent["result_code"] == "start_change_confirmation_required"
+    assert result.structuredContent["conditions_satisfied"] is False
+    options = result.structuredContent["confirmation_options"]
+    result = server.create_seoul_running_course(**options[0]["arguments"])
     assert result.structuredContent["result_code"] == "nearby_course_ready"
     notice = _assert_disclosed(result)
     payload = json.loads(result.content[0].text)
@@ -159,10 +163,28 @@ def test_mcp_http_preserves_disclosure_in_both_text_and_widget(warmed_server, mo
                         "arguments": {"location": "왕십리역", "course_type": "dog"}}})
                 assert response.status_code == 200
                 result = response.json()["result"]
+                assert result["structuredContent"]["result_code"] == "start_change_confirmation_required"
+                assert "widget" not in result["content"][0]["text"]
+                options = result["structuredContent"]["confirmation_options"]
+                response = await client.post("/mcp", json={"jsonrpc": "2.0", "id": 2,
+                    "method": "tools/call", "params": {"name": options[0]["tool"],
+                        "arguments": options[0]["arguments"]}})
+                assert response.status_code == 200
+                result = response.json()["result"]
                 metadata = result["structuredContent"]
                 notice = metadata["course_selection"]["start_change_notice"]
                 assert metadata["assistant_final_text"].startswith(notice)
                 assert result["content"][-1]["text"].startswith(notice)
                 payload = json.loads(result["content"][0]["text"])
                 assert notice in list(_visible_texts(payload["widget"]))
+                response = await client.post("/mcp", json={"jsonrpc": "2.0", "id": 3,
+                    "method": "tools/call", "params": {"name": options[1]["tool"],
+                        "arguments": options[1]["arguments"]}})
+                result = response.json()["result"]
+                assert result["structuredContent"]["result_code"] == "course_ready"
+                selection = result["structuredContent"]["course_selection"]
+                assert selection["requested_start_offered"] is True
+                assert all(not course["is_start_alternative"] for course in
+                           [selection["primary"], *selection["alternatives"]])
+                assert "widget" in json.loads(result["content"][0]["text"])
     asyncio.run(check())

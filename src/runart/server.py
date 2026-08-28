@@ -893,8 +893,11 @@ def _planned_course_result(text: str, *, course_type: str, request: dict,
         if not exact:
             return _start_change_question(plan, course_type, request)
         # Never fill unused card slots with an unapproved change of origin.
-        plan = replace(plan, primary=exact[0], alternatives=tuple(exact[1:]), case=CASE_EXACT,
-                       lead=f"{response_start_name(plan.requested_start)} 출발 코스 {len(exact)}개를 추천해요.")
+        if len(exact) != 1 + len(plan.alternatives):
+            effort = " (기본 5km)" if course_type == "standard" and not requested_distance(
+                request.get("distance_km"), request.get("duration_min")) else ""
+            plan = replace(plan, primary=exact[0], alternatives=tuple(exact[1:]), case=CASE_EXACT,
+                           lead=f"{response_start_name(plan.requested_start)} 출발 코스 {len(exact)}개{effort}를 추천해요.")
     return _plan_result(plan, course_type)
 
 
@@ -1970,16 +1973,16 @@ def create_seoul_running_course(
         "원래 출발지·모양·거리·지형·야간·시설 조건을 유지하세요."
     ))] = False,
 ) -> CallToolResult:
-    """Runnywhere(러니웨어): up to 3 running/GPS-art courses. Call ONCE per user turn;
-    never fill slots by repeating. Never invent a start. Missing/서울 시내 asks
-    for a start; 구 requests stay inside that district. Pass station/address
-    verbatim or both lat/lon. Parks/rivers/물가: need_facilities=['park']; only
-    these allow no start. standard=ordinary; best_animal=unnamed animal;
-    dog/cat/rabbit/whale=named animal; 그려줘 alone=standard. Keep explicit conditions.
-    If start_change_confirmation_required, ask the returned question and STOP.
-    On the NEXT user's choice use confirmation_options arguments with this tool.
-    Never infer nearby consent; ambiguous yes to two options needs clarification.
-    Use actual course_selection facts and assistant_final_text. Edit via web editor."""
+    """Runnywhere(러니웨어): up to 3 running courses or animal-shaped GPS art (러닝 코스/그려줘).
+    Call ONCE per user turn. Never invent a start; omit location if unstated.
+    missing/서울 시내: ask start; district: stay in 구; specific: station/address
+    verbatim or lat/lon. Parks/rivers/물가 use need_facilities=['park']; only these
+    allow no start. standard=ordinary; best_animal=unnamed animal; dog/cat/rabbit/whale
+    =named animal. 그려줘 alone=standard. Keep explicit conditions.
+    start_change_confirmation_required: ask returned question and STOP. NEXT user
+    choice: use confirmation_options arguments with this tool. Never infer nearby
+    consent; ambiguous yes to two options: clarify. 이 코스 근처 화장실 needs course_id.
+    Use actual course_selection and assistant_final_text. Edit via web editor."""
     common = dict(
         location=location, lat=lat, lon=lon, distance_km=distance_km,
         duration_min=duration_min, include_hills=include_hills,

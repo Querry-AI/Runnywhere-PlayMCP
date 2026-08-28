@@ -694,7 +694,8 @@ def test_fallback_keeps_all_selected_courses_and_does_not_confuse_primary_with_a
     monkeypatch.setattr(server, "_animal_course_plan", lambda *args: plan)
     monkeypatch.setattr(server, "_plan_widget", lambda *args, **kwargs: None)
     result = server._planned_course_result(
-        "강아지를 그렸어요", course_type="dog", request={"location": "강남역"}, timeout_s=5)
+        "강아지를 그렸어요", course_type="dog",
+        request={"location": "강남역", "allow_nearby_start": True}, timeout_s=5)
     selection = result.structuredContent["course_selection"]
 
     assert selection["primary_matches_requested_shape"] is False
