@@ -171,6 +171,15 @@ def test_exact_pen_lift_in_middle_of_edge_does_not_require_a_junction(small_grap
         [point(1), middle, point(3)]]
 
 
+def test_identical_coordinates_on_different_levels_do_not_join(small_graph):
+    from runart.course import _join_connected_strokes
+    from runart.models import CourseWaypoint
+    small_graph.add_node(5, lat=small_graph.nodes[1]["lat"], lon=127, layer=1)
+    point = lambda n: CourseWaypoint(lat=small_graph.nodes[n]["lat"], lon=127)
+    strokes = [[point(2), point(1)], [point(5), point(3)]]
+    assert _join_connected_strokes(small_graph, strokes) == strokes
+
+
 def test_closed_chain_keeps_all_strokes_and_terminates(small_graph):
     from runart.course import _join_connected_strokes
     from runart.models import CourseWaypoint
