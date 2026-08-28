@@ -21,6 +21,7 @@ import re
 import threading
 import time
 import urllib.parse
+from dataclasses import replace
 from pathlib import Path
 
 import anyio
@@ -847,6 +848,30 @@ def _complete_recommendation(result: CallToolResult, *, night_mode: bool = False
     return _recommendation_shortage(count, night_mode=night_mode)
 
 
+def _start_change_question(plan: CoursePlan, course_type: str, request: dict) -> CallToolResult:
+    """Return no route payload until the user chooses a change of start/type."""
+    start = response_start_name(plan.requested_start)
+    label = {"dog": "강아지", "cat": "고양이", "rabbit": "토끼", "whale": "고래",
+             "best_animal": "동물 모양", "standard": "일반 러닝"}[course_type]
+    text = (f"{start}에서 출발하는 요청 조건의 {label} 코스를 찾지 못했어요.\n"
+            f"1. 가까운 출발지의 {label} 코스를 알려드릴까요?")
+    common = {key: request[key] for key in ("location", "lat", "lon", "distance_km",
+              "duration_min", "include_hills", "night_mode", "need_facilities")
+              if key in request and request[key] is not None}
+    options = [dict(choice=1, tool="create_seoul_running_course",
+                    arguments=dict(common, course_type=course_type, allow_nearby_start=True))]
+    if course_type != "standard":
+        text += f"\n2. 아니면 {start}에서 출발하는 일반 러닝 코스를 찾아드릴까요?"
+        options.append(dict(choice=2, tool="create_seoul_running_course",
+                            arguments=dict(common, course_type="standard", allow_nearby_start=False)))
+    text += "\n선택해 주시면 기존 거리·지형·시설 조건을 유지해 찾아드릴게요."
+    result = _mcp_result(text, code="start_change_confirmation_required")
+    result.structuredContent.update(requires_confirmation=True, conditions_satisfied=False,
+        confirmation_options=options, next_action="Wait for the user's explicit choice. Do not call again in this turn. "
+        "For an ambiguous yes to two options, ask which option. Preserve the original conditions.")
+    return result
+
+
 def _planned_course_result(text: str, *, course_type: str, request: dict,
                            timeout_s: float) -> CallToolResult | None:
     """Answer any course request with consistently ranked candidates, or None."""
@@ -863,6 +888,13 @@ def _planned_course_result(text: str, *, course_type: str, request: dict,
     plan = _animal_course_plan(request, course_type, text, timeout_s)
     if plan is None:
         return None
+    if plan.requested_start and request.get("allow_nearby_start") is not True:
+        exact = [choice for choice in (plan.primary, *plan.alternatives) if not choice.is_detour]
+        if not exact:
+            return _start_change_question(plan, course_type, request)
+        # Never fill unused card slots with an unapproved change of origin.
+        plan = replace(plan, primary=exact[0], alternatives=tuple(exact[1:]), case=CASE_EXACT,
+                       lead=f"{response_start_name(plan.requested_start)} 출발 코스 {len(exact)}개를 추천해요.")
     return _plan_result(plan, course_type)
 
 
@@ -1163,7 +1195,8 @@ def _dispatch_course_request(course_type: str, request: dict) -> CallToolResult:
                       "terrain": None if request.get("include_hills") is None else "hills" if request["include_hills"] else "flat",
                       "facilities": request.get("need_facilities") or [], "night_mode": bool(request.get("night_mode"))}
         result.structuredContent.update(release_sha=RELEASE_SHA, start_scope=scope, district=district,
-            **stats, conditions_requested=conditions, conditions_satisfied=not result.isError,
+            **stats, conditions_requested=conditions, conditions_satisfied=(not result.isError and
+                result.structuredContent.get("result_code") in {"course_ready", "nearby_course_ready"}),
             unmet_conditions=sorted(stats["rejection_counts"]) if result.isError else [])
         return result
     finally:
@@ -1931,23 +1964,27 @@ def create_seoul_running_course(
         "park를 전달하세요. 등록된 5곳 중 조건에 맞는 최대 3곳을 무작위로, 출발지가 있으면 가까운 순으로 반환합니다. "
         "일반 코스 주변에 공원이 있다는 이유로 park를 추론하지 마세요."
     ))] = None,
+    allow_nearby_start: Annotated[bool, Field(description=(
+        "기본 false. 사용자가 가까운 다른 출발지 코스를 명시적으로 선택한 뒤에만 true. "
+        "추천 요청 자체나 두 선택지에 대한 모호한 '네'를 동의로 해석하지 마세요. "
+        "원래 출발지·모양·거리·지형·야간·시설 조건을 유지하세요."
+    ))] = False,
 ) -> CallToolResult:
-    """Runnywhere(러니웨어) returns up to 3 running courses or animal-shaped GPS art. Call ONCE for
-    러닝 코스/그려줘/추천해줘; never repeat to fill slots. Never invent a start:
-    omit location if unstated, even with distance/animal/night conditions.
-    missing or city-wide (서울 시내/아무데나): server asks for a start.
-    district (강남구): starts inside that 구. specific: pass station/shop/address
-    verbatim, or both lat/lon. Parks/rivers/물가 use need_facilities=['park'];
-    only these allow no start. standard=ordinary; best_animal=unnamed animal;
-    dog/cat/rabbit/whale=named animal. '그려줘' alone is standard.
-    Explicit conditions are required; night lighting >=0.4, not a safety guarantee.
-    0 matches=insufficient_courses. 이 코스 근처 화장실 needs a supplied course_id.
-    Use course_selection actual facts. Close with assistant_final_text verbatim.
-    Edit via the web editor."""
+    """Runnywhere(러니웨어): up to 3 running/GPS-art courses. Call ONCE per user turn;
+    never fill slots by repeating. Never invent a start. Missing/서울 시내 asks
+    for a start; 구 requests stay inside that district. Pass station/address
+    verbatim or both lat/lon. Parks/rivers/물가: need_facilities=['park']; only
+    these allow no start. standard=ordinary; best_animal=unnamed animal;
+    dog/cat/rabbit/whale=named animal; 그려줘 alone=standard. Keep explicit conditions.
+    If start_change_confirmation_required, ask the returned question and STOP.
+    On the NEXT user's choice use confirmation_options arguments with this tool.
+    Never infer nearby consent; ambiguous yes to two options needs clarification.
+    Use actual course_selection facts and assistant_final_text. Edit via web editor."""
     common = dict(
         location=location, lat=lat, lon=lon, distance_km=distance_km,
         duration_min=duration_min, include_hills=include_hills,
         night_mode=night_mode, need_facilities=need_facilities,
+        allow_nearby_start=allow_nearby_start,
     )
     return _dispatch_course_request(course_type, common)
 
