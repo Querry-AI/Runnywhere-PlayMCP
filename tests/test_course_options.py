@@ -419,7 +419,7 @@ def test_park_recommendations_accept_coordinates_and_preserve_night_lighting():
 def test_park_response_uses_actual_starts_not_the_requested_district(monkeypatch, widget_fails):
     monkeypatch.setattr(server, "resolve_location", lambda *a, **k: pytest.fail("district geocoded"))
     if widget_fails:
-        monkeypatch.setattr(server, "_plan_widget", lambda *a: None)
+        monkeypatch.setattr(server, "_plan_widget", lambda *a, **kw: None)
     result = server.create_seoul_running_course(
         course_type="standard", location="성동구", need_facilities=["park"])
     metadata = result.structuredContent

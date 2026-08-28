@@ -145,7 +145,9 @@ def test_wangsimni_dog_reproduction_discloses_actual_starts(warmed_server, tool)
     assert notice in list(_visible_texts(payload["widget"]))
 
 
-def test_mcp_http_preserves_disclosure_in_both_text_and_widget(warmed_server):
+def test_mcp_http_preserves_disclosure_in_both_text_and_widget(warmed_server, monkeypatch):
+    # FastMCP's lifespan is one-shot; another module also exercises this server.
+    monkeypatch.setattr(server.mcp, "_session_manager", None)
     async def check():
         app = server.mcp.streamable_http_app()
         async with app.router.lifespan_context(app):
