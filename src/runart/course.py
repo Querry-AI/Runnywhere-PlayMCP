@@ -960,6 +960,70 @@ def _join_connected_strokes(g, strokes: list[list[CourseWaypoint]]) -> list[list
     return result
 
 
+
+# A drawn line and the route it visibly meets can still be a few roads apart in
+# the graph. Walking that remainder keeps the runner's own two lines; a longer
+# connector would be a route they never drew, so it is refused instead.
+DRAW_BRIDGE_MAX_M = 250.0
+
+
+def _bridge_drawing_to_retained(g, weight, path: list[int], lo: int, hi: int,
+                                strokes: list[list[CourseWaypoint]]):
+    """Retained green + the drawn line, joined by the shortest walk between.
+
+    The pair that deletes the least green wins, not the pair whose connector is
+    shortest: a closed course revisits places, so the nearest join can sit on
+    the far side of the loop and collapse the route.
+
+    Returns (replacement, stroke index, start index, end index) or four Nones.
+    """
+    for index, stroke in enumerate(strokes):
+        try:
+            routed = _route_one_stroke(g, weight, stroke, close=False)
+        except CourseError:
+            continue
+        if len(routed) < 2:
+            continue
+        for first, last, ordered in ((routed[0], routed[-1], routed),
+                                     (routed[-1], routed[0], routed[::-1])):
+            heads = [i for i in range(lo + 1)
+                     if haversine_m(g.nodes[path[i]]["lat"], g.nodes[path[i]]["lon"],
+                                    g.nodes[first]["lat"], g.nodes[first]["lon"])
+                     <= DRAW_BRIDGE_MAX_M]
+            tails = [j for j in range(hi, len(path))
+                     if haversine_m(g.nodes[path[j]]["lat"], g.nodes[path[j]]["lon"],
+                                    g.nodes[last]["lat"], g.nodes[last]["lon"])
+                     <= DRAW_BRIDGE_MAX_M]
+            # The join may eat into the green beyond the erased span, but not
+            # by more than the runner actually drew. Without this a one-sided
+            # line reaches the far side of a closed loop and the 5km course
+            # comes back as 1.25km.
+            allowance = _path_length(g, ordered) + DRAW_BRIDGE_MAX_M
+            pairs = sorted(((lo - i) + (j - hi), i, j)
+                           for i in heads for j in tails)
+            for _removed, i, j in pairs:
+                extra = (_path_length(g, path[i:lo + 1])
+                         + _path_length(g, path[hi:j + 1]))
+                if extra > allowance:
+                    continue
+                try:
+                    lead = _route(g, weight, path[i], first)
+                    trail = _route(g, weight, last, path[j])
+                except (nx.NetworkXNoPath, nx.NodeNotFound):
+                    continue
+                if (_path_length(g, lead) > DRAW_BRIDGE_MAX_M
+                        or _path_length(g, trail) > DRAW_BRIDGE_MAX_M):
+                    continue
+                return lead[:-1] + ordered + trail[1:], index, i, j
+    return None, None, None, None
+
+
+def _path_length(g, nodes: list[int]) -> float:
+    return sum(haversine_m(g.nodes[a]["lat"], g.nodes[a]["lon"],
+                           g.nodes[b]["lat"], g.nodes[b]["lon"])
+               for a, b in zip(nodes, nodes[1:]))
+
+
 def snap_drawn_strokes(params: CourseParams, path: list[int],
                        from_index: int | None, to_index: int | None,
                        strokes: list[list[CourseWaypoint]]) -> Course:
@@ -1015,47 +1079,13 @@ def snap_drawn_strokes(params: CourseParams, path: list[int],
                 break
         join_lo, join_hi = lo, hi
         if replacement is None:
-            # A runner rarely lifts the pen exactly on the red endpoints. When
-            # the drawing instead meets the retained green route further out,
-            # honour where it actually joined: replace that wider span rather
-            # than refusing a line the runner can plainly see is connected.
-            # Nearest connection on each side keeps the most untouched green.
-            reachable = _snap_tips_to_retained(
-                g, path, lo, hi, pending, DRAW_TIP_JOIN_MAX_M)
-            for index, stroke in enumerate(reachable):
-                raw = [(point.lat, point.lon) for point in stroke]
-                routed = _route_one_stroke(g, weight, stroke, close=False)
-                connections = set(_topological_intersection_nodes(g, path, routed, raw))
-                if not connections:
-                    continue
-                head = [i for i in range(lo + 1) if path[i] in connections]
-                tail = [j for j in range(hi, len(path)) if path[j] in connections]
-                if not head or not tail:
-                    continue
-                start, end = max(head), min(tail)
-                # A closed course revisits nodes, so a shared node id can also
-                # name the far side of the loop; splicing there would delete
-                # most of the route. The join may reach past the erased span,
-                # but no further than the span the runner actually erased.
-                reach = max(hi - lo, 8)
-                if lo - start > reach or end - hi > reach:
-                    continue
-                a = routed.index(path[start])
-                b = len(routed) - 1 - routed[::-1].index(path[end])
-                if a > b:
-                    routed.reverse()
-                    a = routed.index(path[start])
-                    b = len(routed) - 1 - routed[::-1].index(path[end])
-                if a >= b:
-                    continue
-                span = routed[a:b + 1]
-                if not stroke_is_doubled(stroke):
-                    span = drop_backtracking(
-                        span,
-                        keep_span=lambda candidate: _within_drawn_corridor(g, candidate, raw))
-                replacement, used = span, index
-                join_lo, join_hi = start, end
-                break
+            # What the runner sees is the retained green plus the line they
+            # drew. Keep exactly that and walk the short remainder between
+            # them, deleting as little green as the join allows. Matching
+            # shared graph nodes instead used to pick the far side of a closed
+            # loop and collapse the course.
+            replacement, used, join_lo, join_hi = _bridge_drawing_to_retained(
+                g, weight, path, lo, hi, pending)
         if replacement is None:
             raise CourseError(
                 "그린 선이 지운 구간의 양 끝과 실제로 이어지지 않았어요. 붉은 선 양 끝을 교차하도록 다시 그려 주세요.")
