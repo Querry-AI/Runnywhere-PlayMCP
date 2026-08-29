@@ -1789,7 +1789,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    syncMapInteraction();
    renderDraft();setEditDistance();
    if(!value)return hideEditToast();
-   setEditStatus(editNotice||'지우개로 구간을 지운 뒤, 붉은 선의 양 끝을 자유롭게 이어 그리세요.','info');
+   setEditStatus(editNotice||'지우개로 구간을 지운 뒤 이어 그리세요. 붉은 선 양 끝이 아니어도 남은 초록 선에 닿으면 이어집니다.','info');
  }};
  const projection={{
    containerPointFromCoords:latlng=>map.getProjection().containerPointFromCoords(latlng),

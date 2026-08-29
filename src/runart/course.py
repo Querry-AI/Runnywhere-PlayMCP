@@ -975,10 +975,51 @@ def snap_drawn_strokes(params: CourseParams, path: list[int],
                         keep_span=lambda span: _within_drawn_corridor(g, span, raw))
                 used = index
                 break
+        join_lo, join_hi = lo, hi
+        if replacement is None:
+            # A runner rarely lifts the pen exactly on the red endpoints. When
+            # the drawing instead meets the retained green route further out,
+            # honour where it actually joined: replace that wider span rather
+            # than refusing a line the runner can plainly see is connected.
+            # Nearest connection on each side keeps the most untouched green.
+            for index, stroke in enumerate(pending):
+                raw = [(point.lat, point.lon) for point in stroke]
+                routed = _route_one_stroke(g, weight, stroke, close=False)
+                connections = set(_topological_intersection_nodes(g, path, routed, raw))
+                if not connections:
+                    continue
+                head = [i for i in range(lo + 1) if path[i] in connections]
+                tail = [j for j in range(hi, len(path)) if path[j] in connections]
+                if not head or not tail:
+                    continue
+                start, end = max(head), min(tail)
+                # A closed course revisits nodes, so a shared node id can also
+                # name the far side of the loop; splicing there would delete
+                # most of the route. The join may reach past the erased span,
+                # but no further than the span the runner actually erased.
+                reach = max(hi - lo, 8)
+                if lo - start > reach or end - hi > reach:
+                    continue
+                a = routed.index(path[start])
+                b = len(routed) - 1 - routed[::-1].index(path[end])
+                if a > b:
+                    routed.reverse()
+                    a = routed.index(path[start])
+                    b = len(routed) - 1 - routed[::-1].index(path[end])
+                if a >= b:
+                    continue
+                span = routed[a:b + 1]
+                if not stroke_is_doubled(stroke):
+                    span = drop_backtracking(
+                        span,
+                        keep_span=lambda candidate: _within_drawn_corridor(g, candidate, raw))
+                replacement, used = span, index
+                join_lo, join_hi = start, end
+                break
         if replacement is None:
             raise CourseError(
                 "그린 선이 지운 구간의 양 끝과 실제로 이어지지 않았어요. 붉은 선 양 끝을 교차하도록 다시 그려 주세요.")
-        current = path[:lo] + replacement + path[hi + 1:]
+        current = path[:join_lo] + replacement + path[join_hi + 1:]
         pending.pop(used)
 
     # Add every remaining stroke independently. Never flatten two strokes:

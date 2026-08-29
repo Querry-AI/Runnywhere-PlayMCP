@@ -193,3 +193,46 @@ def test_closed_chain_keeps_all_strokes_and_terminates(small_graph):
     joined = _join_connected_strokes(small_graph,
         [[point(1), point(2)], [point(3), point(2)], [point(1), point(3)]])
     assert joined == [[point(1), point(2), point(3), point(1)]]
+
+
+def _detour_between_green(source, lo, hi, back):
+    """A drawn line that meets the retained route outside the erased ends.
+
+    The runner rarely lifts the pen exactly on the red endpoints. This routes
+    between two green nodes further out, along roads that avoid both erased
+    ends entirely.
+    """
+    import networkx as nx
+    from runart.models import CourseWaypoint
+    g = graphmod.get_graph()
+    path = source.path
+    head, tail = path[lo - back], path[hi + back]
+    blocked = set(path[lo - back + 1:hi + back])
+    sub = g.subgraph([node for node in g.nodes if node not in blocked] + [head, tail])
+    detour = nx.shortest_path(sub, head, tail, weight="length")
+    assert path[lo] not in detour and path[hi] not in detour
+    return [dict(lat=g.nodes[node]["lat"], lon=g.nodes[node]["lon"]) for node in detour]
+
+
+def test_drawing_that_meets_green_outside_the_erased_ends_is_accepted(source):
+    response, data = _snap(source, [_detour_between_green(source, 10, 40, 4)])
+    assert response.status_code == 200, data
+    path = [point[0] for point in data["path"]]
+    # Green the drawing never touched is kept; the join replaces only the span
+    # between the two places the pen actually met the route.
+    assert path[:7] == source.path[:7]
+    assert path[-len(source.path[44:]):] == source.path[44:]
+
+
+def test_one_sided_drawing_does_not_splice_across_the_loop(source):
+    """A closed course revisits nodes: a shared id can name the far side.
+
+    Splicing there would delete most of the route, so a line that only meets
+    the green on one side of the gap must still be refused.
+    """
+    g = graphmod.get_graph()
+    stroke = [dict(lat=g.nodes[node]["lat"], lon=g.nodes[node]["lon"])
+              for node in source.path[4:9]]
+    response, data = _snap(source, [stroke])
+    assert response.status_code == 422, data
+    assert "이어지지 않았어요" in data["error"], data
