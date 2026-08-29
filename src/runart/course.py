@@ -832,6 +832,10 @@ def _route_one_stroke(g, weight, stroke: list[CourseWaypoint], *, close: bool
 # Interaction tolerance is separate from exact geometric intersection. Only
 # explicit gap endpoints / pen lifts may use it, never arbitrary crossings.
 DRAW_JOIN_MAX_M = 12.0
+# A finger on a city-zoom map is not accurate to 12m. When the strict endpoint
+# match has already failed, a wider reach is what lets a visibly connected line
+# join at all; the runnable-edge check below still refuses a different level.
+DRAW_TIP_JOIN_MAX_M = 45.0
 
 
 def _snap_gap_endpoints(g, path: list[int], lo: int, hi: int,
@@ -856,6 +860,40 @@ def _snap_gap_endpoints(g, path: list[int], lo: int, hi: int,
                 if node == anchor or (edge is not None and edge_is_runnable(edge)
                                       and edge.get("length", math.inf) <= DRAW_JOIN_MAX_M * 2):
                     stroke[end] = CourseWaypoint(lat=g.nodes[anchor]["lat"], lon=g.nodes[anchor]["lon"])
+                    break
+    return result
+
+
+
+def _snap_tips_to_retained(g, path: list[int], lo: int, hi: int,
+                           strokes: list[list[CourseWaypoint]],
+                           max_distance_m: float) -> list[list[CourseWaypoint]]:
+    """Bind each pen tip to the retained route it visibly reaches.
+
+    _snap_gap_endpoints only considers the two erased ends, so a line drawn
+    back onto the green further out keeps a tip that belongs to no node and
+    never registers as a connection. Proximity alone is still not enough: the
+    tip must land on that node or one short runnable edge away from it, which
+    is what keeps a bridge from joining the road beneath it.
+    """
+    retained = [path[i] for i in range(len(path)) if i <= lo or i >= hi]
+    result = [list(stroke) for stroke in strokes]
+    for stroke in result:
+        for end in (0, -1):
+            point = stroke[end]
+            node, _ = graphmod.nearest_node(point.lat, point.lon)
+            choices = sorted(
+                (haversine_m(point.lat, point.lon, g.nodes[anchor]["lat"],
+                             g.nodes[anchor]["lon"]), anchor)
+                for anchor in retained)
+            for distance, anchor in choices:
+                if distance > max_distance_m:
+                    break
+                edge = g.get_edge_data(node, anchor) if node is not None else None
+                if node == anchor or (edge is not None and edge_is_runnable(edge)
+                                      and edge.get("length", math.inf) <= max_distance_m * 2):
+                    stroke[end] = CourseWaypoint(lat=g.nodes[anchor]["lat"],
+                                                 lon=g.nodes[anchor]["lon"])
                     break
     return result
 
@@ -982,7 +1020,9 @@ def snap_drawn_strokes(params: CourseParams, path: list[int],
             # honour where it actually joined: replace that wider span rather
             # than refusing a line the runner can plainly see is connected.
             # Nearest connection on each side keeps the most untouched green.
-            for index, stroke in enumerate(pending):
+            reachable = _snap_tips_to_retained(
+                g, path, lo, hi, pending, DRAW_TIP_JOIN_MAX_M)
+            for index, stroke in enumerate(reachable):
                 raw = [(point.lat, point.lon) for point in stroke]
                 routed = _route_one_stroke(g, weight, stroke, close=False)
                 connections = set(_topological_intersection_nodes(g, path, routed, raw))

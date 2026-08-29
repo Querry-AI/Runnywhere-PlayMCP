@@ -236,3 +236,19 @@ def test_one_sided_drawing_does_not_splice_across_the_loop(source):
     response, data = _snap(source, [stroke])
     assert response.status_code == 422, data
     assert "이어지지 않았어요" in data["error"], data
+
+
+@pytest.mark.parametrize("miss", [15, 30])
+def test_finger_miss_beyond_the_strict_anchor_still_joins(source, miss):
+    """A finger on a city-zoom map is not accurate to 12 metres."""
+    response, data = _snap(source, [_stroke(source, offset=miss)])
+    assert response.status_code == 200, data
+
+
+def test_detour_whose_tips_stop_short_of_the_green_still_joins(source):
+    g = graphmod.get_graph()
+    stroke = _detour_between_green(source, 10, 40, 4)
+    for end in (0, -1):
+        stroke[end] = dict(lat=stroke[end]["lat"] + 20 / 111320, lon=stroke[end]["lon"])
+    response, data = _snap(source, [stroke])
+    assert response.status_code == 200, data
