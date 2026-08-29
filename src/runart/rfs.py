@@ -65,7 +65,9 @@ COMPONENT_LABELS_KO = {
 }
 
 
-def _slope_score(slope_pct: float, include_hills: bool) -> float:
+def _slope_score(slope_pct: float, include_hills: bool | None) -> float:
+    if include_hills is None:
+        return 0.5  # Unspecified terrain must neither reward nor penalize hills.
     if include_hills:
         # Training mode: reward the 3-8% sweet spot.
         if HILL_SWEET_LO <= slope_pct <= HILL_SWEET_HI:
@@ -213,7 +215,7 @@ def weight_value(attrs: dict, night_mode: bool, include_hills: bool,
     to be able to get it.
     """
     cost = 1.0 + 1.0 * (1.0 - edge_rfs(attrs, night_mode, include_hills))
-    if not include_hills:
+    if include_hills is False:
         cost += 0.22 * max(0.0, attrs.get("slope_pct", 2.0) - 1.0)
     cost *= map_alignment_factor(attrs, prefer_parks)
     return attrs["length"] * cost
@@ -380,7 +382,9 @@ def precompute_weights(g) -> None:
                         weight_value(attrs, night, hills, parks) * penalty)
 
 
-def routing_weight(night_mode: bool, include_hills: bool,
-                   prefer_parks: bool = False) -> str:
-    """Weight argument for nx.dijkstra_path — precomputed attr name."""
+def routing_weight(night_mode: bool, include_hills: bool | None,
+                   prefer_parks: bool = False):
+    """Use legacy baked profiles, or neutral terrain when not requested."""
+    if include_hills is None:
+        return lambda u, v, attrs: weight_value(attrs, night_mode, None, prefer_parks)
     return weight_attr(night_mode, include_hills, prefer_parks)

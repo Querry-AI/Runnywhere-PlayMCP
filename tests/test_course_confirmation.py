@@ -108,4 +108,4 @@ def test_confirmation_does_not_relax_hard_constraints(monkeypatch):
     result = server._course_tool_result("", course_type="dog", request=request, timeout_s=10)
     assert captured == [request]
     assert result.isError
-    assert result.structuredContent["result_code"] == "insufficient_courses"
+    assert result.structuredContent["result_code"] == "no_candidate_evidence"

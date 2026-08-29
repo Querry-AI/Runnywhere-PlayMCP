@@ -141,7 +141,7 @@ def test_no_base_course_does_not_try_variants_or_preset_substitutes(monkeypatch)
     monkeypatch.setattr(server, "generate_running_course", lambda **kw: "⚠️ 순환 코스를 만들지 못했어요.")
     monkeypatch.setattr(server, "_standard_alternatives", lambda *a: pytest.fail("variant attempted"))
     result = server.create_seoul_running_course(course_type="standard", location="시청")
-    assert result.structuredContent["result_code"] == "insufficient_courses"
+    assert result.structuredContent["result_code"] == "no_candidate_evidence"
     assert result.structuredContent["retryable"] is False
     assert result.structuredContent["repeat_tool_call"] is False
 
@@ -165,7 +165,7 @@ def test_parallel_variants_use_existing_pool_and_have_inline_fallback(monkeypatc
 
 def test_schema_contracts_fit_budget_and_terrain_is_tristate():
     tools = {t.name: t for t in asyncio.run(server.mcp.list_tools())}
-    for name in ("create_seoul_running_course", "generate_running_course", "generate_animal_course"):
+    for name in ("create_seoul_running_course",):
         description = tools[name].description
         assert all(term in description for term in ("missing", "district", "specific", "omit location"))
         assert len(description) <= 900
@@ -268,11 +268,11 @@ def test_real_streamable_http_contract_and_course_links():
                     "capabilities": {}, "clientInfo": {"name": "local-policy-check", "version": "1"}})
                 assert initialized["serverInfo"]["name"] == "Runnywhere"
                 listed = await rpc("tools/list", {})
-                assert len(listed["tools"]) == 9
+                assert len(listed["tools"]) == 7
                 for name, arguments, code in (
                     ("create_seoul_running_course", {"course_type": "whale", "distance_km": 7}, "missing_start"),
-                    ("generate_running_course", {"location": "서울 시내"}, "missing_start"),
-                    ("generate_animal_course", {"location": "강남구", "shape": "whale"}, "course_ready"),
+                    ("create_seoul_running_course", {"course_type": "standard", "location": "서울 시내"}, "missing_start"),
+                    ("create_seoul_running_course", {"course_type": "whale", "location": "강남구"}, "course_ready"),
                     ("create_seoul_running_course", {"course_type": "standard", "location": "시청", "distance_km": 100}, "invalid_request"),
                     ("create_seoul_running_course", {"course_type": "standard", "need_facilities": ["park"]}, "course_ready"),
                 ):

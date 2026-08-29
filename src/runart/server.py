@@ -21,11 +21,12 @@ import re
 import threading
 import time
 import urllib.parse
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import anyio
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from typing import Annotated, Literal
 
@@ -67,6 +68,7 @@ from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
 from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
 from .rfs import has_sufficient_night_lighting
 from .park_presets import PARK_SPOTS, park_courses, select_park_courses
+from .standard_presets import get_standard_preset, nearest_start_preset
 from .naming import COURSE_EDIT_NOTICE
 from .widget import (WidgetTooLargeError, build_course_widget,
                      course_response_facts, response_start_name)
@@ -126,12 +128,39 @@ if LEGAL_CONTACT and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", LEGAL_CONTACT
     raise RuntimeError("RUNART_LEGAL_CONTACT must be an email address")
 log = logging.getLogger("runart")
 FONT_PATH = Path(__file__).resolve().parent / "assets" / "PretendardVariable.woff2"
-RELEASE_SHA = next((
+_RAW_RELEASE_SHA = next((
     os.environ[name] for name in (
         "RUNART_RELEASE_SHA", "GIT_COMMIT", "SOURCE_VERSION", "REVISION_ID")
     if os.environ.get(name)
 ), "unknown")
+
+
+def _validated_release_sha(value: str, *, production: bool) -> str:
+    """Reject unverifiable production images without weakening local setup."""
+    if production and not re.fullmatch(r"[0-9a-fA-F]{40}", value):
+        raise RuntimeError(
+            "production RUNART_RELEASE_SHA must be the exact 40-character Git SHA")
+    return value.lower() if re.fullmatch(r"[0-9a-fA-F]{40}", value) else value
+
+
+RELEASE_SHA = _validated_release_sha(
+    _RAW_RELEASE_SHA,
+    production=os.environ.get("RUNART_ENV", "development").lower() == "production",
+)
 _WARM_READY = threading.Event()
+
+_PRODUCTION_HOST = _BASE_PARTS.netloc
+_TRANSPORT_SECURITY = TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=[
+        _PRODUCTION_HOST,
+        "localhost:*", "127.0.0.1:*", "testserver",
+    ],
+    allowed_origins=[
+        "https://preview-chatgpt.kakao.com", BASE_URL,
+        "http://localhost:*", "http://127.0.0.1:*",
+    ],
+)
 
 mcp = FastMCP(
     "Runnywhere",
@@ -197,6 +226,7 @@ mcp = FastMCP(
     json_response=True,
     host=os.environ.get("HOST", "127.0.0.1"),
     port=int(os.environ.get("PORT", "8000")),
+    transport_security=_TRANSPORT_SECURITY,
 )
 
 _RO = dict(readOnlyHint=True, destructiveHint=False, idempotentHint=True)
@@ -638,6 +668,15 @@ def _standard_alternatives(probe: CourseParams, standard: Course | None,
         if isinstance(cached, CourseError):
             continue
         course = _cached_course(cid)
+        if course is None:
+            # Variants never reach _get_course, so the build-time catalogue has
+            # to be consulted here too or every alternative is regenerated.
+            course = get_standard_preset(params)
+            if isinstance(course, CourseError):
+                _cache_put(cid, course)
+                continue
+            if course is not None:
+                _cache_put(cid, course)
         if course is not None:
             courses[variant] = course
         else:
@@ -698,7 +737,12 @@ def _animal_course_plan(request: dict, shape: str, text: str,
     # must instead keep these candidates and assess their measured features.
     preset_probe = probe.model_copy(update={
         "include_hills": False, "night_mode": False, "need_facilities": []})
-    animals = [] if probe.night_mode else _any_animal_matches(preset_probe, NEARBY_RADIUS_M)
+    # Always inspect verified presets first. Night/facility requests used to
+    # suppress this local evidence and jump directly into slow generation;
+    # the shared hard gates below decide whether each preset is actually valid.
+    animals = (find_nearby_animal_presets(preset_probe, NEARBY_RADIUS_M)
+               if shape in SHAPES
+               else _any_animal_matches(preset_probe, NEARBY_RADIUS_M))
     animals.extend(PresetMatch(c, haversine_m(lat, lon, c.params.lat, c.params.lon))
                    for c in cached if c.params.shape)
     animals = _eligible_matches(animals, request, shape, allow_animal_alternatives=shape == "standard")
@@ -817,8 +861,248 @@ def _plan_final_text(selection: dict) -> str:
     return prefix + "\n\n" + "\n\n".join(_course_summary(c) for c in choices) + f"\n\n{COURSE_EDIT_NOTICE}"
 
 
+@dataclass(frozen=True)
+class CandidateRejection:
+    """Sanitized per-candidate evidence kept inside one tool invocation."""
+
+    course: Course
+    distance_m: float
+    reasons: tuple[str, ...]
+    is_start_alternative: bool
+
+
+_COURSE_TYPE_LABELS = {
+    "standard": "일반 러닝 코스", "best_animal": "동물 모양",
+    "dog": "강아지 모양", "cat": "고양이 모양",
+    "rabbit": "토끼 모양", "whale": "고래 모양",
+}
+_REASON_LABELS = {
+    "distance": "거리", "terrain": "지형", "lighting": "야간 조명",
+    "night_animal": "야간 조명", "shape": "모양",
+    "start_distance": "출발지", "district": "출발 지역",
+}
+
+
+def _public_course_arguments(request: dict, course_type: str) -> dict:
+    keys = ("location", "lat", "lon", "distance_km", "duration_min",
+            "strict_distance", "include_hills", "night_mode", "need_facilities",
+            "allow_nearby_start")
+    arguments = {key: request[key] for key in keys
+                 if key in request and request[key] is not None}
+    arguments["course_type"] = course_type
+    return arguments
+
+
+def _reason_labels(reasons: set[str]) -> list[str]:
+    labels = []
+    for reason in sorted(reasons):
+        label = LABELS_KO.get(reason) or _REASON_LABELS.get(reason) or reason
+        if label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _requested_conditions_text(request: dict, course_type: str) -> str:
+    labels = []
+    if request.get("distance_km") is not None:
+        if request.get("strict_distance"):
+            tolerance_m = round(max(50.0, request["distance_km"] * 1000 * 0.025))
+            labels.append(
+                f"정확히 {request['distance_km']:g}km(허용 오차 ±{tolerance_m}m)")
+        else:
+            labels.append(f"{request['distance_km']:g}km")
+    elif request.get("duration_min") is not None:
+        labels.append(f"약 {request['duration_min']:g}분")
+    if request.get("include_hills") is False:
+        labels.append("평지")
+    elif request.get("include_hills") is True:
+        labels.append("오르막")
+    if request.get("night_mode"):
+        labels.append("야간 조명")
+    labels.extend(LABELS_KO.get(kind, kind)
+                  for kind in sorted(set(request.get("need_facilities") or [])))
+    labels.append(_COURSE_TYPE_LABELS[course_type])
+    return " + ".join(labels)
+
+
+def _verified_relaxation_options(request: dict, course_type: str) -> list[dict]:
+    """Build only options that a real rejected candidate passes after replay."""
+    evidence = list(request.get("_candidate_rejections", {}).values())
+    evidence.sort(key=lambda item: (
+        len(set(item.reasons)), item.distance_m, item.course.length_km,
+        encode_course_id(item.course.params)))
+    options = []
+    seen = set()
+    for item in evidence:
+        reasons = set(item.reasons)
+        arguments = _public_course_arguments(request, course_type)
+        changed = []
+        copy = []
+        changed_to_candidate_start = "start_distance" in reasons
+        if changed_to_candidate_start:
+            arguments["location"] = item.course.params.location_name
+            arguments.pop("lat", None)
+            arguments.pop("lon", None)
+            arguments["allow_nearby_start"] = False
+            changed.extend(["location", "lat", "lon", "allow_nearby_start"])
+            copy.append(f"출발지를 {item.course.params.location_name}(으)로 변경")
+        elif item.is_start_alternative and not request.get("allow_nearby_start"):
+            arguments["allow_nearby_start"] = True
+            changed.append("allow_nearby_start")
+            copy.append(f"출발지를 {item.course.params.location_name}까지 허용")
+        if "distance" in reasons:
+            arguments["distance_km"] = round(item.course.length_km, 3)
+            arguments.pop("duration_min", None)
+            changed.extend(["distance_km", "duration_min"])
+            copy.append(f"거리를 {item.course.length_km:.1f}km로 변경")
+        if "terrain" in reasons:
+            arguments["include_hills"] = not item.course.is_flat
+            changed.append("include_hills")
+            copy.append("오르막을 허용" if not item.course.is_flat else "평지로 변경")
+        if reasons & {"lighting", "night_animal"}:
+            arguments["night_mode"] = False
+            changed.append("night_mode")
+            copy.append("야간 조명 조건 해제")
+        missing_facilities = sorted(reasons & set(FACILITY_TYPES))
+        if missing_facilities:
+            kept = [kind for kind in arguments.get("need_facilities", [])
+                    if kind not in missing_facilities]
+            if kept:
+                arguments["need_facilities"] = kept
+            else:
+                arguments.pop("need_facilities", None)
+            changed.append("need_facilities")
+            copy.append("·".join(LABELS_KO.get(kind, kind)
+                                 for kind in missing_facilities) + " 조건 해제")
+        # Shape/district/radius changes need a separate measured search and are
+        # not safe to synthesize from this candidate.
+        if reasons & {"shape", "district"} or not changed:
+            continue
+        trial = {key: value for key, value in arguments.items() if key != "course_type"}
+        trial["_resolved"] = (
+            (item.course.params.lat, item.course.params.lon,
+             item.course.params.location_name)
+            if changed_to_candidate_start else request.get("_resolved"))
+        match = PresetMatch(item.course, 0 if changed_to_candidate_start else item.distance_m)
+        if not _eligible_matches([match], trial, course_type):
+            continue
+        if (item.is_start_alternative and not changed_to_candidate_start
+                and not arguments.get("allow_nearby_start")):
+            continue
+        signature = tuple(sorted((key, repr(value)) for key, value in arguments.items()))
+        if signature in seen:
+            continue
+        seen.add(signature)
+        label = f"{_COURSE_TYPE_LABELS[course_type]} 유지 · " + " · ".join(copy)
+        options.append({
+            "choice": len(options) + 1,
+            "tool": "create_seoul_running_course",
+            "label": label,
+            "changed_fields": list(dict.fromkeys(changed)),
+            "arguments": arguments,
+        })
+        if len(options) == 3:
+            break
+    return options
+
+
+def _failure_result(request: dict, course_type: str) -> CallToolResult:
+    start = response_start_name((request.get("_resolved") or (None, None,
+                                request.get("location") or "요청한 출발지"))[2])
+    evidence = list(request.get("_candidate_rejections", {}).values())
+    if not evidence:
+        # With no rejected candidate there is nothing to relax, but the
+        # catalogue may still hold a build-verified course nearby. Offer that
+        # real start instead of ending the turn with no way forward; never
+        # name a start that was not measured.
+        nearby = None
+        resolved = request.get("_resolved")
+        if resolved:
+            nearby = nearest_start_preset(
+                resolved[0], resolved[1],
+                requested_distance(request.get("distance_km"),
+                                   request.get("duration_min")))
+        options = []
+        if nearby is not None:
+            course, away = nearby
+            near_name = course.params.location_name
+            text = (
+                f"{start}에서는 만족스러운 코스 경로를 생성할 수 없어요.\n"
+                f"주변 {near_name}(직선 {round(away):,}m)에서 출발하는 "
+                f"{course.length_km:.1f}km 코스는 어떠세요?"
+            )
+            arguments = _public_course_arguments(request, course_type)
+            arguments["location"] = near_name
+            arguments.pop("lat", None)
+            arguments.pop("lon", None)
+            arguments["allow_nearby_start"] = False
+            options = [{
+                "choice": 1, "tool": "create_seoul_running_course",
+                "label": f"출발지를 {near_name}(으)로 변경",
+                "changed_fields": ["location", "lat", "lon", "allow_nearby_start"],
+                "arguments": arguments,
+            }]
+            text += f"\n1. {options[0]['label']}"
+        else:
+            text = (
+                f"{start} 출발 요청 조건을 확인했지만 검증 가능한 후보를 확보하지 못했어요. "
+                "어떤 조건을 바꾸면 실제 코스가 생기는지 근거가 없어 임의로 제안하지 않을게요."
+            )
+        text += "\n\n코스가 생성되면 지도 보기를 열어 경로를 직접 편집할 수 있어요."
+        result = _mcp_result(text, code="no_candidate_evidence", is_error=True)
+        result.structuredContent.update(
+            requires_confirmation=bool(options), relaxation_options=options,
+            confirmation_options=options,
+            repeat_tool_call=False,
+            requested_start=start, actual_start_names=[])
+        return result
+    best = min(evidence, key=lambda item: (
+        len(set(item.reasons)), item.distance_m, item.course.length_km))
+    labels = _reason_labels(set(best.reasons))
+    options = _verified_relaxation_options(request, course_type)
+    text = (
+        f"{start} 출발 기준으로 {_requested_conditions_text(request, course_type)} 조건을 "
+        "모두 만족하는 코스는 현재 확인되지 않았어요.\n\n"
+        f"가장 가까운 검증 후보는 {'·'.join(labels)} 조건을 충족하지 못했어요."
+    )
+    if options:
+        text += "\n\n원하시면 실제 검증 후보가 있는 조건 변경을 골라 다시 찾아볼게요.\n"
+        text += "\n".join(f"{option['choice']}. {option['label']}" for option in options)
+    else:
+        text += "\n\n후보는 있었지만 안전하게 제안할 조건 변경을 검증하지 못했어요."
+    text += ("\n\n조건을 완화해 코스를 찾으면, 지도 보기를 열어 경로를 직접 편집해 "
+             "거리와 모양을 조정할 수도 있어요.")
+    result = _mcp_result(text, code="constraint_mismatch", is_error=True)
+    result.structuredContent.update(
+        requires_confirmation=bool(options), relaxation_options=options,
+        confirmation_options=options,
+        repeat_tool_call=False,
+        requested_start=start, actual_start_names=[])
+    return result
+
+
+def _timeout_result(request: dict, course_type: str) -> CallToolResult:
+    text = (
+        "탐색 시간을 넘겨 조건 충족 여부를 확인하지 못했어요. 같은 조건으로 한 번 더 "
+        "시도하거나 조건을 바꿔 다시 요청해 주세요.\n\n"
+        "코스가 생성되면 지도 보기를 열어 경로를 직접 편집할 수 있어요."
+    )
+    result = _mcp_result(
+        text, code="generation_timeout", is_error=True, retryable=True)
+    result.structuredContent.update(
+        requires_confirmation=False, relaxation_options=[],
+        repeat_tool_call=False,
+        requested_start=(request.get("_resolved") or (None, None,
+                         request.get("location")))[2], actual_start_names=[])
+    return result
+
+
 def _recommendation_shortage(count: int, *, night_mode: bool = False,
-                             district: str | None = None) -> CallToolResult:
+                             district: str | None = None,
+                             request: dict | None = None,
+                             course_type: str = "standard") -> CallToolResult:
+    if request is not None:
+        return _failure_result(request, course_type)
     condition = "가로등 데이터가 야간 최소 기준을 충족하는 " if night_mode else "서로 다른 "
     text = f"현재 조건에서 {condition}코스를 찾지 못했어요. 출발지나 거리 조건을 조정해 다시 요청해 주세요."
     if night_mode:
@@ -856,7 +1140,7 @@ def _start_change_question(plan: CoursePlan, course_type: str, request: dict) ->
     text = (f"{start}에서 출발하는 요청 조건의 {label} 코스를 찾지 못했어요.\n"
             f"1. 가까운 출발지의 {label} 코스를 알려드릴까요?")
     common = {key: request[key] for key in ("location", "lat", "lon", "distance_km",
-              "duration_min", "include_hills", "night_mode", "need_facilities")
+              "duration_min", "strict_distance", "include_hills", "night_mode", "need_facilities")
               if key in request and request[key] is not None}
     options = [dict(choice=1, tool="create_seoul_running_course",
                     arguments=dict(common, course_type=course_type, allow_nearby_start=True))]
@@ -888,6 +1172,12 @@ def _planned_course_result(text: str, *, course_type: str, request: dict,
     plan = _animal_course_plan(request, course_type, text, timeout_s)
     if plan is None:
         return None
+    return _result_from_course_plan(plan, course_type, request)
+
+
+def _result_from_course_plan(plan: CoursePlan, course_type: str,
+                             request: dict) -> CallToolResult:
+    """Apply start-consent rules to one already measured course plan."""
     if plan.requested_start and request.get("allow_nearby_start") is not True:
         exact = [choice for choice in (plan.primary, *plan.alternatives) if not choice.is_detour]
         if not exact:
@@ -1053,6 +1343,7 @@ def _eligible_matches(matches: list[PresetMatch], request: dict, course_type: st
     stats = request.setdefault("_stats", {"candidate_count": 0, "eligible_count": 0,
                                           "rejection_counts": Counter()})
     seen = request.setdefault("_seen_candidates", set())
+    rejected = request.setdefault("_candidate_rejections", {})
     eligible = []
     for match in matches:
         course = match.course
@@ -1064,7 +1355,10 @@ def _eligible_matches(matches: list[PresetMatch], request: dict, course_type: st
             reasons.append("district")
         if match.distance_m > NEARBY_RADIUS_M:
             reasons.append("start_distance")
-        if target and abs(course.length_km - target) / target > EFFORT_TOLERANCE + 1e-9:
+        tolerance_km = (max(0.05, target * 0.025)
+                        if target and request.get("strict_distance")
+                        else target * EFFORT_TOLERANCE if target else 0.0)
+        if target and abs(course.length_km - target) > tolerance_km + 1e-9:
             reasons.append("distance")
         hills = request.get("include_hills")
         if hills is not None and course.is_flat == hills:
@@ -1092,9 +1386,34 @@ def _eligible_matches(matches: list[PresetMatch], request: dict, course_type: st
             stats["candidate_count"] += 1
             stats["rejection_counts"].update(reasons)
             stats["eligible_count"] += int(not reasons)
+            if reasons:
+                rejected[cid] = CandidateRejection(
+                    course=course,
+                    distance_m=match.distance_m,
+                    reasons=tuple(sorted(set(reasons))),
+                    is_start_alternative=(
+                        bool(request.get("_resolved"))
+                        and match.distance_m >= SAME_START_M
+                    ),
+                )
         if not reasons:
             eligible.append(match)
     return eligible
+
+
+def _verified_animal_fast_result(request: dict, course_type: str,
+                                 timeout_s: float) -> CallToolResult | None:
+    """Serve or reject named-animal requests from local verified evidence."""
+    if course_type not in SHAPES:
+        return None
+    before = request.get("_stats", {}).get("candidate_count", 0)
+    plan = _animal_course_plan(request, course_type, "", timeout_s)
+    if plan is not None:
+        return _result_from_course_plan(plan, course_type, request)
+    after = request.get("_stats", {}).get("candidate_count", 0)
+    if after > before:
+        return _failure_result(request, course_type)
+    return None
 
 
 def _district_course_result(request: dict, course_type: str) -> CallToolResult:
@@ -1149,6 +1468,10 @@ def _specific_course_result(request: dict, course_type: str) -> CallToolResult:
     except CourseError as exc:
         return _course_tool_result(f"⚠️ {markdown_text(str(exc))}", course_type=course_type, request=request)
     request.update(_resolved=(lat, lon, name))
+    fast = _verified_animal_fast_result(
+        request, course_type, timeout_s=_budget_left(started))
+    if fast is not None:
+        return fast
     common = {k: request.get(k) for k in ("location", "lat", "lon", "distance_km",
               "duration_min", "include_hills", "night_mode", "need_facilities")}
     common["include_hills"] = bool(common["include_hills"])
@@ -1195,6 +1518,7 @@ def _dispatch_course_request(course_type: str, request: dict) -> CallToolResult:
         stats = request.get("_stats", {"candidate_count": 0, "eligible_count": 0, "rejection_counts": {}})
         conditions = {"course_type": course_type,
                       "distance_km": requested_distance(request.get("distance_km"), request.get("duration_min")) if valid_effort else None,
+                      "strict_distance": bool(request.get("strict_distance")),
                       "terrain": None if request.get("include_hills") is None else "hills" if request["include_hills"] else "flat",
                       "facilities": request.get("need_facilities") or [], "night_mode": bool(request.get("night_mode"))}
         result.structuredContent.update(release_sha=RELEASE_SHA, start_scope=scope, district=district,
@@ -1234,11 +1558,13 @@ def _course_tool_result(text: str, *, course_type: str,
     # course request is answered with a card whenever a route exists, and one
     # note wearing the wrong prefix must not be able to hide it again.
     if text.startswith("⏱️") and not _extract_course_ids(text):
-        return _mcp_result(
-            text, code="generation_timeout", is_error=True, retryable=True)
+        return (_timeout_result(request, course_type) if request is not None
+                else _mcp_result(text, code="generation_timeout",
+                                 is_error=True, retryable=True))
     if request is not None:
         return _recommendation_shortage(0, night_mode=bool(request.get("night_mode")),
-                                        district=request.get("_district"))
+                                        district=request.get("_district"), request=request,
+                                        course_type=course_type)
     if text.startswith("🔎"):
         code = "nearby_course_ready" if "/c/" in text else "exact_shape_unavailable"
         result = _mcp_result(text, code=code)
@@ -1259,7 +1585,9 @@ def _course_tool_result(text: str, *, course_type: str,
             return _complete_recommendation(cached_result, night_mode=bool(request.get("night_mode")))
         return cached_result
     if request is not None:
-        return _recommendation_shortage(0, night_mode=bool(request.get("night_mode")))
+        return _recommendation_shortage(
+            0, night_mode=bool(request.get("night_mode")), request=request,
+            course_type=course_type)
     return _mcp_result(text, code="course_ready")
 
 
@@ -1297,6 +1625,13 @@ def _get_course(params: CourseParams, timeout_s: float | None = None) -> Course:
         preset = get_animal_preset(params)
         if isinstance(preset, Course):
             course = preset
+        elif (standard := get_standard_preset(params)) is not None:
+            # Build-time outcome for these exact parameters. Generation is
+            # deterministic and budget-independent, so this is the same result
+            # a live search would reach -- only the wait is removed.
+            if isinstance(standard, CourseError):
+                raise standard
+            course = standard
         else:
             try:
                 course = _offload(
@@ -1949,6 +2284,10 @@ def create_seoul_running_course(
         "동물 코스는 가장 선명한 검증 거리를 서버가 선택합니다. "
         "park 추천도 등록된 고정 경로 중 요청 거리 ±10%를 만족할 때만 반환합니다."
     ))] = None,
+    strict_distance: Annotated[bool, Field(description=(
+        "사용자가 거리를 '정확히' 또는 '딱'이라고 표현했을 때만 true. "
+        "허용 오차는 max(50m, 목표 거리의 2.5%)이며, 일반 거리 요청은 false."
+    ))] = False,
     duration_min: Annotated[float | None, Field(description=(
         "사용자가 명시한 목표 시간(분), 10-360. 말하지 않았으면 생략하며, "
         "distance_km와 함께 있으면 거리를 우선합니다."
@@ -1973,19 +2312,21 @@ def create_seoul_running_course(
         "원래 출발지·모양·거리·지형·야간·시설 조건을 유지하세요."
     ))] = False,
 ) -> CallToolResult:
-    """Runnywhere(러니웨어): up to 3 running courses or animal-shaped GPS art (러닝 코스/그려줘).
-    Call ONCE per user turn. Never invent a start; omit location if unstated.
-    missing/서울 시내: ask start; district: stay in 구; specific: station/address
-    verbatim or lat/lon. Parks/rivers/물가 use need_facilities=['park']; only these
-    allow no start. standard=ordinary; best_animal=unnamed animal; dog/cat/rabbit/whale
-    =named animal. 그려줘 alone=standard. Keep explicit conditions.
-    start_change_confirmation_required: ask returned question and STOP. NEXT user
-    choice: use confirmation_options arguments with this tool. Never infer nearby
-    consent; ambiguous yes to two options: clarify. 이 코스 근처 화장실 needs course_id.
-    Use actual course_selection and assistant_final_text. Edit via web editor."""
+    """Runnywhere(러니웨어): the only tool for every new running course or
+    animal-shaped GPS art (러닝 코스/그려줘). Call once. Never invent omitted start,
+    distance, terrain, night, or facilities; omit location if unstated. Map
+    exactly/딱 distance to strict_distance=true. missing
+    start/서울 시내: ask and stop; district: stay in 구; specific: pass verbatim or lat/lon.
+    standard=ordinary; best_animal=unnamed animal; dog/cat/rabbit/whale=named;
+    그려줘 alone=standard. On start_change_confirmation_required ask the returned
+    question with no course. NEXT user numbered choice uses that option's exact
+    arguments; ambiguous yes means clarify. On failure/timeout use server text
+    without adding a cause or route. Describe starts only from actual course_selection.
+    Use assistant_final_text and web editor. 이 코스 근처 화장실 requires course_id."""
     common = dict(
         location=location, lat=lat, lon=lon, distance_km=distance_km,
-        duration_min=duration_min, include_hills=include_hills,
+        duration_min=duration_min, strict_distance=strict_distance,
+        include_hills=include_hills,
         night_mode=night_mode, need_facilities=need_facilities,
         allow_nearby_start=allow_nearby_start,
     )
@@ -2021,8 +2362,8 @@ def _legacy_generate_animal_course(*args, **kwargs) -> CallToolResult:
     return _dispatch_course_request(shape or "best_animal", request)
 
 
-# Cached schemas keep their signatures, but routing copy must agree with the
-# primary tool during the registration transition.
+# Internal compatibility bridges keep their signatures for direct callers and
+# token restoration, but are intentionally not exposed as production MCP tools.
 _legacy_generate_running_course.__doc__ = create_seoul_running_course.__doc__
 _legacy_generate_animal_course.__doc__ = create_seoul_running_course.__doc__
 
@@ -2207,10 +2548,6 @@ REGISTERED_SERVICE_NAME = "러니웨어:어디서든 러닝 코스 짜기! - 카
 for _fn, _name, _title, _open_world in (
     (create_seoul_running_course, "create_seoul_running_course",
      "서울 러닝 코스 생성", True),
-    (_legacy_generate_running_course, "generate_running_course",
-     "Generate running course (compatibility)", True),
-    (_legacy_generate_animal_course, "generate_animal_course",
-     "Generate animal course (compatibility)", True),
     (list_available_shapes, "list_available_shapes",
      "List available shapes", False),
     (find_facilities_near_course, "find_facilities_near_course",

@@ -118,8 +118,8 @@ def test_no_animal_within_two_km_reports_shortage_without_plain_substitution():
     result = server.create_seoul_running_course(
         course_type="dog", location="도봉산역")
     assert result.isError
-    assert result.structuredContent["result_code"] == "insufficient_courses"
-    assert not result.structuredContent["repeat_tool_call"]
+    assert result.structuredContent["result_code"] == "constraint_mismatch"
+    assert result.structuredContent["conditions_satisfied"] is False
     assert "widget" not in result.content[0].text
 
 
@@ -241,6 +241,7 @@ def test_explicit_preferences_are_never_relaxed_to_fill_a_slot(monkeypatch):
 
 def test_legacy_animal_duration_reaches_the_shared_priority_plan(monkeypatch):
     captured = {}
+    monkeypatch.setattr(server, "_verified_animal_fast_result", lambda *a, **k: None)
     monkeypatch.setattr(server, "generate_animal_course", lambda *a, **k: "text")
     def result(text, **kwargs):
         captured.update(kwargs)
@@ -274,22 +275,26 @@ def test_animal_timeout_never_substitutes_a_plain_course(monkeypatch):
         return course
     monkeypatch.setattr(server, "_plain_course_here", plain)
     monkeypatch.setattr(server, "_any_animal_matches", lambda *args: [])
+    monkeypatch.setattr(server, "find_nearby_animal_presets", lambda *args: [])
     monkeypatch.setattr(server, "_cache_put", lambda *args: None)
     result = server._planned_course_result("⏱️ 동물 탐색 시간 초과", course_type="dog",
         request={"location": "시청", "duration_min": 40}, timeout_s=.9)
     assert not budgets and result is None
 
 
-def test_night_animal_never_reads_daytime_presets(monkeypatch):
+def test_night_animal_reads_presets_with_neutral_probe_then_hard_gates(monkeypatch):
     probes = []
     def candidates(probe, radius):
         probes.append(probe)
         return []
-    monkeypatch.setattr(server, "_any_animal_matches", candidates)
+    monkeypatch.setattr(server, "find_nearby_animal_presets", candidates)
     monkeypatch.setattr(server, "_plain_course_here", lambda *args: None)
     server._animal_course_plan({"location": "시청", "include_hills": True,
         "night_mode": True, "need_facilities": ["park"]}, "dog", "", .9)
-    assert probes == []
+    assert len(probes) == 1
+    assert probes[0].shape == "dog"
+    assert probes[0].night_mode is False
+    assert probes[0].need_facilities == []
 
 
 # Every way of asking for a course that a runner can act on immediately.
@@ -608,7 +613,9 @@ def test_night_request_returns_three_lit_routes_or_no_recommendation(monkeypatch
 
     if lighting is None or lighting < .4:
         assert result.isError
-        assert "조명" in result.content[0].text
+        assert result.structuredContent["result_code"] == "no_candidate_evidence"
+        assert "조명이 부족" not in result.content[0].text
+        assert "코스가 생성되면 지도 보기를 열어" in result.content[0].text
         assert '"widget"' not in result.content[0].text
         return
 

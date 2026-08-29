@@ -55,7 +55,9 @@ class CourseParams(BaseModel):
     lon: float = Field(ge=126.76, le=127.19, description="Start longitude (Seoul)")
     location_name: str = Field(default="", max_length=120)
     distance_km: float = Field(default=DEFAULT_DISTANCE_KM, ge=1.0, le=42.195)
-    include_hills: bool = False
+    # None means no terrain preference. Keep False as the stored-model default
+    # so existing course IDs still restore the same flat routing profile.
+    include_hills: bool | None = False
     night_mode: bool = False
     # Internal route alternatives, not an extra user-facing tool call. Zero
     # keeps legacy generation and IDs unchanged; nonzero rotates the search.

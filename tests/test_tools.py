@@ -4,8 +4,10 @@ import concurrent.futures
 import threading
 import time
 
+import pytest
+
 from runart import geocode, server
-from runart.course import Course
+from runart.course import Course, CourseError
 from runart.geocode import (
     _STATION_LOOKUP,
     _address_query_variants,
@@ -56,6 +58,7 @@ def test_concurrent_identical_course_requests_share_one_generation(monkeypatch):
     monkeypatch.setattr(server, "_course_cache", {})
     monkeypatch.setattr(server, "_course_inflight", {})
     monkeypatch.setattr(server, "get_animal_preset", lambda _: None)
+    monkeypatch.setattr(server, "get_standard_preset", lambda _: None)
     monkeypatch.setattr(server, "ensure_course_runnable", lambda _: None)
 
     def fake_offload(*args, **kwargs):
@@ -161,6 +164,52 @@ def test_kakao_subway_hit_snaps_to_offline_station(monkeypatch):
     }])
     assert geocode._keyword_search("성신여대역") == (
         37.5931105, 127.0167884, "성신여대입구역")
+
+
+@pytest.mark.parametrize("query", ["부산역", "인천역", "대전역"])
+def test_unknown_station_intent_never_falls_back_to_seoul_business(monkeypatch, query):
+    geocode._SEARCH_CACHE.clear()
+    monkeypatch.setenv("KAKAO_REST_API_KEY", "test-key")
+    monkeypatch.setattr(geocode, "_kakao_get", lambda *args, **kwargs: [{
+        "y": "37.5512",
+        "x": "127.1440",
+        "place_name": "부산아지매국밥 명일역점",
+        "category_group_code": "FD6",
+    }])
+
+    with pytest.raises(CourseError) as caught:
+        resolve_location(query, None, None)
+
+    assert "서울 지역의 지하철역만" in str(caught.value)
+    assert "부산아지매국밥" not in str(caught.value)
+
+
+def test_station_provider_result_must_match_requested_station(monkeypatch):
+    geocode._SEARCH_CACHE.clear()
+    monkeypatch.setenv("KAKAO_REST_API_KEY", "test-key")
+    monkeypatch.setattr(geocode, "_kakao_get", lambda *args, **kwargs: [{
+        "y": "37.551370",
+        "x": "127.143999",
+        "place_name": "명일역 5호선",
+        "category_group_code": "SW8",
+    }])
+
+    with pytest.raises(CourseError):
+        resolve_location("부산역", None, None)
+
+
+def test_full_business_name_containing_station_suffix_remains_a_poi(monkeypatch):
+    geocode._SEARCH_CACHE.clear()
+    monkeypatch.setenv("KAKAO_REST_API_KEY", "test-key")
+    expected = (37.5512, 127.1440, "부산아지매국밥 명일역점")
+    monkeypatch.setattr(geocode, "_kakao_get", lambda *args, **kwargs: [{
+        "y": str(expected[0]),
+        "x": str(expected[1]),
+        "place_name": expected[2],
+        "category_group_code": "FD6",
+    }])
+
+    assert resolve_location(expected[2], None, None) == expected
 
 
 def test_kakao_search_cache_expires_and_refreshes(monkeypatch):
@@ -451,17 +500,13 @@ def test_mcp_tools_match_playmcp_required_annotations():
     names = [tool.name for tool in tools]
     assert set(names) == {
         "create_seoul_running_course",
-        "generate_running_course", "generate_animal_course",
         "list_available_shapes", "find_facilities_near_course",
         "refine_course", "get_course_status",
         "record_animal_completion", "extend_shape_relay",
     }
     assert len(names) == len(set(names))
     assert 3 <= len(names) <= 10
-    open_world_tools = {
-        "create_seoul_running_course", "generate_running_course",
-        "generate_animal_course", "refine_course",
-    }
+    open_world_tools = {"create_seoul_running_course", "refine_course"}
     for tool in tools:
         assert 1 <= len(tool.name) <= 128
         assert all(c.isascii() and (c.isalnum() or c in "_-") for c in tool.name)
@@ -471,16 +516,14 @@ def test_mcp_tools_match_playmcp_required_annotations():
         assert tool.annotations.idempotentHint is True
 
 
-def test_legacy_preview_tool_schemas_remain_callable_during_contract_refresh():
-    """A Preview session cached on the former 8-tool contract must not fail."""
+def test_legacy_creation_bridges_are_internal_not_registered():
     import asyncio
     tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
 
-    standard = tools["generate_running_course"]
-    animal = tools["generate_animal_course"]
-    assert "location" in standard.inputSchema["properties"]
-    assert "shape" in animal.inputSchema["properties"]
-    assert "shape_token" in animal.inputSchema["properties"]
+    assert "generate_running_course" not in tools
+    assert "generate_animal_course" not in tools
+    assert callable(server._legacy_generate_running_course)
+    assert callable(server._legacy_generate_animal_course)
 
 
 def test_primary_course_tool_schema_and_description_drive_selection():

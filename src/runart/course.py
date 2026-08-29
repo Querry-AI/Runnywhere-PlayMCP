@@ -94,7 +94,7 @@ class DistanceMissError(CourseError):
         )
 
 
-def _routing_weight_for(params: CourseParams) -> str:
+def _routing_weight_for(params: CourseParams):
     """Select the map-aligned profile unless park running was explicit."""
     return routing_weight(
         params.night_mode,
@@ -232,7 +232,7 @@ def course_route_issues(course: Course, graph) -> list[str]:
         if nearest > MAX_COURSE_START_OFFSET_M:
             issues.append("start_too_far")
     issues.extend(path_access_issues(course.path, graph))
-    if course.length_km and not course.params.include_hills:
+    if course.length_km and course.params.include_hills is False:
         if course.ascent_m / course.length_km > MAX_DEFAULT_ASCENT_PER_KM:
             issues.append("excessive_ascent")
     return issues
@@ -1309,7 +1309,7 @@ def retrace_share(graph, path: list[int]) -> float:
     return repeated / total if total else 0.0
 
 
-def easy_route_weight(base_weight: str, prefer_named_walkways: bool = False):
+def easy_route_weight(base_weight, prefer_named_walkways: bool = False):
     """Prefer roads that are easier to follow without exposing a new score.
 
     A tiny fixed cost per edge discourages routes made of many short alley
@@ -1350,7 +1350,8 @@ def easy_route_weight(base_weight: str, prefer_named_walkways: bool = False):
             factor *= 0.90
         elif sidewalk < 0.55:
             factor *= 1.12
-        return (attrs.get(base_weight, attrs["length"]) * factor * gated
+        base = base_weight(_u, _v, attrs) if callable(base_weight) else attrs.get(base_weight, attrs["length"])
+        return (base * factor * gated
                 + FOLLOW_EDGE_PENALTY_M)
     return _weight
 
@@ -1506,7 +1507,7 @@ def generate_course(params: CourseParams) -> Course:
         retraced = retrace_share(g, path)
         quality = (
             -summary["score"]
-            + (0.0 if params.include_hills else 2.0 * ascent_per_km)
+            + (2.0 * ascent_per_km if params.include_hills is False else 0.0)
             + followability_penalty(points, length)
             + RETRACE_PENALTY * retraced
         )

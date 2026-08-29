@@ -211,6 +211,18 @@ def _looks_like_station_query(location: str) -> bool:
     return normalized.endswith("역") or bool(re.search(r"\d+호선", normalized))
 
 
+def _station_identity(value: str) -> str:
+    """Canonical station identity for strict provider-result comparison.
+
+    This deliberately removes only transport qualifiers. It does not use
+    substring or fuzzy matching: an unknown station must never match a Seoul
+    shop merely because the shop name contains the query.
+    """
+    normalized = _normalize_station_query(value)
+    normalized = re.sub(r"^(?:서울(?:특별시|시)?)?(?:지하철|전철)", "", normalized)
+    return re.sub(r"\d+호선", "", normalized)
+
+
 def _nearest_offline_station(lat: float, lon: float,
                              max_distance_m: float = 200.0
                              ) -> tuple[float, float, str] | None:
@@ -347,6 +359,41 @@ def _keyword_search(query: str, deadline: float | None = None
     return None
 
 
+def _station_keyword_search(query: str, deadline: float | None = None
+                            ) -> tuple[float, float, str] | None:
+    """Resolve explicit station intent without accepting generic POIs.
+
+    Kakao keyword search is used only as a conservative spelling/provider
+    fallback. A result must be a subway category, snap to a bundled Seoul
+    station, and have exactly the requested canonical station identity.
+    """
+    hit = _cache_get("station", query)
+    if hit:
+        return hit
+    requested = _station_identity(query)
+    docs = _kakao_get(_LOCAL_SEARCH_URL, {
+        "query": query, "size": 5, "rect": _SEOUL_RECT,
+    }, deadline)
+    for doc in docs:
+        if doc.get("category_group_code") != "SW8":
+            continue
+        try:
+            lat, lon = float(doc["y"]), float(doc["x"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not _in_seoul(lat, lon):
+            continue
+        station = _nearest_offline_station(lat, lon)
+        if station is None or _station_identity(station[2]) != requested:
+            continue
+        provider_name = _station_identity(doc.get("place_name") or "")
+        if provider_name != requested:
+            continue
+        _cache_ok("station", query, station)
+        return station
+    return None
+
+
 def _address_search(query: str, deadline: float | None = None
                     ) -> tuple[float, float, str] | None:
     """Kakao Local address search for user-entered current/home addresses.
@@ -466,10 +513,22 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
         key = location.replace(" ", "")
         # Explicit station intent must use the same canonical coordinates as
         # the bundled animal presets, even when a landmark alias also exists.
-        if _looks_like_station_query(location):
+        station_intent = _looks_like_station_query(location)
+        if station_intent:
             station = _offline_station_search(location)
             if station:
                 return station
+            station = _station_keyword_search(location, deadline)
+            if station:
+                return station
+            # Station intent is fail-closed. In particular, do not continue to
+            # generic keyword/address/fuzzy lookup: "부산역" previously became
+            # the Seoul shop "부산아지매국밥 명일역점" through that path.
+            shown = location if len(location) <= ECHO_LIMIT else location[:ECHO_LIMIT] + "…"
+            raise CourseError(
+                f"'{shown}' 위치를 찾지 못했어요. 현재 서울 지역의 지하철역만 "
+                "출발지로 지원해요. 서울의 정확한 역 이름을 알려주세요."
+            )
         # ① exact offline landmark aliases kept for backward compatibility.
         for name, (glat, glon) in GAZETTEER.items():
             if name == key:

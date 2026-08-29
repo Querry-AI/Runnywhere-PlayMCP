@@ -6,9 +6,9 @@ not to third-party data. Snapshot details are recorded in `data/snapshot.json`.
 
 ## OpenStreetMap-derived databases — ODbL 1.0
 
-`seoul_graph.pkl`, `facilities.pkl`, `infra_points.pkl`, and
-`animal_station_presets.json.gz` and `park_course_presets.json` contain or are
-derived from OpenStreetMap data.
+`seoul_graph.pkl`, `facilities.pkl`, `infra_points.pkl`,
+`animal_station_presets.json.gz`, `standard_course_presets.json.gz`, and
+`park_course_presets.json` contain or are derived from OpenStreetMap data.
 They are offered under the Open Data Commons Open Database License 1.0 (ODbL):
 
 - © OpenStreetMap contributors
@@ -16,8 +16,9 @@ They are offered under the Open Data Commons Open Database License 1.0 (ODbL):
 - https://opendatacommons.org/licenses/odbl/1-0/
 
 The public copy of this repository provides the derivative databases themselves
-and the corresponding transformation code in `etl/` and
-`scripts/build_animal_presets.py` and `scripts/build_park_presets.py`.
+and the corresponding transformation code in `etl/`,
+`scripts/build_animal_presets.py`, `scripts/build_standard_presets.py`, and
+`scripts/build_park_presets.py`.
 A recipient may copy, modify, and redistribute
 the databases under ODbL 1.0. Any public use must retain OpenStreetMap attribution
 and make the applicable derivative database, or a compliant method of producing
@@ -25,8 +26,8 @@ it, available under ODbL. Non-OSM inputs listed below retain their own terms.
 
 The transformations download a Seoul pedestrian graph, retain way geometry and
 selected tags, reduce it to a NetworkX graph, add public-data-derived running
-scores, extract facilities and infrastructure points, and precompute animal-art
-routes. `data_integrity.py` records the distributed artifacts' SHA-256 hashes.
+scores, extract facilities and infrastructure points, and precompute animal-art and
+ordinary running routes. `data_integrity.py` records the distributed artifacts' SHA-256 hashes.
 
 ## Seoul public data — Korea Open Government Licence Type 1
 
