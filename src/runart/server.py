@@ -58,7 +58,7 @@ from .exploration import (atlas_html, create_relay, decode_relay,
                           passport_html, home_html, legal_html, record_run,
                           relay_html)
 from .models import (COURSE_NAME_MAX_CHARS, FACILITY_TYPES, CourseParams, CourseWaypoint,
-                     DEFAULT_PACE_MIN_PER_KM, decode_course_id,
+                     DEFAULT_DISTANCE_KM, DEFAULT_PACE_MIN_PER_KM, decode_course_id,
                      decode_shape_token, encode_course_id)
 from .render import (card_svg, course_edit_summary, course_markdown,
                      course_thumbnail_svg, edit_path_geometry, edit_path_nodes,
@@ -879,6 +879,12 @@ def _plan_final_text(selection: dict) -> str:
             body = f"{notice} {body}"
         return f"{body}\n\n{COURSE_EDIT_NOTICE}"
     prefix = "추천 코스예요."
+    # The default distance was disclosed only in the lead, which the host may
+    # not use. Say it in the verbatim text too: a runner who named no distance
+    # was handed 5.1km and 10.3km side by side with nothing saying which one
+    # answered the question.
+    if assumed := selection.get("assumed_distance_km"):
+        prefix = f"거리를 말씀하지 않으셔서 기본 {assumed:g}km로 잡았어요. {prefix}"
     if not selection["primary_matches_requested_shape"]:
         requested = SHAPES.get(selection["requested_course_type"])
         label = f"{requested.name_ko} 모양" if requested else "요청한 모양"
@@ -1256,10 +1262,13 @@ def _result_from_course_plan(plan: CoursePlan, course_type: str,
                 request.get("distance_km"), request.get("duration_min")) else ""
             plan = replace(plan, primary=exact[0], alternatives=tuple(exact[1:]), case=CASE_EXACT,
                            lead=f"{response_start_name(plan.requested_start)} 출발 코스 {len(exact)}개{effort}를 추천해요.")
-    return _plan_result(plan, course_type)
+    assumed = (DEFAULT_DISTANCE_KM if course_type == "standard" and not requested_distance(
+        request.get("distance_km"), request.get("duration_min")) else None)
+    return _plan_result(plan, course_type, assumed_distance_km=assumed)
 
 
-def _plan_result(plan: CoursePlan, course_type: str) -> CallToolResult:
+def _plan_result(plan: CoursePlan, course_type: str, *,
+                 assumed_distance_km: float | None = None) -> CallToolResult:
     # The plan owns one short spoken sentence for every case. Generator copy
     # can contain scoring rationale that belongs on the detail page, not in a
     # concise chat handoff beside the widget.
@@ -1277,6 +1286,7 @@ def _plan_result(plan: CoursePlan, course_type: str) -> CallToolResult:
         any(not c.is_detour for c in (plan.primary, *plan.alternatives))
         if plan.requested_start else None)
     selection["start_change_notice"] = _start_change_notice(selection)
+    selection["assumed_distance_km"] = assumed_distance_km
     final_text = _plan_final_text(selection)
     widget = (_plan_widget(plan, start_notice=selection["start_change_notice"])
               if KAKAO_WIDGETS_ENABLED else None)

@@ -41,6 +41,9 @@ def _data_path(filename: str) -> Path:
 
 PRESET_PATH = _data_path("standard_course_presets.json.gz")
 FORMAT_VERSION = 1
+# The distances the catalogue is built for. Shared so the build script and the
+# gazetteer audit cannot drift from what the runtime actually looks up.
+DEFAULT_DISTANCES_KM = (3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0)
 BLOCKED = object()
 
 _load_status = "not loaded yet"

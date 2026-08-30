@@ -19,7 +19,7 @@ EXPECTED_SHA256 = {
     "infra_points.pkl": "cedaed2e22a3860f6d1d29239eb428cb7382ec782861041d29a56921e638f453",
     "animal_station_presets.json.gz": "8560997ba7c5db0268f5fbe0aeb0da55963993e41a50d66553206a7181fd0eec",
     "park_course_presets.json": "092a2d974d01ee795ab5f6ee7612d02a16ecc3210d6906d9e88dda75ab463eeb",
-    "standard_course_presets.json.gz": "49096d518320a6494d9ceb098f1d9af28880e4f4fc66e6999f594cfe65d3981e",
+    "standard_course_presets.json.gz": "56b9838b2371476460963cf96c9638b77836e6eea23cbed120d84c239e38c998",
 }
 
 

@@ -24,15 +24,16 @@ from runart.course import CourseError, course_route_issues, generate_course
 from runart.geocode import GAZETTEER, resolve_location
 from runart.graph import get_graph
 from runart.models import CourseParams
-from runart.standard_presets import (FORMAT_VERSION, PRESET_PATH, preset_id,
-                                     serialize_course, serialize_failure)
+from runart.standard_presets import (DEFAULT_DISTANCES_KM, FORMAT_VERSION,
+                                     PRESET_PATH, preset_id, serialize_course,
+                                     serialize_failure)
 from runart.stations import SEOUL_METRO_STATIONS
 
 # The runtime asks for the primary route plus three opposite-direction variants
 # (server._standard_alternatives). A request is only fully served when all four
 # are present, so the catalogue stores the same set.
 VARIANTS = (None, 2, 4, 6)
-DEFAULT_DISTANCES = (3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0)
+DEFAULT_DISTANCES = DEFAULT_DISTANCES_KM
 
 
 def _station_name(name: str) -> str:

@@ -674,3 +674,30 @@ def test_a_distance_request_is_still_refused_in_kilometres():
     assert text.startswith("⚠️"), text
     assert "3km" in text
     assert "4.1km" in text
+
+
+def test_an_unstated_distance_is_disclosed_in_the_verbatim_text():
+    """The lead said "기본 5km"; the field the host reads verbatim did not."""
+    selection = {
+        "primary": {}, "alternatives": [],
+        "primary_matches_requested_shape": True,
+        "requested_course_type": "standard",
+        "recommendation_mode": "exact", "start_change_notice": None,
+        "assumed_distance_km": 5.0,
+    }
+    original = server._course_summary
+    server._course_summary = lambda course: "🏟️ 성수역런 · 5.1km"
+    try:
+        spoken = server._plan_final_text(selection)
+        assert spoken.startswith("거리를 말씀하지 않으셔서 기본 5km로 잡았어요.")
+        selection["assumed_distance_km"] = None
+        assert "기본" not in server._plan_final_text(selection)
+    finally:
+        server._course_summary = original
+
+
+def test_a_named_distance_carries_no_assumption_notice():
+    result = server.create_seoul_running_course(
+        course_type="standard", location="강남역", distance_km=5)
+    assert "거리를 말씀하지 않으셔서" not in (
+        result.structuredContent.get("assistant_final_text") or "")
