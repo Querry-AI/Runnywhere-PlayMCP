@@ -98,9 +98,6 @@ def _generate(params: CourseParams):
         # Record the failure verbatim: the runtime then raises the same error
         # instead of re-running a search already known to fail.
         return key, serialize_failure(exc)
-    except CourseError as exc:
-        # Deterministic failure: store it so the runtime does not re-search.
-        return key, serialize_error(exc)
     except Exception as exc:  # noqa: BLE001 - one bad start must not abort a build
         print(f"unavailable after {type(exc).__name__}: {params.location_name} "
               f"{params.distance_km:g}km v{params.route_variant}", flush=True)

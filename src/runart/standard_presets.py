@@ -74,25 +74,6 @@ def serialize_course(course: Course) -> dict:
     }
 
 
-def serialize_error(exc: CourseError) -> dict:
-    """A generation that fails does so deterministically for these parameters.
-
-    Storing the failure keeps the runtime from re-running a search that is
-    already known to end the same way -- and the reconstructed error carries
-    the identical user-facing message, so the answer does not change.
-    """
-    if isinstance(exc, DistanceMissError):
-        return {"error": "DistanceMissError",
-                "target_km": exc.target_km, "nearest_km": exc.nearest_km}
-    return {"error": "CourseError", "message": str(exc)}
-
-
-def _restore_error(raw: dict) -> CourseError:
-    if raw.get("error") == "DistanceMissError":
-        return DistanceMissError(raw["target_km"], raw["nearest_km"])
-    return CourseError(raw["message"])
-
-
 def _restore(raw: dict) -> Course:
     """Rebuild verbatim. Standard routes are not re-anchored: the stored start
     is the one generate_course produced for these exact parameters."""

@@ -23,6 +23,10 @@ from runart.course import (Course, course_route_issues,
 from runart.graph import get_graph
 from runart.models import CourseParams
 from runart.shapes import SHAPES, find_best_reference_course
+from runart.course import CourseError
+from runart.courseplan import SAME_START_M
+from runart.geo import haversine_m
+from runart.geocode import GAZETTEER, resolve_location
 from runart.stations import SEOUL_METRO_STATIONS
 
 
@@ -30,10 +34,55 @@ def _station_name(name: str) -> str:
     return name if name.endswith("역") else f"{name}역"
 
 
+# Themes a runner names instead of a start: "한강 따라", "공원에서".
+THEME_WORDS = frozenset({"공원", "한강", "한강공원", "강변", "하천", "물",
+                         "물가", "수변", "호수", "서울"})
+
+
+def _start_rows(include_gazetteer: bool) -> list[tuple[str, str, float, float]]:
+    """Every start worth a shape preset, with its display name already final.
+
+    Stations alone left every landmark to live shape generation: measured on
+    the deployed server, best_animal at 뚝섬·잠원·망원·이촌·잠실한강공원 each spent
+    2.6-2.7s only to answer that no animal course starts there. A stored
+    result -- course or absence -- costs nothing to serve.
+    """
+    rows: list[tuple[str, str, float, float]] = []
+    seen: set[tuple[float, float]] = set()
+    for line, name, lat, lon, *_ in SEOUL_METRO_STATIONS:
+        key = (round(lat, 5), round(lon, 5))
+        if key in seen:
+            continue  # transfer rows at one coordinate share a preset
+        seen.add(key)
+        rows.append((line, _station_name(name), lat, lon))
+    if not include_gazetteer:
+        return rows
+    for landmark in GAZETTEER:
+        # 한강공원 shares its coordinate with 여의도한강공원 and, being first,
+        # would name the card. The server treats these as theme words, not
+        # places (server._park_course_result), so they make poor start labels.
+        if landmark in THEME_WORDS:
+            continue
+        try:
+            lat, lon, resolved = resolve_location(landmark, None, None, timeout_s=1.0)
+        except (CourseError, Exception):  # noqa: BLE001 - unresolvable is not fatal
+            continue
+        # 강남 and 테헤란로8길8 sit 90m and 98m from 강남역. Kept as their own
+        # starts, they filled the other two card slots for a 강남역 request with
+        # courses labelled by names the runner never said. Same place by the
+        # runtime's own rule, so one preset is enough.
+        if any(haversine_m(lat, lon, rlat, rlon) < SAME_START_M
+               for _, _, rlat, rlon in rows):
+            continue
+        seen.add((round(lat, 5), round(lon, 5)))
+        rows.append(("landmark", resolved, lat, lon))
+    return rows
+
+
 def _generate(job):
     line, name, lat, lon, shape, per_distance_seconds = job
     try:
-        params = CourseParams(lat=lat, lon=lon, location_name=_station_name(name),
+        params = CourseParams(lat=lat, lon=lon, location_name=name,
                               distance_km=SHAPES[shape].min_km, shape=shape)
         course = find_best_reference_course(
             params, per_distance_budget_s=per_distance_seconds)
@@ -97,18 +146,22 @@ def main() -> None:
                         help="ignore and replace all existing checkpoints")
     parser.add_argument("--retry-unavailable", action="store_true",
                         help="re-run only entries previously stored as unavailable")
+    parser.add_argument("--no-gazetteer", action="store_true",
+                        help="stations only; skip landmark starts")
+    parser.add_argument("--prune", action="store_true",
+                        help="drop stored entries whose start is no longer built")
     parser.add_argument("--revalidate", action="store_true",
                         help="rebuild unsafe entries and normalize every closed-loop start")
     args = parser.parse_args()
     fingerprint = graph_fingerprint()
     entries = {} if args.fresh else _read_existing(args.output, fingerprint)
     # Transfer rows that resolve to exactly the same coordinate share presets.
-    unique_rows = list({(row[2], row[3]): row for row in SEOUL_METRO_STATIONS}.values())
+    unique_rows = _start_rows(not args.no_gazetteer)
     station_names = {
-        f"{lat:.5f},{lon:.5f}": _station_name(name)
-        for _, name, lat, lon, *_ in unique_rows
+        f"{lat:.5f},{lon:.5f}": name for _, name, lat, lon in unique_rows
     }
     invalid: set[str] = set()
+    dropped: list[str] = []
     normalized = 0
     metadata_normalized = 0
     if args.revalidate and entries:
@@ -136,6 +189,13 @@ def main() -> None:
             f"{metadata_normalized} station names normalized",
             flush=True,
         )
+    if args.prune:
+        wanted = {preset_key(lat, lon, shape)
+                  for _, _, lat, lon in unique_rows for shape in SHAPES}
+        dropped[:] = [key for key in entries if key not in wanted]
+        for key in dropped:
+            del entries[key]
+        print(f"pruned {len(dropped)} entries for starts no longer built", flush=True)
     jobs = []
     for row in unique_rows:
         for shape in SHAPES:
@@ -165,7 +225,9 @@ def main() -> None:
                 processed = total - len(jobs) + completed
                 print(f"{processed}/{total} processed; {ok} available, "
                       f"{len(entries) - ok} unavailable", flush=True)
-        if not jobs and (normalized or metadata_normalized):
+        # A prune with nothing left to build still has to reach disk: the
+        # only other writes are per-batch and end-of-run over the job list.
+        if not jobs and (normalized or metadata_normalized or dropped):
             _write(args.output, fingerprint, entries)
     finally:
         if pool is not None:

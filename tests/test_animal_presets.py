@@ -98,6 +98,12 @@ def test_nearest_preset_respects_radius(monkeypatch):
 
 
 def test_bundled_presets_cover_every_station_shape_slot_and_match_metadata():
+    """Every station keeps its four slots; landmarks add their own on top.
+
+    Landmark starts were added because an animal request at 뚝섬한강공원 or
+    서울숲 had nothing stored and spent 2.6s searching. They are extra keys,
+    never a substitute for a station's.
+    """
     entries = animal_presets._load()
     assert entries is not None
     stations = {
@@ -109,13 +115,18 @@ def test_bundled_presets_cover_every_station_shape_slot_and_match_metadata():
         for _, _, lat, lon, *_ in SEOUL_METRO_STATIONS
         for shape in SHAPES
     }
-    assert set(entries) == expected_keys
+    assert expected_keys <= set(entries)
+    # Whatever is not a station is a landmark, and it comes in whole slots.
+    extra = set(entries) - expected_keys
+    assert len(extra) % len(SHAPES) == 0
     for key, raw in entries.items():
         if raw is None or raw is animal_presets.BLOCKED:
             continue
-        station_key, _ = key.rsplit(",", 1)
-        assert raw["params"]["location_name"] == stations[station_key]
-        assert not raw["params"]["location_name"].endswith("역역")
+        start_key, _ = key.rsplit(",", 1)
+        stored = raw["params"]["location_name"]
+        if start_key in stations:
+            assert stored == stations[start_key]
+        assert stored and not stored.endswith("역역")
 
 
 def test_every_bundled_course_starts_near_station_and_is_runnable():
