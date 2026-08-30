@@ -71,3 +71,21 @@ def test_a_seoul_hit_that_answers_another_regions_query_is_refused():
     assert _names_the_same_place("상암동 1601", "서울 마포구 상암동 1601")
     # A bare place type identifies nothing, so the hit stands as before.
     assert _names_the_same_place("공원", "북서울꿈의숲")
+
+
+def test_a_start_outside_seoul_is_refused_before_the_seoul_bounded_lookup():
+    """A rect-limited search answers with a Seoul business, never "no match"."""
+    import pytest
+
+    from runart.course import CourseError
+    from runart.geocode import resolve_location
+
+    for query in ("제주공항", "인천공항", "대구", "해운대", "제주도", "경기도"):
+        with pytest.raises(CourseError, match="서울 밖"):
+            resolve_location(query, None, None)
+
+    # Seoul places resolve offline, before the gate, so they are unaffected --
+    # 김포공항 carries a Gyeonggi city name and still reaches its own station.
+    assert resolve_location("김포공항", None, None)[2] == "김포공항역"
+    assert resolve_location("강남역", None, None)[2] == "강남역"
+    assert resolve_location("여의도한강공원", None, None)[2] == "여의도한강공원"

@@ -112,15 +112,16 @@ def test_our_own_error_sentence_reaches_the_runner_whole():
     from runart.geocode import resolve_location
     from runart.render import error_text
 
+    unknown = "없는가게이름12345"
     try:
-        resolve_location("제주공항", None, None)
+        resolve_location(unknown, None, None)
     except CourseError as exc:
         message = error_text(str(exc))
-    else:  # pragma: no cover - 제주공항 is outside the Seoul gazetteer
-        raise AssertionError("expected a CourseError for a start outside Seoul")
+    else:  # pragma: no cover - the name matches nothing in Seoul
+        raise AssertionError("expected a CourseError for an unresolvable start")
     assert "\\" not in message
-    assert message.endswith("서울숲")
-    assert "'제주공항'" in message
+    assert message.endswith("서울숲")  # the whole help survives, uncut at 120
+    assert f"'{unknown}'" in message
 
 
 def test_a_verified_course_at_the_asked_start_is_offered_as_a_distance_change(monkeypatch):

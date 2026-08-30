@@ -389,6 +389,39 @@ def _names_the_same_place(query: str, place_name: str) -> bool:
     return any(token in haystack or haystack in token for token in tokens)
 
 
+# Region names outside Seoul. A Seoul-restricted search never answers "no
+# match" for these -- it answers with the nearest Seoul business whose name
+# happens to embed them, so "제주공항" resolved to 제주항공(2층) 김포국제공항국내선
+# and "인천공항" to 인천공항 주차장 주차대행. The query has to be refused before
+# the lookup runs. Checked only after the offline Seoul tables, so 김포공항
+# and 시청 still resolve to their own stations.
+_OUTSIDE_SEOUL = frozenset({
+    "부산", "대구", "인천", "광주", "대전", "울산", "세종", "경기", "강원",
+    "충북", "충남", "전북", "전남", "경북", "경남", "제주",
+    "수원", "성남", "용인", "고양", "부천", "남양주", "평택", "의정부", "파주",
+    "김포", "광명", "하남", "구리", "오산", "시흥", "과천", "청주", "천안",
+    "전주", "포항", "창원", "김해", "진주", "여수", "목포", "춘천", "강릉",
+    "속초", "원주", "제천", "경주", "안동", "통영",
+    "해운대", "광안리", "을왕리", "함덕", "애월", "서귀포",
+})
+_REGION_SUFFIXES = ("특별자치도", "특별자치시", "광역시", "특별시", "도", "시", "군")
+
+
+def _names_a_region_outside_seoul(query: str) -> bool:
+    """True when the query is an out-of-Seoul place and nothing more.
+
+    Only a bare region name, or one followed by a place type, counts. A Seoul
+    business that merely starts with one -- 부산아지매국밥 명일역점, 대구탕 --
+    keeps resolving, because the remainder is not a place type.
+    """
+    key = query.replace(" ", "")
+    for suffix in _PLACE_TYPE_WORDS + _REGION_SUFFIXES:
+        if len(key) > len(suffix) and key.endswith(suffix):
+            key = key[: -len(suffix)]
+            break
+    return key in _OUTSIDE_SEOUL
+
+
 def _keyword_search(query: str, deadline: float | None = None
                     ) -> tuple[float, float, str] | None:
     """Kakao Local keyword search, restricted to Seoul via `rect`."""
@@ -592,6 +625,13 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
         station = _offline_station_search(location)
         if station:
             return station
+        # Nothing in Seoul matched offline. If the query names somewhere else
+        # entirely, say so instead of letting a Seoul-bounded search answer it.
+        if _names_a_region_outside_seoul(location):
+            raise CourseError(
+                f"'{_echo(location)}' 위치는 서울 밖이에요. 지금은 서울 안에서만 "
+                "코스를 만들 수 있어요. 서울의 출발지를 알려주세요."
+            )
         # ③ Kakao API. Address-shaped inputs (관철동 7-14, 테헤란로8길 8)
         # go to the address API first — keyword search treats them as POI
         # names; place-shaped inputs (station/landmark names) go keyword
