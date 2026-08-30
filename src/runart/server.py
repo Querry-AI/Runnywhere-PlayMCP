@@ -466,6 +466,22 @@ def offloaded(fn):
     return wrapper
 
 
+
+def _speak_verbatim(result: CallToolResult, text: str) -> CallToolResult:
+    """Hand the host our exact wording for a reply that carries no widget.
+
+    Without this the host wrote its own sentence and inverted the options: the
+    start-change question offers a *nearby* start, and Preview announced it as
+    "서울숲에서 고래 모양 코스 만들기". The text is already in content[0]; this only
+    names it as the closing prose the tool description tells the host to reuse.
+    """
+    result.structuredContent.update(
+        assistant_final_text=text, assistant_final_text_verbatim=True,
+        assistant_final_text_position="replace",
+        assistant_final_text_is_complete=True)
+    return result
+
+
 def _mcp_result(text: str, *, code: str, is_error: bool = False,
                 retryable: bool = False,
                 assistant_text: str | None = None,
@@ -1052,7 +1068,7 @@ def _failure_result(request: dict, course_type: str) -> CallToolResult:
                 "어떤 조건을 바꾸면 실제 코스가 생기는지 근거가 없어 임의로 제안하지 않을게요."
             )
         text += "\n\n코스가 생성되면 지도 보기를 열어 경로를 직접 편집할 수 있어요."
-        result = _mcp_result(text, code="no_candidate_evidence", is_error=True)
+        result = _speak_verbatim(_mcp_result(text, code="no_candidate_evidence", is_error=True), text)
         result.structuredContent.update(
             requires_confirmation=bool(options), relaxation_options=options,
             confirmation_options=options,
@@ -1075,7 +1091,7 @@ def _failure_result(request: dict, course_type: str) -> CallToolResult:
         text += "\n\n후보는 있었지만 안전하게 제안할 조건 변경을 검증하지 못했어요."
     text += ("\n\n조건을 완화해 코스를 찾으면, 지도 보기를 열어 경로를 직접 편집해 "
              "거리와 모양을 조정할 수도 있어요.")
-    result = _mcp_result(text, code="constraint_mismatch", is_error=True)
+    result = _speak_verbatim(_mcp_result(text, code="constraint_mismatch", is_error=True), text)
     result.structuredContent.update(
         requires_confirmation=bool(options), relaxation_options=options,
         confirmation_options=options,
@@ -1090,8 +1106,8 @@ def _timeout_result(request: dict, course_type: str) -> CallToolResult:
         "시도하거나 조건을 바꿔 다시 요청해 주세요.\n\n"
         "코스가 생성되면 지도 보기를 열어 경로를 직접 편집할 수 있어요."
     )
-    result = _mcp_result(
-        text, code="generation_timeout", is_error=True, retryable=True)
+    result = _speak_verbatim(_mcp_result(
+        text, code="generation_timeout", is_error=True, retryable=True), text)
     result.structuredContent.update(
         requires_confirmation=False, relaxation_options=[],
         repeat_tool_call=False,
@@ -1152,7 +1168,8 @@ def _start_change_question(plan: CoursePlan, course_type: str, request: dict) ->
         options.append(dict(choice=2, tool="create_seoul_running_course",
                             arguments=dict(common, course_type="standard", allow_nearby_start=False)))
     text += "\n선택해 주시면 기존 거리·지형·시설 조건을 유지해 찾아드릴게요."
-    result = _mcp_result(text, code="start_change_confirmation_required")
+    result = _speak_verbatim(
+        _mcp_result(text, code="start_change_confirmation_required"), text)
     result.structuredContent.update(requires_confirmation=True, conditions_satisfied=False,
         confirmation_options=options, next_action="Wait for the user's explicit choice. Do not call again in this turn. "
         "For an ambiguous yes to two options, ask which option. Preserve the original conditions.")
