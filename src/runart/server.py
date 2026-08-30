@@ -847,7 +847,10 @@ def _plan_final_text(selection: dict) -> str:
     choices = [primary, *selection["alternatives"]]
     if selection.get("recommendation_mode") == "park_catalog":
         places = ", ".join(f"[{markdown_text(c['start'])}]({c['map_url']})" for c in choices)
-        return f"{places}에서 출발하는 코스를 추천해요.\n\n{COURSE_EDIT_NOTICE}"
+        body = f"{places}에서 출발하는 코스를 추천해요."
+        if notice := selection.get("start_change_notice"):
+            body = f"{notice} {body}"
+        return f"{body}\n\n{COURSE_EDIT_NOTICE}"
     prefix = "추천 코스예요."
     if not selection["primary_matches_requested_shape"]:
         requested = SHAPES.get(selection["requested_course_type"])
@@ -1310,7 +1313,13 @@ def _park_course_result(request: dict, course_type: str = "standard") -> CallToo
                 f"{start_label}에서 직선 최대 {round(farthest):,}m 떨어져 있어요.")
     if night:
         lead += " 야간 조명이 많은 코스만 포함했어요."
-    result = _plan_result(CoursePlan("park_catalog", lead, choices[0], tuple(choices[1:])), course_type)
+    # A named start must be compared against, or the host reads the widget and
+    # says the course begins where the runner asked. Only a themed request with
+    # no start of its own keeps None here.
+    result = _plan_result(
+        CoursePlan("park_catalog", lead, choices[0], tuple(choices[1:]),
+                   requested_start=origin_name if origin else None),
+        course_type)
     result.structuredContent["park_selection"] = {
         "mode": "district" if district else "nearest" if origin else "random", "distance_basis": "straight_line_to_course_start",
         "origin": {"name": origin_name, "lat": origin[0], "lon": origin[1]} if origin else None,
