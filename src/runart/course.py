@@ -668,26 +668,6 @@ def nearest_route_index(g, path: list[int], lat: float, lon: float) -> tuple[int
     return best_index, best_d
 
 
-def _connect_through(g, weight, start: int, waypoints: list[int],
-                     finish: int) -> list[int] | None:
-    """Walk start -> waypoints -> finish, skipping any stop that cannot be
-    reached. ``None`` only when even start -> finish has no walkable path."""
-    route: list[int] = []
-    cursor = start
-    for stop in [*waypoints, finish]:
-        if stop == cursor:
-            continue
-        try:
-            segment = _route(g, weight, cursor, stop)
-        except (nx.NetworkXNoPath, nx.NodeNotFound):
-            continue          # this stop is unreachable; carry on to the next
-        route.extend(segment if not route else segment[1:])
-        cursor = stop
-    if cursor != finish:
-        return None
-    return route or [start]
-
-
 # Geometry decides whether two visible lines really meet. UI hit slop and road
 # snapping are deliberately absent here: even a 1m gap must remain a gap.
 INTERSECTION_EPSILON_M = 1e-4
@@ -810,33 +790,91 @@ def _raw_stroke_closed(points: list[tuple[float, float]]) -> bool:
 
 def _route_one_stroke(g, weight, stroke: list[CourseWaypoint], *, close: bool
                       ) -> list[int]:
+    """Match a drawn line onto the pedestrian network, following its shape.
+
+    Between two anchors a whole-graph shortest path is free to leave the
+    drawing entirely, which is how a deliberate detour used to come back as
+    the road the runner was trying to avoid. Searching inside a tube around
+    the drawn line instead leaves the router nowhere else to go, so the result
+    follows what was drawn and falls onto the walkable way beside it -- which
+    is the whole promise of the pencil.
+    """
     raw = [(point.lat, point.lon) for point in stroke]
-    samples = [raw[0], *stroke_waypoints(stroke), raw[-1]]
-    drawn: list[int] = []
-    for lat, lon in samples:
-        node, snap_m = graphmod.nearest_node(lat, lon)
-        if node is None or snap_m > STROKE_SNAP_MAX_M:
+    dense = _densify(raw)
+    anchors = _resample_by_arc(_smooth(dense), STROKE_ANCHOR_SPACING_M)
+
+    for radius in STROKE_MATCH_RADIUS_LADDER:
+        corridor = _corridor_nodes(dense, radius)
+        if len(corridor) < 2:
             continue
-        if not drawn or drawn[-1] != node:
-            drawn.append(node)
-    if len(drawn) < 2:
-        raise CourseError("그린 선이 기존 코스와 이어지지 않았어요. 실제 코스 선과 교차하도록 이어 그려 주세요.")
-    finish = drawn[0] if close else drawn[-1]
-    via = drawn[1:] if close else drawn[1:-1]
-    routed = _connect_through(g, weight, drawn[0], via, finish)
-    if routed is None or len(routed) < 2:
-        raise CourseError("그린 선을 도보 가능한 길로 잇지 못했어요. 지도에 보이는 길 위로 다시 그려 주세요.")
-    return routed
+        drawn: list[int] = []
+        unreached = 0
+        for lat, lon in anchors:
+            node = _snap_into(lat, lon, corridor, radius)
+            if node is None:
+                node, snap_m = graphmod.nearest_node(lat, lon)
+                if node is None or snap_m > STROKE_SNAP_MAX_M:
+                    unreached += 1
+                    continue
+                corridor.add(node)
+            if not drawn or drawn[-1] != node:
+                drawn.append(node)
+        if len(drawn) < 2:
+            continue
+        if unreached > len(anchors) * STROKE_UNREACHED_SHARE:
+            raise CourseError(
+                "그린 선 아래에 걸어갈 수 있는 길이 없어요. 지도에 보이는 길 위로 다시 그려 주세요.")
+        routed = _walk_corridor(g, weight, corridor, drawn,
+                                close=close, radius_m=radius)
+        if routed is not None and len(routed) >= 2:
+            return routed
+
+    raise CourseError("그린 선을 도보 가능한 길로 잇지 못했어요. 지도에 보이는 길 위로 다시 그려 주세요.")
+
+
+def _walk_corridor(g, weight, corridor: set[int], stops: list[int], *,
+                   close: bool, radius_m: float) -> list[int] | None:
+    """Join consecutive anchors without leaving the tube.
+
+    A hop that has no route inside the tube is retried on the whole graph:
+    a footbridge or an underpass can be the only real link between two points
+    a runner drew straight through, and refusing the whole drawing over one
+    such hop helps nobody. That rescue is per hop, so one detour around an
+    obstacle cannot turn the rest of the line into a shortest path.
+    """
+    tube = g.subgraph(corridor)
+    ordered = [*stops, stops[0]] if close else stops
+    route: list[int] = [ordered[0]]
+    cursor = ordered[0]
+    skipped = 0
+    for stop in ordered[1:]:
+        if stop == cursor:
+            continue
+        segment = None
+        for candidate in (tube, g):
+            try:
+                segment = _route(candidate, weight, cursor, stop)
+                break
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                continue
+        if segment is None:
+            # An anchor can land on a pedestrian island -- a node whose every
+            # edge is stairs, or a fenced-off fragment -- which nothing can
+            # reach. Skipping it keeps the rest of the drawing; abandoning the
+            # line over one such anchor helps nobody. Skipping many, though,
+            # is how a followed line quietly degrades into a shortest path.
+            skipped += 1
+            continue
+        route.extend(segment[1:])
+        cursor = stop
+    if cursor != ordered[-1] or skipped > len(ordered) * STROKE_UNREACHED_SHARE:
+        return None
+    return route if len(route) >= 2 else None
 
 
 # Interaction tolerance is separate from exact geometric intersection. Only
 # explicit gap endpoints / pen lifts may use it, never arbitrary crossings.
 DRAW_JOIN_MAX_M = 12.0
-# A finger on a city-zoom map is not accurate to 12m. When the strict endpoint
-# match has already failed, a wider reach is what lets a visibly connected line
-# join at all; the runnable-edge check below still refuses a different level.
-DRAW_TIP_JOIN_MAX_M = 45.0
-
 
 def _snap_gap_endpoints(g, path: list[int], lo: int, hi: int,
                         strokes: list[list[CourseWaypoint]]) -> list[list[CourseWaypoint]]:
@@ -860,40 +898,6 @@ def _snap_gap_endpoints(g, path: list[int], lo: int, hi: int,
                 if node == anchor or (edge is not None and edge_is_runnable(edge)
                                       and edge.get("length", math.inf) <= DRAW_JOIN_MAX_M * 2):
                     stroke[end] = CourseWaypoint(lat=g.nodes[anchor]["lat"], lon=g.nodes[anchor]["lon"])
-                    break
-    return result
-
-
-
-def _snap_tips_to_retained(g, path: list[int], lo: int, hi: int,
-                           strokes: list[list[CourseWaypoint]],
-                           max_distance_m: float) -> list[list[CourseWaypoint]]:
-    """Bind each pen tip to the retained route it visibly reaches.
-
-    _snap_gap_endpoints only considers the two erased ends, so a line drawn
-    back onto the green further out keeps a tip that belongs to no node and
-    never registers as a connection. Proximity alone is still not enough: the
-    tip must land on that node or one short runnable edge away from it, which
-    is what keeps a bridge from joining the road beneath it.
-    """
-    retained = [path[i] for i in range(len(path)) if i <= lo or i >= hi]
-    result = [list(stroke) for stroke in strokes]
-    for stroke in result:
-        for end in (0, -1):
-            point = stroke[end]
-            node, _ = graphmod.nearest_node(point.lat, point.lon)
-            choices = sorted(
-                (haversine_m(point.lat, point.lon, g.nodes[anchor]["lat"],
-                             g.nodes[anchor]["lon"]), anchor)
-                for anchor in retained)
-            for distance, anchor in choices:
-                if distance > max_distance_m:
-                    break
-                edge = g.get_edge_data(node, anchor) if node is not None else None
-                if node == anchor or (edge is not None and edge_is_runnable(edge)
-                                      and edge.get("length", math.inf) <= max_distance_m * 2):
-                    stroke[end] = CourseWaypoint(lat=g.nodes[anchor]["lat"],
-                                                 lon=g.nodes[anchor]["lon"])
                     break
     return result
 
@@ -960,23 +964,84 @@ def _join_connected_strokes(g, strokes: list[list[CourseWaypoint]]) -> list[list
     return result
 
 
-
 # A drawn line and the route it visibly meets can still be a few roads apart in
 # the graph. Walking that remainder keeps the runner's own two lines; a longer
 # connector would be a route they never drew, so it is refused instead.
 DRAW_BRIDGE_MAX_M = 250.0
 
 
-def _bridge_drawing_to_retained(g, weight, path: list[int], lo: int, hi: int,
-                                strokes: list[list[CourseWaypoint]]):
-    """Retained green + the drawn line, joined by the shortest walk between.
+# When one end of a drawing plainly meets the route and the other stops in
+# open ground, the runner has still said what they meant. That far end is
+# joined at a longer reach -- what stops a runaway join is the deletion
+# allowance below, not the length of the connector.
+DRAW_REACH_FAR_M = 600.0
 
-    The pair that deletes the least green wins, not the pair whose connector is
-    shortest: a closed course revisits places, so the nearest join can sit on
-    the far side of the loop and collapse the route.
+
+class CourseGapOpen(CourseError):
+    """The erased span cannot close by itself; it needs a line drawn across.
+
+    Not a failure of the edit: the erase stands and the runner is being asked
+    for the other half. The endpoint reports it as an open gap rather than an
+    error so the eraser's work is never thrown away.
+    """
+
+
+def _join_drawing_to_route(g, weight, path: list[int], ordered: list[int],
+                           head_range: range, tail_range: range,
+                           reach_m: float, allowance_m: float):
+    """Splice one routed drawing between two points on the route it meets.
+
+    Anchoring is by *index*, never by node id. A closed course revisits
+    places, so one node id names two points on it; matching by id spliced a
+    one-sided drawing clean across the loop and only the distance check
+    noticed, reporting it as a distance problem.
+
+    Candidates are ordered by how close the join actually is, then by how
+    little route it deletes. Ordering by deletion alone looked safer and was
+    not: with no erased span to anchor it, the least-deleting pair is the one
+    that deletes nothing, so the drawing was bolted on beside the route it was
+    meant to replace and a 5.2km course came back 6.2km.
+
+    What keeps a near join from being the far side of a closed loop is the
+    deletion allowance below, not the ordering.
+    """
+    first, last = ordered[0], ordered[-1]
+    def _gap_m(index, node):
+        return haversine_m(g.nodes[path[index]]["lat"], g.nodes[path[index]]["lon"],
+                           g.nodes[node]["lat"], g.nodes[node]["lon"])
+    heads = [i for i in head_range if _gap_m(i, first) <= reach_m]
+    tails = [j for j in tail_range if _gap_m(j, last) <= reach_m]
+    for _near, _removed, i, j in sorted(
+            (round(_gap_m(i, first) + _gap_m(j, last)), j - i, i, j)
+            for i in heads for j in tails if i < j):
+        # The join may eat into the route beyond what was erased, but not by
+        # more than the runner actually drew. Without this a one-sided line
+        # reaches the far side of a closed loop and a 5km course comes back
+        # as 1.25km.
+        if _path_length(g, path[i:j + 1]) > allowance_m:
+            continue
+        try:
+            lead = _route(g, weight, path[i], first)
+            trail = _route(g, weight, last, path[j])
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            continue
+        if (_path_length(g, lead) > reach_m or _path_length(g, trail) > reach_m):
+            continue
+        return lead[:-1] + ordered + trail[1:], i, j
+    return None, None, None
+
+
+def _replace_with_drawing(g, weight, path: list[int], strokes: list[list[CourseWaypoint]],
+                          lo: int | None, hi: int | None):
+    """The retained route plus the line the runner drew, and nothing else.
+
+    ``lo``/``hi`` bound the span the eraser marked. Without them the drawing
+    picks its own contacts anywhere on the route, which is what makes drawing
+    alone an edit rather than an annotation.
 
     Returns (replacement, stroke index, start index, end index) or four Nones.
     """
+    erased = 0 if lo is None else _path_length(g, path[lo:hi + 1])
     for index, stroke in enumerate(strokes):
         try:
             routed = _route_one_stroke(g, weight, stroke, close=False)
@@ -984,38 +1049,51 @@ def _bridge_drawing_to_retained(g, weight, path: list[int], lo: int, hi: int,
             continue
         if len(routed) < 2:
             continue
-        for first, last, ordered in ((routed[0], routed[-1], routed),
-                                     (routed[-1], routed[0], routed[::-1])):
-            heads = [i for i in range(lo + 1)
-                     if haversine_m(g.nodes[path[i]]["lat"], g.nodes[path[i]]["lon"],
-                                    g.nodes[first]["lat"], g.nodes[first]["lon"])
-                     <= DRAW_BRIDGE_MAX_M]
-            tails = [j for j in range(hi, len(path))
-                     if haversine_m(g.nodes[path[j]]["lat"], g.nodes[path[j]]["lon"],
-                                    g.nodes[last]["lat"], g.nodes[last]["lon"])
-                     <= DRAW_BRIDGE_MAX_M]
-            # The join may eat into the green beyond the erased span, but not
-            # by more than the runner actually drew. Without this a one-sided
-            # line reaches the far side of a closed loop and the 5km course
-            # comes back as 1.25km.
-            allowance = _path_length(g, ordered) + DRAW_BRIDGE_MAX_M
-            pairs = sorted(((lo - i) + (j - hi), i, j)
-                           for i in heads for j in tails)
-            for _removed, i, j in pairs:
-                extra = (_path_length(g, path[i:lo + 1])
-                         + _path_length(g, path[hi:j + 1]))
-                if extra > allowance:
-                    continue
-                try:
-                    lead = _route(g, weight, path[i], first)
-                    trail = _route(g, weight, last, path[j])
-                except (nx.NetworkXNoPath, nx.NodeNotFound):
-                    continue
-                if (_path_length(g, lead) > DRAW_BRIDGE_MAX_M
-                        or _path_length(g, trail) > DRAW_BRIDGE_MAX_M):
-                    continue
-                return lead[:-1] + ordered + trail[1:], index, i, j
+        if not stroke_is_doubled(stroke):
+            raw = [(point.lat, point.lon) for point in stroke]
+            routed = drop_backtracking(
+                routed, keep_span=lambda span: _within_drawn_corridor(g, span, raw))
+        if len(routed) < 2:
+            continue
+        head_range = range(lo + 1) if lo is not None else range(len(path))
+        tail_range = range(hi, len(path)) if hi is not None else range(len(path))
+        allowance = _path_length(g, routed) + erased + DRAW_BRIDGE_MAX_M
+        # Reach is the outer loop: a near join in the direction the runner did
+        # not happen to draw beats a far one in the direction they did.
+        for reach in (DRAW_BRIDGE_MAX_M, DRAW_REACH_FAR_M):
+            for ordered in (routed, routed[::-1]):
+                replacement, i, j = _join_drawing_to_route(
+                    g, weight, path, ordered, head_range, tail_range,
+                    reach, allowance)
+                if replacement is not None:
+                    return replacement, index, i, j
     return None, None, None, None
+
+
+def _close_erased_span(g, path: list[int], lo: int, hi: int) -> tuple[list[int], str]:
+    """Take the erased span off when the route can close without it.
+
+    Both ends of an out-and-back are the same place, so deleting it leaves a
+    loop that is already closed and there is nothing to draw. Refusing that
+    and asking for a replacement line asked for a line that cannot exist --
+    the commonest reason to reach for the eraser was the one thing it could
+    not do.
+    """
+    if path[lo] == path[hi]:
+        trimmed = path[:lo] + path[hi:]
+        if len(trimmed) >= 3 and trimmed[0] == trimmed[-1]:
+            return trimmed, "왕복으로 튀어나온 구간을 지웠어요."
+    # collapse_excursion searches 200 indices either side for a repeat, which
+    # is right for the short span the eraser used to hand it and far too free
+    # for a long sweep: on a 5km loop it found a repeat across the course and
+    # cut it to under a kilometre. Erasing a span may remove that span, not a
+    # quarter of the route.
+    trimmed = collapse_excursion(path, lo, hi)
+    if trimmed is not None:
+        removed = _path_length(g, path) - _path_length(g, trimmed)
+        if removed <= _path_length(g, path[lo:hi + 1]) + DRAW_BRIDGE_MAX_M:
+            return trimmed, "대신할 다른 보행로가 없어서, 왕복으로 튀어나온 구간을 통째로 잘라냈어요."
+    raise CourseGapOpen("지운 구간을 이을 선을 그려 주세요.")
 
 
 def _path_length(g, nodes: list[int]) -> float:
@@ -1027,70 +1105,51 @@ def _path_length(g, nodes: list[int]) -> float:
 def snap_drawn_strokes(params: CourseParams, path: list[int],
                        from_index: int | None, to_index: int | None,
                        strokes: list[list[CourseWaypoint]]) -> Course:
-    """Apply independent pencil strokes without deleting untouched route edges.
+    """The route the eraser left, plus the line the runner drew.
 
-    An eraser gap is the only span drawing may replace. Without a gap, a
-    connected drawing is inserted as an excursion and every original directed
-    edge occurrence remains. Connections require exact geometry *and* shared
-    pedestrian-graph topology.
+    That is the whole rule, and it is the same rule with or without an eraser
+    gap: a drawing says "go this way instead" between the two points where it
+    meets the route. A closed drawing is the one exception -- it says "add this
+    loop" -- and is still inserted rather than substituted.
     """
     course_from_path(params, path)
     clean = [stroke for stroke in strokes if len(stroke) >= 2]
-    if not clean:
-        raise CourseError("그린 선이 기존 코스와 이어지지 않았어요. 실제 코스 선과 교차하도록 이어 그려 주세요.")
     g = graphmod.get_graph()
     weight = easy_route_weight(_routing_weight_for(params), prefer_named_walkways=True)
     current = list(path)
+    note = ""
     gap = None
     if from_index is not None or to_index is not None:
         if (from_index is None or to_index is None
                 or not 0 <= from_index < to_index < len(path)):
             raise CourseError("지운 구간의 양 끝을 다시 확인해 주세요.")
         gap = (from_index, to_index)
+    if gap and gap[1] - gap[0] > max(400, (len(path) - 1) * 3 // 4):
+        raise CourseError("한 번에 지운 구간이 너무 길어요. 더 짧게 나눠 수정해 주세요.")
+
+    if not clean:
+        if gap is None:
+            raise CourseError(
+                "그린 선이 기존 코스와 이어지지 않았어요. 실제 코스 선과 교차하도록 이어 그려 주세요.")
+        current, note = _close_erased_span(g, path, *gap)
+        course = course_from_path(params, current)
+        course.note = note
+        return course
 
     pending = list(clean)
     if gap:
         lo, hi = gap
-        if hi - lo > max(400, (len(path) - 1) * 3 // 4):
-            raise CourseError("한 번에 지운 구간이 너무 길어요. 더 짧게 나눠 수정해 주세요.")
         pending = _snap_gap_endpoints(g, path, lo, hi, pending)
         pending = _join_connected_strokes(g, pending)
-        replacement = None
-        used = None
-        for index, stroke in enumerate(pending):
-            raw = [(point.lat, point.lon) for point in stroke]
-            routed = _route_one_stroke(g, weight, stroke, close=False)
-            connections = _topological_intersection_nodes(g, path, routed, raw)
-            if path[lo] not in connections or path[hi] not in connections:
-                continue
-            a = routed.index(path[lo])
-            b = len(routed) - 1 - routed[::-1].index(path[hi])
-            if a > b:
-                routed.reverse()
-                a = routed.index(path[lo])
-                b = len(routed) - 1 - routed[::-1].index(path[hi])
-            if a < b:
-                replacement = routed[a:b + 1]
-                if not stroke_is_doubled(stroke):
-                    replacement = drop_backtracking(
-                        replacement,
-                        keep_span=lambda span: _within_drawn_corridor(g, span, raw))
-                used = index
-                break
-        join_lo, join_hi = lo, hi
-        if replacement is None:
-            # What the runner sees is the retained green plus the line they
-            # drew. Keep exactly that and walk the short remainder between
-            # them, deleting as little green as the join allows. Matching
-            # shared graph nodes instead used to pick the far side of a closed
-            # loop and collapse the course.
-            replacement, used, join_lo, join_hi = _bridge_drawing_to_retained(
-                g, weight, path, lo, hi, pending)
+        replacement, used, join_lo, join_hi = _replace_with_drawing(
+            g, weight, path, pending, lo, hi)
         if replacement is None:
             raise CourseError(
-                "그린 선이 지운 구간의 양 끝과 실제로 이어지지 않았어요. 붉은 선 양 끝을 교차하도록 다시 그려 주세요.")
+                "그린 선이 지운 구간과 이어지지 않았어요. 붉은 점 근처를 지나도록 다시 그려 주세요.")
         current = path[:join_lo] + replacement + path[join_hi + 1:]
         pending.pop(used)
+    else:
+        pending = _join_connected_strokes(g, pending)
 
     # Add every remaining stroke independently. Never flatten two strokes:
     # flattening invents a straight connector between separate finger lifts.
@@ -1128,23 +1187,20 @@ def snap_drawn_strokes(params: CourseParams, path: list[int],
             current = current[:insert_at] + loop + current[insert_at + 1:]
             continue
 
-        positions = [(i, node) for i, node in enumerate(routed)
-                     if node in set(connections)]
-        if len({node for _, node in positions}) < 2:
+        # An open drawing is an instruction, not an annotation: the route
+        # between the two points it meets becomes the line that was drawn.
+        # Adding it as an out-and-back instead preserved every original edge
+        # and gave the runner a course they had not drawn.
+        replacement, _used, i, j = _replace_with_drawing(
+            g, weight, current, [stroke], None, None)
+        if replacement is None:
             raise CourseError(
-                "그린 선이 기존 코스와 이어지지 않았어요. 선이 실제 코스와 두 곳에서 교차하도록 이어 그려 주세요.")
-        first_i, anchor = positions[0]
-        last_i, _ = next(item for item in reversed(positions)
-                         if item[1] != anchor)
-        if first_i > last_i:
-            first_i, last_i = last_i, first_i
-            anchor = routed[first_i]
-        addition = routed[first_i:last_i + 1]
-        excursion = addition + list(reversed(addition[:-1]))
-        insert_at = current.index(anchor)
-        current = current[:insert_at] + excursion + current[insert_at + 1:]
+                "그린 선이 기존 코스와 이어지지 않았어요. 코스 선에 닿도록 이어 그려 주세요.")
+        current = current[:i] + replacement + current[j + 1:]
 
-    return course_from_path(params, current)
+    course = course_from_path(params, current)
+    course.note = note
+    return course
 
 
 def snap_drawn_segment(params: CourseParams, path: list[int],
@@ -1163,23 +1219,45 @@ def snap_drawn_segment(params: CourseParams, path: list[int],
 # any real circuit, while a short shared spur stays acceptable.
 RETRACE_PENALTY = 120.0
 RETRACE_ACCEPTABLE = 0.25
-# How far apart the points handed to the router have to be. Closer than this
-# and two neighbouring samples snap to different ways, forcing a detour out to
-# one and back -- the zigzag that turned a straight 489m line into 1,515m.
-# Dropping it to 90m to follow a drawing more closely brought that straight
-# back: a +/-25m wobble backtracked over six of thirty-two nodes. Fidelity
-# comes from lifting the *count* cap instead, which is what actually bound a
-# long outline.
-STROKE_WAYPOINT_MIN_M = 140.0
-# Perpendicular deviation below which a drawn line counts as straight.
-STROKE_SIMPLIFY_TOLERANCE_M = 45.0
-# The cap scales with the drawing. A fixed eight points meant a long outline --
-# a 고구마 round 여의도, say -- was reconstructed from eight anchors and the
-# router filled the gaps with whatever it liked. Editing is the one place the
-# runner is entitled to be followed exactly, so the budget follows the line.
-STROKE_WAYPOINT_PER_M = 120.0
-STROKE_WAYPOINT_MIN_COUNT = 8
-STROKE_WAYPOINT_MAX = 240
+# Resolution the raw finger samples are brought up to before anything else, so
+# every later stage measures in arc length rather than in however fast the
+# finger happened to be moving.
+STROKE_DENSIFY_M = 20.0
+# The one calibration knob of freehand editing: the width of the boxcar that
+# separates tremor from intent.
+#
+# Tremor is high-frequency and averages to zero; a detour the runner meant is
+# low-frequency and sustained over hundreds of metres. A moving average over
+# arc length removes the first and keeps the second. Douglas-Peucker cannot:
+# it measures deviation from the *whole stroke's chord*, so a smooth 180m-deep
+# bow collapses onto that chord exactly like a wobble does -- measured, a 61
+# point curve reduced to one waypoint and moved a 5km course by 11m.
+#
+# Measured on the bundled Seoul graph over 4 segments x 5 tremor levels x 6
+# seeds, against the pipeline this replaced (worst 4.14x direct, 205 repeated
+# nodes): 100m gave 5.87x/470, 120m gave 5.15x/291, and 140m gave 3.58x/200 --
+# better than what it replaces. Above 140m the curve is flat, because the
+# anchor spacing below already decorrelates neighbouring samples. At 300m
+# fidelity starts going instead: a drawn 180m detour came back as 135m.
+#
+# So the usable band is 140m-200m and this sits in the middle of it. Retune by
+# re-running that battery, not by taste.
+STROKE_SMOOTH_WINDOW_M = 160.0
+# How far apart the anchors handed to the router sit along the smoothed line.
+# Closer than this and two neighbouring anchors snap to different ways, forcing
+# a detour out to one and back -- the zigzag that turned a straight 489m line
+# into 1,515m.
+STROKE_ANCHOR_SPACING_M = 130.0
+# Half-width of the tube the router is allowed to search inside. This is what
+# makes the result follow the drawing: between two anchors a whole-graph
+# shortest path may leave the drawn line entirely, but inside a 70m tube there
+# is nowhere else to go. Widened only when a hop finds no route at all.
+STROKE_MATCH_RADIUS_M = 70.0
+STROKE_MATCH_RADIUS_LADDER = (70.0, 110.0, 170.0)
+# An anchor is worth routing to only if the drawn line really goes there. A
+# drawing crossing water or a rail yard has samples with no way in reach; those
+# are reported rather than silently straightened.
+STROKE_UNREACHED_SHARE = 0.5
 # How far a drawn waypoint may sit from a walkable way before it is ignored.
 # A finger is not a surveyor and a phone's GPS-free tap has real slop.
 STROKE_SNAP_MAX_M = 220.0
@@ -1211,46 +1289,100 @@ def _perpendicular_m(point, start, end) -> float:
     return math.hypot(px - dx * t, py - dy * t)
 
 
-def _simplify(points: list[tuple[float, float]], tolerance_m: float) -> list[tuple[float, float]]:
-    """Ramer-Douglas-Peucker over lat/lon points, keeping both ends."""
+def _densify(points: list[tuple[float, float]],
+             step_m: float | None = None) -> list[tuple[float, float]]:
+    """Re-sample a stroke to a fixed spatial resolution.
+
+    A finger moving fast leaves samples 40m apart and one held still leaves a
+    hundred in one place. Everything after this measures arc length, so the
+    stroke has to be evenly spaced before it means anything.
+    """
+    # Resolved here, not as a default: a default argument binds at import and
+    # would quietly freeze the calibration knobs below, so a test that sweeps
+    # them would measure nothing and report success.
+    step_m = STROKE_DENSIFY_M if step_m is None else step_m
+    if len(points) < 2:
+        return list(points)
+    dense = [points[0]]
+    for start, end in zip(points, points[1:]):
+        span = haversine_m(start[0], start[1], end[0], end[1])
+        steps = max(1, int(span // step_m))
+        for i in range(1, steps + 1):
+            dense.append((start[0] + (end[0] - start[0]) * i / steps,
+                          start[1] + (end[1] - start[1]) * i / steps))
+    return dense
+
+
+def _smooth(points: list[tuple[float, float]],
+            window_m: float | None = None,
+            step_m: float | None = None) -> list[tuple[float, float]]:
+    """Boxcar average over arc length: tremor out, intent kept.
+
+    Both tips are put back exactly. They are the two places the runner chose
+    deliberately -- where the pen went down and came up -- and averaging them
+    against their neighbours drags the line off the point that was aimed at.
+    """
+    window_m = STROKE_SMOOTH_WINDOW_M if window_m is None else window_m
+    step_m = STROKE_DENSIFY_M if step_m is None else step_m
     if len(points) < 3:
         return list(points)
-    worst, index = 0.0, 0
-    for i in range(1, len(points) - 1):
-        d = _perpendicular_m(points[i], points[0], points[-1])
-        if d > worst:
-            worst, index = d, i
-    if worst <= tolerance_m:
-        return [points[0], points[-1]]
-    left = _simplify(points[: index + 1], tolerance_m)
-    right = _simplify(points[index:], tolerance_m)
-    return left[:-1] + right
+    half = max(1, int(round(window_m / step_m / 2)))
+    smoothed = []
+    for i in range(len(points)):
+        window = points[max(0, i - half):min(len(points), i + half + 1)]
+        smoothed.append((sum(p[0] for p in window) / len(window),
+                         sum(p[1] for p in window) / len(window)))
+    smoothed[0], smoothed[-1] = points[0], points[-1]
+    return smoothed
+
+
+def _resample_by_arc(points: list[tuple[float, float]],
+                     spacing_m: float) -> list[tuple[float, float]]:
+    """Anchors at a fixed arc-length interval, both ends always kept."""
+    if len(points) < 2:
+        return list(points)
+    anchors = [points[0]]
+    walked = 0.0
+    for start, end in zip(points, points[1:]):
+        walked += haversine_m(start[0], start[1], end[0], end[1])
+        if walked >= spacing_m:
+            anchors.append(end)
+            walked = 0.0
+    if anchors[-1] != points[-1]:
+        anchors.append(points[-1])
+    return anchors
 
 
 def stroke_waypoints(stroke) -> list[tuple[float, float]]:
-    """The few points a drawn line actually asks the route to pass through.
+    """The points a drawn line asks the route to pass through, in order.
 
-    Sampling the raw stroke at a fixed stride treated every wobble as an
-    instruction: a straight 489m line came back as a 1,515m path that doubled
-    back nine times. Simplifying first means a straight line contributes no
-    intermediate waypoints at all, and the router is free to follow the road.
+    Densify, low-pass, then space out. The old pipeline simplified first and
+    so answered a kilometre of deliberate curve with a single waypoint; see
+    STROKE_SMOOTH_WINDOW_M for why Douglas-Peucker cannot do this job.
     """
     points = [(point.lat, point.lon) for point in stroke]
-    simplified = _simplify(points, STROKE_SIMPLIFY_TOLERANCE_M)[1:-1]
-    spaced: list[tuple[float, float]] = []
-    for point in simplified:
-        if spaced and haversine_m(spaced[-1][0], spaced[-1][1],
-                                  point[0], point[1]) < STROKE_WAYPOINT_MIN_M:
-            continue
-        spaced.append(point)
-    walked = sum(haversine_m(a[0], a[1], b[0], b[1])
-                 for a, b in zip(points, points[1:]))
-    budget = max(STROKE_WAYPOINT_MIN_COUNT,
-                 min(STROKE_WAYPOINT_MAX, math.ceil(walked / STROKE_WAYPOINT_PER_M)))
-    if len(spaced) <= budget:
-        return spaced
-    step = math.ceil(len(spaced) / budget)
-    return spaced[::step]
+    anchors = _resample_by_arc(_smooth(_densify(points)), STROKE_ANCHOR_SPACING_M)
+    return anchors[1:-1]
+
+
+def _corridor_nodes(points: list[tuple[float, float]], radius_m: float) -> set[int]:
+    """Every graph node within ``radius_m`` of the drawn line."""
+    found: set[int] = set()
+    for lat, lon in points:
+        for node, _ in graphmod.nearby_nodes(lat, lon, limit=40,
+                                             max_distance_m=radius_m):
+            found.add(node)
+    return found
+
+
+def _snap_into(lat: float, lon: float, allowed: set[int],
+               radius_m: float) -> int | None:
+    """Nearest node to a point that is also inside the corridor."""
+    for node, _ in graphmod.nearby_nodes(lat, lon, limit=16,
+                                         max_distance_m=radius_m):
+        if node in allowed:
+            return node
+    return None
 
 
 def _local_direction(points: list[tuple[float, float]], i: int) -> tuple[float, float]:

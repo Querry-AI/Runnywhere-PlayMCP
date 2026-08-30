@@ -1,5 +1,12 @@
 # Course-editor route preservation — TDD evidence
 
+> **Superseded in part, 2026-08-30.** "Drawing is additive" was reversed by
+> product decision: an open drawing now replaces the route between the two
+> points it meets, with or without an eraser gap. See
+> [editor-freehand.tdd.md](editor-freehand.tdd.md) for the new rule, the
+> deletion allowance that replaced this guarantee, and what still holds.
+> The rest of this document is the record of the behaviour at the time.
+
 ## Required behavior
 
 Drawing is additive unless the user explicitly erased an original span. Every

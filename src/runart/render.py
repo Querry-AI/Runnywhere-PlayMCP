@@ -1519,7 +1519,10 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  // 5.3km name rather than the one it had when the page loaded.
  let currentNamePlaceholder = initialSummary.name_placeholder || '';
  const applySummary = summary => {{
-   if (!summary) return;
+   // The panel is cosmetic; the route is not. Half-applying a summary used to
+   // throw partway through and take the caller's route update down with it,
+   // leaving the busy toast pinned and the edit lost.
+   if (!summary || typeof summary.length_km !== 'number') return;
    currentSummary = summary;
    if (summary.name_placeholder) currentNamePlaceholder = summary.name_placeholder;
    setText('courseTitle', summary.title);
@@ -1712,10 +1715,10 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
        draftLines.push(new kakao.maps.Polyline({{map,path:drawnPath(0,editNodes.length-1),strokeColor:'#087b59',strokeWeight:7,strokeOpacity:.96,strokeStyle:'solid'}}));
      }}
      if(gapRange){{
-       // Red remembers exactly what was erased; it never becomes a random
-       // alternate route behind the runner's back.
+       // Erased is gone. Keeping the removed line on screen, even faintly,
+       // read as "still there" and left runners rubbing at it again. Only the
+       // two ends stay, because those are what a replacement has to reach.
        const gap=editNodes.slice(gapRange[0],gapRange[1]+1);
-       draftLines.push(new kakao.maps.Polyline({{map,path:drawnPath(gapRange[0],gapRange[1]),strokeColor:'#e5322e',strokeWeight:10,strokeOpacity:.32,strokeStyle:'solid'}}));
        for(const endpoint of [gap[0],gap[gap.length-1]]){{
          draftLines.push(new kakao.maps.CustomOverlay({{map,position:new kakao.maps.LatLng(endpoint[1],endpoint[2]),content:'<span class="gap-end" aria-hidden="true"></span>',xAnchor:.5,yAnchor:.5,zIndex:7}}));
        }}
@@ -1940,13 +1943,41 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    else
      setEditStatus('코스 선 가까이를 문질러 주세요.','error',{{label:'닫기',run:()=>{{}}}});
  }};
- // Erasing changes only the local draft. The original geometry stays visible
- // in translucent red until the runner freely draws its replacement.
- const eraseSelection = () => {{
+ // Erasing an out-and-back needs no replacement: both its ends are the same
+ // place, so the loop is already closed once it is gone. The server is the
+ // only thing that can tell, so ask it, and fall back to an open gap when the
+ // span really does need a line drawn across it.
+ const eraseSelection = async () => {{
    if(editBusy||!selectedRange)return;
    undoStack.push(snapshot());if(undoStack.length>40)undoStack.shift();redoStack=[];
    gapRange=[...selectedRange];selectedRange=null;draftStrokes=[];activeStroke=null;routePreviewReady=false;
    releaseTool();renderDraft();
+   setEditBusy(true);setEditStatus('지운 구간을 정리하고 있어요…','busy');
+   try{{
+     const payload=await postEdit({{action:'snap',path:editNodes.map(point=>point[0]),
+       strokes:[],from_index:gapRange[0],to_index:gapRange[1]}});
+     setEditBusy(false);
+     if(payload.gap_open){{
+       // setEditStatus only surfaces error and busy, which keeps the map
+       // clear. This one has to be seen: the span stayed and the runner is
+       // the only one who can say what replaces it.
+       showEditToast(payload.note||'지운 구간을 이을 선을 그려 주세요.','info');
+       return;
+     }}
+     editNodes=payload.path.map(point=>[...point]);
+     editGeom=(payload.geometry||[]).slice();
+     gapRange=null;routePreviewReady=true;
+     setEditDistance(payload.length_km);applySummary(payload.summary);renderDraft();
+     // The shorter line and the new distance are the confirmation; clearing
+     // the busy toast is all that is left to do.
+     setEditStatus('');
+     if(payload.note)showEditToast(payload.note,'info');
+   }}catch(error){{
+     setEditBusy(false);
+     // The erase itself stands; only the tidy-up failed. Leaving the gap open
+     // is the honest state and the drawing still works from here.
+     showEditToast('지운 구간을 이을 선을 그려 주세요.','info');
+   }}
  }};
  // ---- 그리기: preserve the freehand draft until save -------------------
  const DRAW_STEP_PX=5;

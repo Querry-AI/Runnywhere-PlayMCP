@@ -241,8 +241,6 @@ def test_disconnected_drawings_are_refused_without_replacing_the_course():
                               {"lat": lat + 0.005, "lon": lon + 0.005}],
         "a single repeated point": [{"lat": lat, "lon": lon},
                                     {"lat": lat, "lon": lon}],
-        "drawn backwards": [{"lat": source.points[i][0], "lon": source.points[i][1]}
-                            for i in (30, 26, 22, 18)],
         "wandering off and back": [{"lat": lat, "lon": lon},
                                    {"lat": lat + 0.003, "lon": lon},
                                    {"lat": source.points[28][0], "lon": source.points[28][1]}],
@@ -255,6 +253,25 @@ def test_disconnected_drawings_are_refused_without_replacing_the_course():
         payload = json.loads(response.body)
         assert response.status_code == 422, f"{label}: {payload}"
         assert "이어지지" in payload["error"] or "지운 구간" in payload["error"]
+
+
+def test_a_line_drawn_the_other_way_round_is_still_the_line_they_drew():
+    """A runner has no reason to draw in the direction the course happens to
+    run, and refusing a backwards stroke made them guess which way that was.
+    Both orientations are tried, so only where the line goes matters."""
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    cid = encode_course_id(source.params)
+    backwards = [{"lat": source.points[i][0], "lon": source.points[i][1]}
+                 for i in (30, 26, 22, 18)]
+
+    response = asyncio.run(server.edit_course_route(_json_request(cid, {
+        "action": "save_draft", "path": source.path,
+        "from_index": 10, "to_index": 40, "stroke": backwards,
+    })))
+
+    payload = json.loads(response.body)
+    assert response.status_code == 200, payload
+    assert payload["length_km"] >= source.length_m / 1000 * 0.5
 
 
 def test_a_long_drawing_is_followed_to_its_end_not_trimmed():
@@ -275,15 +292,26 @@ def test_a_long_drawing_is_followed_to_its_end_not_trimmed():
     assert "앞쪽" not in (course.note or "")
 
 
-def test_the_waypoint_budget_grows_with_the_drawing():
+def test_the_anchors_handed_to_the_router_follow_the_drawing():
     """Eight anchors for a whole outline let the router fill the gaps with
     whatever it liked -- the spikes along the top of a 고구마 drawn round
-    여의도. The spacing floor stays at 140m; only the count cap moved."""
-    from runart.course import STROKE_WAYPOINT_MIN_M, stroke_waypoints
+    여의도.
+
+    The count used to be capped and the spacing floored. Both are gone: anchors
+    now fall at a fixed interval along the arc, so their number is simply how
+    long the line is. Simplifying to a budget first is what let a kilometre of
+    deliberate curve arrive as a single waypoint.
+    """
+    from runart.course import STROKE_ANCHOR_SPACING_M, stroke_waypoints
     source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
-    assert STROKE_WAYPOINT_MIN_M == 140.0
+
     long_stroke = [CourseWaypoint(lat=la, lon=lo) for la, lo in source.points]
-    assert len(stroke_waypoints(long_stroke)) > 8
+    anchors = stroke_waypoints(long_stroke)
+    assert len(anchors) > 8
+    # Spacing is the contract, so the count has to track the length.
+    walked = sum(haversine_m(*a, *b) for a, b in zip(source.points, source.points[1:]))
+    assert len(anchors) == pytest.approx(walked / STROKE_ANCHOR_SPACING_M, rel=0.35)
+
     short = [CourseWaypoint(lat=la, lon=lo) for la, lo in source.points[:4]]
     assert len(stroke_waypoints(short)) <= 8
 
@@ -549,8 +577,11 @@ def test_editor_erases_a_swept_range_and_draws_its_replacement():
     assert "action==='erase'?'선택 구간 지우기'" in page
     assert "strokeColor:'#e0522d'" in page
     assert 'class="edit-anchor" data-end=' in page
-    # Erasing leaves the exact old geometry as translucent red guidance.
-    assert "strokeColor:'#e5322e',strokeWeight:10,strokeOpacity:.32" in page
+    # Erased is gone. Keeping the removed line on screen, even at a third
+    # opacity, read as "still there"; only the two ends a replacement has to
+    # reach are left behind.
+    assert "strokeColor:'#e5322e',strokeWeight:10,strokeOpacity:.32" not in page
+    assert 'class="gap-end"' in page
     assert "const eraseSelection" in page
     assert "action:'reroute'" not in page and "action:'via'" not in page
     # Drawing is local freehand until an explicit walkable preview request.

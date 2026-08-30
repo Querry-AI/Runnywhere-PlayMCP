@@ -42,7 +42,7 @@ from .animal_presets import (MISSING as PRESET_MISSING, PresetMatch,
                              find_nearest_animal_preset, get_animal_preset,
                              preset_status)
 from .course import (MAX_VIA_POINTS, Course, CourseAccessError, CourseError,
-                     DistanceMissError, course_from_path,
+                     CourseGapOpen, DistanceMissError, course_from_path,
                      ensure_course_runnable, generate_course, reroute_segment,
                      route_via_points, snap_drawn_segment, snap_drawn_strokes)
 from .courseplan import (CASE_EXACT, EFFORT_TOLERANCE, KIND_REQUESTED, NEARBY_RADIUS_M,
@@ -2834,6 +2834,16 @@ async def edit_course_route(request: Request) -> Response:
                 )
             else:
                 return JSONResponse({"error": "지원하지 않는 편집 동작입니다."}, status_code=400)
+    except CourseGapOpen as exc:
+        # Not a failed edit. The erase stands and the runner is being asked for
+        # the line across it, so returning an error here would throw away the
+        # eraser's work and make rubbing something out look broken.
+        return JSONResponse({
+            "gap_open": True,
+            "path": edit_path_nodes(payload.path),
+            "geometry": edit_path_geometry(payload.path),
+            "note": str(exc),
+        }, headers={"Cache-Control": "no-store"})
     except CourseError as exc:
         return JSONResponse({"error": str(exc)}, status_code=422)
     except (TimeoutError, _GenerationTimeout):

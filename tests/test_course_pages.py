@@ -151,7 +151,12 @@ def test_erasing_keeps_a_red_local_gap_without_rerouting():
     # Erasing is what the one primary button does while a span is selected.
     assert "if(action==='erase'){eraseSelection();return;}" in edit
     assert "gapRange=[...selectedRange];selectedRange=null" in edit
-    assert "strokeColor:'#e5322e',strokeWeight:10,strokeOpacity:.32" in edit
+    # The erased span is not drawn at all; its two ends are the only trace.
+    assert "strokeColor:'#e5322e',strokeWeight:10,strokeOpacity:.32" not in edit
+    assert 'class="gap-end"' in edit
+    # Erasing asks the server whether the span closes on its own, so rubbing
+    # out an out-and-back needs no replacement line drawn across it.
+    assert "action:'snap',path:editNodes.map(point=>point[0]),\n       strokes:[]" in edit
 
 
 def test_selection_ends_drag_both_ways_through_the_drawing_overlay():
@@ -293,9 +298,11 @@ def test_the_editor_line_follows_the_same_street_shapes_the_other_pages_draw():
     assert "const initialEditGeometry" in edit
     assert "const drawnPoints" in edit
     assert "path:drawnPath(0,editNodes.length-1)" in edit
-    # Selection and gap highlights ride on the same geometry.
+    # Selection rides on the same geometry, and so do the two runs of green
+    # left either side of a gap -- the erased span itself is no longer drawn.
     assert "path:drawnPath(selectedRange[0],selectedRange[1])" in edit
-    assert "path:drawnPath(gapRange[0],gapRange[1])" in edit
+    assert "path:drawnPath(0,gapRange[0])" in edit
+    assert "path:drawnPath(gapRange[1],editNodes.length-1)" in edit
 
 
 def test_one_eraser_sweep_cannot_jump_to_the_far_side_of_the_loop():
