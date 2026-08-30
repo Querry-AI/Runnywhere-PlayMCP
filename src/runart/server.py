@@ -494,6 +494,17 @@ def _mcp_result(text: str, *, code: str, is_error: bool = False,
         "retryable": retryable,
         "release_sha": RELEASE_SHA,
     }
+    # Every reply that is plain copy is also its own closing prose. The host
+    # uses structuredContent.assistant_final_text verbatim, and where the field
+    # was missing it wrote its own sentence instead -- inverting the
+    # start-change options in Preview. A widget envelope is never prose, so it
+    # is left alone and keeps whatever the caller passed.
+    is_widget = text.lstrip().startswith('{"widget"')
+    if not assistant_final_text and not is_widget:
+        structured.update(
+            assistant_final_text=text, assistant_final_text_verbatim=True,
+            assistant_final_text_position="replace",
+            assistant_final_text_is_complete=True)
     if assistant_text:
         # Kakao reads the widget envelope from content[0]. Keep that position;
         # mark explanations already rendered by its leading Markdown so the
