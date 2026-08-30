@@ -349,6 +349,46 @@ def _kakao_get(url: str, params: dict,
     return []
 
 
+# Place-type words carry no identity: "제주공항" and "김포국제공항 국내선" share
+# 공항 and nothing else. Stripped from the query before the identity check.
+_PLACE_TYPE_WORDS = (
+    "국제공항", "공항", "터미널", "시청", "구청", "도청", "청사", "대학교", "대학",
+    "병원", "공원", "해수욕장", "해변", "국내선", "국제선", "본점", "지점", "역", "점",
+)
+
+
+def _distinctive_tokens(query: str) -> list[str]:
+    tokens = []
+    for word in query.split():
+        for suffix in _PLACE_TYPE_WORDS:
+            if word == suffix:  # a bare place type identifies nothing
+                word = ""
+                break
+            if len(word) > len(suffix) and word.endswith(suffix):
+                word = word[: -len(suffix)]
+                break
+        if len(word) >= 2:
+            tokens.append(word)
+    return tokens
+
+
+def _names_the_same_place(query: str, place_name: str) -> bool:
+    """Reject a Seoul hit that answers a query about somewhere else.
+
+    The rect restricts results to Seoul, so an out-of-Seoul query comes back
+    as Kakao's nearest Seoul guess -- "제주공항" resolved to 김포국제공항 국내선
+    and the runner was handed a Gimpo course for a Jeju request. The station
+    path already required the requested identity; this is the same rule for
+    the generic path. With no distinctive token to check (a bare place type),
+    the hit stands as before.
+    """
+    tokens = _distinctive_tokens(query)
+    if not tokens:
+        return True
+    haystack = place_name.replace(" ", "")
+    return any(token in haystack or haystack in token for token in tokens)
+
+
 def _keyword_search(query: str, deadline: float | None = None
                     ) -> tuple[float, float, str] | None:
     """Kakao Local keyword search, restricted to Seoul via `rect`."""
@@ -365,7 +405,10 @@ def _keyword_search(query: str, deadline: float | None = None
             if doc.get("category_group_code") == "SW8":
                 found = _nearest_offline_station(lat, lon)
             if found is None:
-                found = (lat, lon, doc.get("place_name") or query)
+                name = doc.get("place_name") or query
+                if not _names_the_same_place(query, name):
+                    continue
+                found = (lat, lon, name)
             _cache_ok("kw", query, found)
             return found
     return None

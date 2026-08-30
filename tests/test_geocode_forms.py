@@ -56,3 +56,18 @@ def test_offline_places_still_resolve_without_the_network(station):
     lat, lon, name = resolve_location(station, None, None, timeout_s=0.2)
     assert 37.4 <= lat <= 37.72 and 126.76 <= lon <= 127.19
     assert name
+
+
+def test_a_seoul_hit_that_answers_another_regions_query_is_refused():
+    """The rect confines results to Seoul, so a Jeju ask came back as Gimpo."""
+    from runart.geocode import _names_the_same_place
+
+    assert not _names_the_same_place("제주공항", "김포국제공항 국내선")
+    assert not _names_the_same_place("제주도", "제주갈비 강남점")
+    assert not _names_the_same_place("제주 함덕해수욕장", "한강공원 뚝섬")
+
+    assert _names_the_same_place("김포공항", "김포국제공항 국내선")
+    assert _names_the_same_place("스타벅스 서울숲점", "스타벅스 서울숲점")
+    assert _names_the_same_place("상암동 1601", "서울 마포구 상암동 1601")
+    # A bare place type identifies nothing, so the hit stands as before.
+    assert _names_the_same_place("공원", "북서울꿈의숲")
