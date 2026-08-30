@@ -1360,7 +1360,11 @@ def _park_course_result(request: dict, course_type: str = "standard") -> CallToo
     # no start of its own keeps None here.
     result = _plan_result(
         CoursePlan("park_catalog", lead, choices[0], tuple(choices[1:]),
-                   requested_start=origin_name if origin else None),
+                   # Name the start the runner typed. Geocoding 성수동 to
+                   # 서울숲카페거리 and disclosing *that* gave the host a place the
+                   # user never said, so it discarded the sentence and wrote
+                   # "성수동에서 추천해봤어요" over courses at 반포한강공원.
+                   requested_start=(location or origin_name) if origin else None),
         course_type)
     result.structuredContent["park_selection"] = {
         "mode": "district" if district else "nearest" if origin else "random", "distance_basis": "straight_line_to_course_start",
