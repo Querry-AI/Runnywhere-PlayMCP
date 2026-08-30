@@ -1631,7 +1631,12 @@ def _course_tool_result(text: str, *, course_type: str,
     """Classify controlled tool copy into a stable MCP result contract."""
     # Input/location failures must not start another generation in the planner.
     if text.startswith("⚠️"):
-        if "위치를 찾지 못" in text or "출발 위치가 필요" in text:
+        # Every CourseError from _resolve_start is a location failure. This
+        # classifier matches phrases, so a new one silently fell through to
+        # the generic shortage copy: "서울 밖이에요" was replaced by "검증 가능한
+        # 후보를 확보하지 못했어요", hiding the only useful thing we knew.
+        if ("위치를 찾지 못" in text or "출발 위치가 필요" in text
+                or "서울 밖이에요" in text):
             return _mcp_result(text, code="location_not_found", is_error=True)
         if "서울 지역 좌표만" in text or "위도와 경도" in text:
             return _mcp_result(text, code="invalid_coordinates", is_error=True)

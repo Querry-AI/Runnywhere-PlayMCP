@@ -89,3 +89,25 @@ def test_a_start_outside_seoul_is_refused_before_the_seoul_bounded_lookup():
     assert resolve_location("김포공항", None, None)[2] == "김포공항역"
     assert resolve_location("강남역", None, None)[2] == "강남역"
     assert resolve_location("여의도한강공원", None, None)[2] == "여의도한강공원"
+
+
+def test_every_resolve_failure_keeps_its_own_message():
+    """The ⚠️ classifier matches phrases, so a new one can fall through it."""
+    from runart import server
+    from runart.course import CourseError
+    from runart.geocode import resolve_location
+
+    for query in ("제주공항", "대구", "해운대", "없는가게이름12345"):
+        try:
+            resolve_location(query, None, None)
+        except CourseError as exc:
+            reason = str(exc)
+        else:  # pragma: no cover - none of these is a Seoul start
+            raise AssertionError(f"{query} unexpectedly resolved")
+
+        result = server.create_seoul_running_course(
+            course_type="standard", location=query, distance_km=5)
+        structured = result.structuredContent
+        assert structured["result_code"] == "location_not_found", query
+        # The runner is told why, not handed generic shortage copy.
+        assert reason[:12] in structured["assistant_final_text"], query
