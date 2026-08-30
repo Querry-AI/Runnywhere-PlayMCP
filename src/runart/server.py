@@ -1130,6 +1130,7 @@ def _timeout_result(request: dict, course_type: str) -> CallToolResult:
 def _recommendation_shortage(count: int, *, night_mode: bool = False,
                              district: str | None = None,
                              request: dict | None = None,
+                             relax: dict | None = None,
                              course_type: str = "standard") -> CallToolResult:
     if request is not None:
         return _failure_result(request, course_type)
@@ -1142,12 +1143,25 @@ def _recommendation_shortage(count: int, *, night_mode: bool = False,
         text = f"{district + '에서는' if district else '이 출발지에서는'} 조명이 확인된 야간 코스를 찾지 못했어요. 야간 최소 기준에 못 미치거나 조명이 미확인인 코스는 제외했어요."
         if alternatives:
             text += "\n" + ", ".join(alternatives) + " 쪽에는 조명이 확인된 코스가 있어요. 다른 거리·시설 조건도 맞는지는 새 요청에서 확인해요."
+    options = []
+    if relax and night_mode:
+        # Naming other districts is not something the runner can act on. Offer
+        # the one change that is measured to help here: drop the night filter.
+        arguments = {key: relax[key] for key in
+                     ("location", "lat", "lon", "distance_km", "duration_min",
+                      "strict_distance", "include_hills", "need_facilities",
+                      "course_type") if relax.get(key) is not None}
+        arguments["night_mode"] = False
+        options = [{"choice": 1, "tool": "create_seoul_running_course",
+                    "label": "야간 조명 조건 해제하고 찾기",
+                    "changed_fields": ["night_mode"], "arguments": arguments}]
+        text += f"\n1. {options[0]['label']}"
     incomplete = _mcp_result(
-        text,
-        code="insufficient_courses", is_error=True, retryable=False)
+        text, code="insufficient_courses", is_error=True, retryable=False)
     incomplete.structuredContent.update(
         requested_count=RECOMMENDATION_COUNT, available_count=count,
-        repeat_tool_call=False)
+        requires_confirmation=bool(options), confirmation_options=options,
+        relaxation_options=options, repeat_tool_call=False)
     return incomplete
 
 
@@ -1484,7 +1498,11 @@ def _district_course_result(request: dict, course_type: str) -> CallToolResult:
             if len(choices) == RECOMMENDATION_COUNT:
                 break
         if not choices:
-            return _recommendation_shortage(0)
+            # Without the request there is no rejected-candidate evidence, so a
+            # district ask ended on "출발지나 거리 조건을 조정해 다시 요청해 주세요"
+            # with nothing to act on.
+            return _recommendation_shortage(0, district=district, request=request,
+                                            course_type=course_type)
         return _plan_result(CoursePlan("district", f"{district} 안의 출발지에서 조건에 맞는 코스를 골랐어요.",
                                        choices[0], tuple(choices[1:])), course_type)
     stations = DISTRICT_STATIONS[district]
@@ -1496,7 +1514,8 @@ def _district_course_result(request: dict, course_type: str) -> CallToolResult:
     else:
         stations = sorted(stations, key=lambda s: (s[2], s[:2]))
     if not stations:
-        return _recommendation_shortage(0, night_mode=night, district=district)
+        return _recommendation_shortage(0, night_mode=night, district=district,
+                                        relax=dict(request, course_type=course_type))
     # ponytail: one deterministic station, no cross-district retries; expand
     # only after measured coverage justifies spending another routing budget.
     lat, lon, name = stations[0]
@@ -1589,7 +1608,10 @@ def _course_tool_result(text: str, *, course_type: str,
             return _mcp_result(text, code="location_not_found", is_error=True)
         if "서울 지역 좌표만" in text or "위도와 경도" in text:
             return _mcp_result(text, code="invalid_coordinates", is_error=True)
-        if "거리는 1km에서 42.195km" in text or "시간은 10~360분" in text:
+        if ("거리는 1km에서 42.195km" in text or "시간은 10~360분" in text
+                # The duration ceiling explains itself in its own words; match
+                # the fact, not one phrasing, so it is not read as a shortage.
+                or "분까지 가능해요" in text):
             return _mcp_result(text, code="invalid_request", is_error=True)
         if "지도 검색 서비스" in text:
             return _mcp_result(text, code="location_unavailable", is_error=True, retryable=True)
@@ -1770,6 +1792,7 @@ def _build_params(location, lat, lon, distance_km, duration_min, include_hills,
     (e.g. duration→distance conversion) so the user sees the reasoning."""
     note = ""
     rlat, rlon, name = _resolve_start(location, lat, lon, timeout_s=timeout_s)
+    asked_by_duration = distance_km is None and bool(duration_min)
     if distance_km is None and duration_min:
         distance_km = round(duration_min / DEFAULT_PACE_MIN_PER_KM, 1)
         # 🕒, not ⏱️. The ⚠️/⏱️ prefixes mark failures, and the result
@@ -1789,6 +1812,15 @@ def _build_params(location, lat, lon, distance_km, duration_min, include_hills,
     except ValidationError as exc:
         # The tool schema no longer bounds distance/duration, so an out-of-range
         # value lands here. Answer in Korean instead of leaking a pydantic dump.
+        if duration_min and asked_by_duration:
+            # 360분 is inside the stated minute range but converts to 55km, so
+            # the generic sentence refused a value it had just called valid.
+            cap = int(42.195 * DEFAULT_PACE_MIN_PER_KM)
+            raise CourseError(
+                f"{duration_min:g}분은 6:30/km 기준 약 {distance_km:g}km예요. "
+                f"코스는 42.195km까지 만들 수 있어서 시간으로는 약 {cap}분까지 가능해요. "
+                f"{cap}분 이하로 다시 알려주세요."
+            ) from exc
         raise CourseError(
             "거리는 1km에서 42.195km 사이로 알려주세요. "
             "시간으로 요청하실 때는 10분에서 360분 사이가 가능해요."
