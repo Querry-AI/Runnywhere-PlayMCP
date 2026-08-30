@@ -62,7 +62,7 @@ from .models import (COURSE_NAME_MAX_CHARS, FACILITY_TYPES, CourseParams, Course
                      decode_shape_token, encode_course_id)
 from .render import (card_svg, course_edit_summary, course_markdown,
                      course_thumbnail_svg, edit_path_geometry, edit_path_nodes,
-                     markdown_text, preview_html, route_points)
+                     error_text, markdown_text, preview_html, route_points)
 from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
                      generate_shape_course, list_shapes)
 from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
@@ -909,7 +909,9 @@ _COURSE_TYPE_LABELS = {
 _REASON_LABELS = {
     "distance": "거리", "terrain": "지형", "lighting": "야간 조명",
     "night_animal": "야간 조명", "shape": "모양",
-    "start_distance": "출발지", "district": "출발 지역",
+    # "출발지" alone read as if the runner's own start was invalid; the
+    # candidate is simply outside the search radius around it.
+    "start_distance": "출발지 반경", "district": "출발 지역",
 }
 
 
@@ -1056,20 +1058,36 @@ def _failure_result(request: dict, course_type: str) -> CallToolResult:
         if nearby is not None:
             course, away = nearby
             near_name = course.params.location_name
-            text = (
-                f"{start}에서는 만족스러운 코스 경로를 생성할 수 없어요.\n"
-                f"주변 {near_name}(직선 {round(away):,}m)에서 출발하는 "
-                f"{course.length_km:.1f}km 코스는 어떠세요?"
-            )
             arguments = _public_course_arguments(request, course_type)
-            arguments["location"] = near_name
-            arguments.pop("lat", None)
-            arguments.pop("lon", None)
             arguments["allow_nearby_start"] = False
+            if away < SAME_START_M:
+                # The verified course starts where the runner already asked to
+                # start. Offering it as "출발지를 청계천(으)로 변경" told them to
+                # change the start to the one they gave, and Preview dropped
+                # the option rather than repeat it. The real change is the
+                # distance.
+                arguments["distance_km"] = round(course.length_km, 1)
+                arguments.pop("duration_min", None)
+                label = f"거리를 {course.length_km:.1f}km로 변경"
+                changed = ["distance_km"]
+                text = (
+                    f"{start} 출발로 요청 조건을 모두 만족하는 코스는 없었어요.\n"
+                    f"같은 출발지의 {course.length_km:.1f}km 코스는 어떠세요?"
+                )
+            else:
+                arguments["location"] = near_name
+                arguments.pop("lat", None)
+                arguments.pop("lon", None)
+                label = f"출발지를 {near_name}(으)로 변경"
+                changed = ["location", "lat", "lon", "allow_nearby_start"]
+                text = (
+                    f"{start}에서는 만족스러운 코스 경로를 생성할 수 없어요.\n"
+                    f"주변 {near_name}(직선 {round(away):,}m)에서 출발하는 "
+                    f"{course.length_km:.1f}km 코스는 어떠세요?"
+                )
             options = [{
                 "choice": 1, "tool": "create_seoul_running_course",
-                "label": f"출발지를 {near_name}(으)로 변경",
-                "changed_fields": ["location", "lat", "lon", "allow_nearby_start"],
+                "label": label, "changed_fields": changed,
                 "arguments": arguments,
             }]
             text += f"\n1. {options[0]['label']}"
@@ -1096,7 +1114,12 @@ def _failure_result(request: dict, course_type: str) -> CallToolResult:
         f"가장 가까운 검증 후보는 {'·'.join(labels)} 조건을 충족하지 못했어요."
     )
     if options:
-        text += "\n\n원하시면 실제 검증 후보가 있는 조건 변경을 골라 다시 찾아볼게요.\n"
+        # Name the changes in prose as well as in the numbered list. When only
+        # the list carried them, Preview compressed the reply to "거리를 조금
+        # 조정하거나 출발지를 바꾸면" and the runner never saw that 논현역 was a
+        # measured, ready alternative.
+        text += ("\n\n" + ", ".join(option["label"] for option in options)
+                 + " — 이렇게 바꾸면 검증된 코스가 있어요. 번호로 골라 주세요.\n")
         text += "\n".join(f"{option['choice']}. {option['label']}" for option in options)
     else:
         text += "\n\n후보는 있었지만 안전하게 제안할 조건 변경을 검증하지 못했어요."
@@ -1298,7 +1321,7 @@ def _park_course_result(request: dict, course_type: str = "standard") -> CallToo
             origin = (lat, lon)
         except CourseError as exc:
             code = "invalid_coordinates" if "서울 지역 좌표만" in str(exc) else "location_not_found"
-            return _mcp_result(f"⚠️ {markdown_text(str(exc))}", code=code, is_error=True)
+            return _mcp_result(f"⚠️ {error_text(str(exc))}", code=code, is_error=True)
     distance = request.get("distance_km")
     duration = request.get("duration_min")
     if ((distance is not None and not 1 <= distance <= 42.195)
@@ -1534,7 +1557,7 @@ def _specific_course_result(request: dict, course_type: str) -> CallToolResult:
             request.get("location"), request.get("lat"), request.get("lon"),
             timeout_s=ADDRESS_TRY_BUDGET_S)
     except CourseError as exc:
-        return _course_tool_result(f"⚠️ {markdown_text(str(exc))}", course_type=course_type, request=request)
+        return _course_tool_result(f"⚠️ {error_text(str(exc))}", course_type=course_type, request=request)
     request.update(_resolved=(lat, lon, name))
     fast = _verified_animal_fast_result(
         request, course_type, timeout_s=_budget_left(started))
@@ -2393,17 +2416,18 @@ def create_seoul_running_course(
         "원래 출발지·모양·거리·지형·야간·시설 조건을 유지하세요."
     ))] = False,
 ) -> CallToolResult:
-    """Runnywhere(러니웨어): the only tool for every new running course or
-    animal-shaped GPS art (러닝 코스/그려줘). Call once. Never invent omitted start,
-    distance, terrain, night, or facilities; omit location if unstated. Map
-    exactly/딱 distance to strict_distance=true. missing
-    start/서울 시내: ask and stop; district: stay in 구; specific: pass verbatim or lat/lon.
-    standard=ordinary; best_animal=unnamed animal; dog/cat/rabbit/whale=named;
-    그려줘 alone=standard. On start_change_confirmation_required ask the returned
-    question with no course. NEXT user numbered choice uses that option's exact
-    arguments; ambiguous yes means clarify. On failure/timeout use server text
-    without adding a cause or route. Describe starts only from actual course_selection.
-    Use assistant_final_text and web editor. 이 코스 근처 화장실 requires course_id."""
+    """Runnywhere(러니웨어): the only tool for any new running course or
+    animal-shaped GPS art (러닝 코스/그려줘). Outside Seoul (제주·부산): do not call;
+    say 서울만 지원. Call once. Never invent omitted start, distance, terrain,
+    night, or facilities; omit location if unstated. 다이어트·초보·가볍게 are goals,
+    not conditions: no flag. exactly/딱 -> strict_distance=true. missing
+    start/서울 시내: ask and stop, but 한강·공원·강변·수변 calls with
+    need_facilities=["park"], no location; district: stay in 구; specific: pass
+    verbatim or lat/lon. start_change_confirmation_required: ask its question,
+    no course. NEXT user numbered choice replays that option's exact arguments;
+    ambiguous yes: clarify. On failure use server text as is, keeping every
+    numbered option. Name starts only from course_selection. Use
+    assistant_final_text and web editor. 이 코스 근처 화장실 requires course_id."""
     common = dict(
         location=location, lat=lat, lon=lon, distance_km=distance_km,
         duration_min=duration_min, strict_distance=strict_distance,

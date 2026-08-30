@@ -206,6 +206,18 @@ def _offline_station_search(location: str) -> tuple[float, float, str] | None:
     return _STATION_LOOKUP.get(_normalize_station_query(location))
 
 
+def _echo(location: str) -> str:
+    """Quote the runner's own query back, bounded and inert.
+
+    The whole failure sentence now reaches the runner unescaped, so the one
+    untrusted fragment in it has to be escaped here instead. Imported late:
+    render pulls in the graph stack, and geocode is imported before it.
+    """
+    from .render import markdown_text
+    shown = location if len(location) <= ECHO_LIMIT else location[:ECHO_LIMIT] + "…"
+    return markdown_text(shown)
+
+
 def _looks_like_station_query(location: str) -> bool:
     normalized = _normalize_station_query(location)
     return normalized.endswith("역") or bool(re.search(r"\d+호선", normalized))
@@ -524,7 +536,7 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
             # Station intent is fail-closed. In particular, do not continue to
             # generic keyword/address/fuzzy lookup: "부산역" previously became
             # the Seoul shop "부산아지매국밥 명일역점" through that path.
-            shown = location if len(location) <= ECHO_LIMIT else location[:ECHO_LIMIT] + "…"
+            shown = _echo(location)
             raise CourseError(
                 f"'{shown}' 위치를 찾지 못했어요. 현재 서울 지역의 지하철역만 "
                 "출발지로 지원해요. 서울의 정확한 역 이름을 알려주세요."
@@ -564,7 +576,7 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
         # Echo the input back so the user sees what we searched for, but cap it:
         # an LLM can pass a very long string and the whole thing would otherwise
         # land in the tool result (PlayMCP asks for minimal result size).
-        shown = location if len(location) <= ECHO_LIMIT else location[:ECHO_LIMIT] + "…"
+        shown = _echo(location)
         # The missing-API-key state is an operator concern; it is already logged
         # at startup and must not be described to end users.
         raise CourseError(

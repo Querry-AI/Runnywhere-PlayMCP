@@ -44,12 +44,31 @@ def script_json(value) -> str:
     return json.dumps(value, ensure_ascii=False).replace("<", "\\u003c")
 
 
+# Our own failure sentences run past 120 characters; the cap only keeps a
+# pathological string out of the tool result (PlayMCP asks for minimal size).
+ERROR_TEXT_LIMIT = 600
+
+
 def markdown_text(value: str) -> str:
     """Escape untrusted labels embedded in MCP Markdown responses."""
     value = "".join(ch for ch in value if ch >= " " and ch != "\x7f")[:120]
     for char in "\\`*_{}[]()<>#+-.!|":
         value = value.replace(char, "\\" + char)
     return value
+
+
+def error_text(value: str) -> str:
+    """Pass one of our own error sentences through to the runner intact.
+
+    markdown_text() is for an untrusted label dropped inside our Markdown; run
+    over a whole sentence it escaped every '.' and '-' (the runner read
+    "찾지 못했어요\\.") and cut the message at 120 characters, which truncated
+    the location-not-found help mid-word. These strings are ours, and the one
+    untrusted part -- the echoed query -- is escaped and length-capped where
+    it is interpolated.
+    """
+    return "".join(ch for ch in value
+                   if ch >= " " or ch == "\n")[:ERROR_TEXT_LIMIT].strip()
 
 
 def course_markdown(course: Course, base_url: str, facilities: list[dict]) -> str:

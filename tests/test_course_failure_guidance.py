@@ -104,3 +104,42 @@ def test_unified_schema_exposes_strict_distance_only_on_the_creation_tool():
     assert field["default"] is False
     assert "정확히" in field["description"] and "2.5%" in field["description"]
     assert len(tools["create_seoul_running_course"].description) <= 900
+
+
+def test_our_own_error_sentence_reaches_the_runner_whole():
+    """markdown_text() escaped and truncated prose it was never meant to hold."""
+    from runart.course import CourseError
+    from runart.geocode import resolve_location
+    from runart.render import error_text
+
+    try:
+        resolve_location("제주공항", None, None)
+    except CourseError as exc:
+        message = error_text(str(exc))
+    else:  # pragma: no cover - 제주공항 is outside the Seoul gazetteer
+        raise AssertionError("expected a CourseError for a start outside Seoul")
+    assert "\\" not in message
+    assert message.endswith("서울숲")
+    assert "'제주공항'" in message
+
+
+def test_a_verified_course_at_the_asked_start_is_offered_as_a_distance_change(monkeypatch):
+    """Offering the runner's own start back as a start change read as nonsense."""
+    request = {"location": "청계천", "distance_km": 6,
+               "_resolved": (37.5691, 126.9779, "청계천")}
+    course = _course_at_length(5.8)
+
+    monkeypatch.setattr(server, "nearest_start_preset", lambda *a, **k: (course, 0.0))
+    same = server._failure_result(dict(request), "standard").structuredContent
+    option = same["relaxation_options"][0]
+    assert option["changed_fields"] == ["distance_km"]
+    assert option["arguments"]["distance_km"] == 5.8
+    assert "출발지를" not in option["label"]
+    assert "같은 출발지의 5.8km" in same["assistant_final_text"]
+
+    monkeypatch.setattr(server, "nearest_start_preset", lambda *a, **k: (course, 372.0))
+    moved = server._failure_result(dict(request), "standard").structuredContent
+    option = moved["relaxation_options"][0]
+    assert option["changed_fields"][0] == "location"
+    assert "출발지를" in option["label"]
+    assert "직선 372m" in moved["assistant_final_text"]
