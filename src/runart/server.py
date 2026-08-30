@@ -1300,6 +1300,14 @@ def _park_course_result(request: dict, course_type: str = "standard") -> CallToo
                              "origin_distance_m": round(moved) if origin else None,
                              "source_url": spot.source_url})
     lead = "각 공원·강변에서 출발하는 코스를 추천해요."
+    if origin and destinations:
+        # State the distance from the start the runner named. The host read
+        # "각 공원에서 출발하는" as a course from 이촌역 and said so, while the
+        # course actually began at 여의도한강공원 3.9km away.
+        farthest = max(d["origin_distance_m"] or 0 for d in destinations)
+        start_label = response_start_name(origin_name or location)
+        lead = (f"요청 출발지 {start_label} · 실제 코스 출발지는 아래 공원·강변이며 "
+                f"{start_label}에서 직선 최대 {round(farthest):,}m 떨어져 있어요.")
     if night:
         lead += " 야간 조명이 많은 코스만 포함했어요."
     result = _plan_result(CoursePlan("park_catalog", lead, choices[0], tuple(choices[1:])), course_type)
