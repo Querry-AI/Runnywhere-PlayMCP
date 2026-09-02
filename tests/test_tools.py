@@ -239,9 +239,16 @@ def test_kakao_search_cache_expires_and_refreshes(monkeypatch):
     assert len(calls) == 2
 
 
-def test_all_289_seoul_metro_rows_are_bundled():
-    assert len(SEOUL_METRO_STATIONS) == 289
-    assert len(_STATION_LOOKUP) > 289
+def test_every_bundled_seoul_station_row_is_reachable_by_name():
+    """The 1-8 line dataset left out 코레일 and line 9 -- 41 real stations."""
+    assert len(SEOUL_METRO_STATIONS) == 330
+    assert len(_STATION_LOOKUP) > 330
+    lines = {row[0] for row in SEOUL_METRO_STATIONS}
+    assert {"1", "9"} <= lines
+    # Every station these were added for answered "위치를 찾지 못했어요" before.
+    for name in ("흑석역", "용산역", "노량진역", "영등포역", "구로역", "가양역",
+                 "신논현역", "국회의사당역", "선유도역", "개화역"):
+        assert geocode._offline_station_search(name), name
 
 
 def test_station_name_and_line_alias_resolve_without_external_api(monkeypatch):

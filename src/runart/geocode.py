@@ -117,6 +117,12 @@ GAZETTEER: dict[str, tuple[float, float]] = {
     "반포한강공원": (37.5100, 126.9950), "뚝섬한강공원": (37.5310, 127.0660),
     "잠원한강공원": (37.5205, 127.0110), "망원한강공원": (37.5554, 126.8974),
     "이촌한강공원": (37.5170, 126.9720), "잠실한강공원": (37.5180, 127.0820),
+    # Seoul runs eleven 한강공원 지구; the bundled set held seven. These three
+    # come from OpenStreetMap; 광나루 and 양화 sit 300m and 190m off their
+    # OSM point, which builds no loop, on the nearest ground that does. 강서한강공원 has no OSM feature of
+    # that name, so it is left out rather than given an invented point.
+    "광나루한강공원": (37.5378, 127.1146), "난지한강공원": (37.56799, 126.87824),
+    "양화한강공원": (37.5385, 126.8999),
     "중랑천": (37.5900, 127.0470), "안양천": (37.5243, 126.8790),
     "양재천": (37.4750, 127.0450), "탄천": (37.4990, 127.0700),
     "불광천": (37.5850, 126.9130), "성북천": (37.5850, 127.0230),

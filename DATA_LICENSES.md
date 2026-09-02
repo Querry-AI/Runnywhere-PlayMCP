@@ -9,6 +9,10 @@ not to third-party data. Snapshot details are recorded in `data/snapshot.json`.
 `seoul_graph.pkl`, `facilities.pkl`, `infra_points.pkl`,
 `animal_station_presets.json.gz`, `standard_course_presets.json.gz`, and
 `park_course_presets.json` contain or are derived from OpenStreetMap data.
+The last 41 station rows in `src/runart/stations.py` and the 광나루·난지·양화
+한강공원 entries in `src/runart/geocode.py` are also OSM-derived: names and
+coordinates from OpenStreetMap, districts and road names reverse-geocoded from
+Nominatim (also © OpenStreetMap contributors, ODbL 1.0).
 They are offered under the Open Data Commons Open Database License 1.0 (ODbL):
 
 - © OpenStreetMap contributors
