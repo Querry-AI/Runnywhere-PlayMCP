@@ -111,3 +111,33 @@ def test_every_resolve_failure_keeps_its_own_message():
         assert structured["result_code"] == "location_not_found", query
         # The runner is told why, not handed generic shortage copy.
         assert reason[:12] in structured["assistant_final_text"], query
+
+
+def test_a_shop_query_resolves_to_the_branch_it_names():
+    """Kakao ranks by relevance, not by the branch asked for."""
+    from runart.geocode import _branch_qualifier, _names_the_same_place
+
+    # Observed live: both came back from Kakao and the token check passed them.
+    assert not _names_the_same_place("스타벅스 홍대점", "스타벅스 대학로점")
+    assert not _names_the_same_place("스타벅스 강남역점", "스타벅스 강남구청역점")
+
+    assert _names_the_same_place("스타벅스 서울숲점", "스타벅스 서울숲역")
+    assert _names_the_same_place("올리브영 명동점", "올리브영 명동점")
+    assert _names_the_same_place("현대백화점 압구정본점", "현대백화점 압구정본점")
+    # No branch named, so the rule does not apply and a naming variant stands.
+    assert _names_the_same_place("을지로3가 노가리골목", "을지로노가리골목")
+    assert _names_the_same_place("반포한강공원 세빛섬", "세빛섬")
+
+    assert _branch_qualifier("스타벅스 홍대점") == "홍대"
+    assert _branch_qualifier("현대백화점 압구정본점") == "압구정"
+    assert _branch_qualifier("을지로3가 노가리골목") == ""
+
+
+def test_the_tower_resolves_by_the_names_it_is_signposted_with():
+    """남산서울타워 and N서울타워 spent the full budget and timed out at ~3s."""
+    from runart.geocode import GAZETTEER, resolve_location
+
+    tower = GAZETTEER["남산타워"]
+    for name in ("남산서울타워", "N서울타워", "남산타워"):
+        lat, lon, _ = resolve_location(name, None, None, timeout_s=1.0)
+        assert (lat, lon) == tower, name

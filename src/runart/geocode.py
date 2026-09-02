@@ -112,6 +112,10 @@ GAZETTEER: dict[str, tuple[float, float]] = {
     "서울역": (37.5547, 126.9707), "명동": (37.5637, 126.9838),
     "동대문": (37.5714, 127.0095), "혜화": (37.5822, 127.0021),
     "남산": (37.5498, 126.9851), "남산타워": (37.5498, 126.9851),
+    # The tower's official names. Fuzzy matching never reached 남산타워 from
+    # them ("남산타워" is not a substring of "남산서울타워"), so both spent the
+    # full budget generating and timed out at ~3s.
+    "남산서울타워": (37.5498, 126.9851), "N서울타워": (37.5498, 126.9851),
     # 한강·하천
     "한강공원": (37.5285, 126.9328), "여의도한강공원": (37.5285, 126.9328),
     "반포한강공원": (37.5100, 126.9950), "뚝섬한강공원": (37.5310, 127.0660),
@@ -385,6 +389,25 @@ def _distinctive_tokens(query: str) -> list[str]:
     return tokens
 
 
+def _branch_qualifier(query: str) -> str:
+    """The '○○점' part of a shop query, which names one branch and not another.
+
+    Kakao ranks by relevance, not by the branch asked for: "스타벅스 홍대점"
+    came back as 스타벅스 대학로점, 5km away, and "스타벅스 강남역점" as
+    스타벅스 강남구청역점. Both share the brand, so the token check passed them.
+    The branch is the part that has to survive.
+    """
+    words = query.split()
+    last = words[-1] if words else ""
+    if not last.endswith("점") or len(last) < 3:
+        return ""
+    for suffix in ("본점", "지점", "점"):
+        if len(last) > len(suffix) and last.endswith(suffix):
+            last = last[: -len(suffix)]
+            break
+    return last if len(last) >= 2 else ""
+
+
 def _names_the_same_place(query: str, place_name: str) -> bool:
     """Reject a Seoul hit that answers a query about somewhere else.
 
@@ -395,10 +418,13 @@ def _names_the_same_place(query: str, place_name: str) -> bool:
     the generic path. With no distinctive token to check (a bare place type),
     the hit stands as before.
     """
+    haystack = place_name.replace(" ", "")
+    branch = _branch_qualifier(query)
+    if branch and branch not in haystack:
+        return False
     tokens = _distinctive_tokens(query)
     if not tokens:
         return True
-    haystack = place_name.replace(" ", "")
     return any(token in haystack or haystack in token for token in tokens)
 
 
