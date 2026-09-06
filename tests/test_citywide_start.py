@@ -185,7 +185,8 @@ def test_visible_edit_notice_matches_all_output_channels(kind, location, facilit
     result = server.create_seoul_running_course(course_type=kind, location=location, need_facilities=facilities)
     assert not result.isError
     payload = json.loads(result.content[0].text)
-    assert payload["widget"]["children"][-1] == {"type": "Text", "value": server.COURSE_EDIT_NOTICE, "size": "sm"}
+    assert payload["widget"]["children"][-1] == {"type": "Text", "value": server.COURSE_EDIT_NOTICE, "size": "sm",
+         "color": {"light": "#000000", "dark": "#ffffff"}}
     assert payload["copy_text"].endswith(server.COURSE_EDIT_NOTICE)
     assert result.structuredContent["assistant_final_text"].endswith(server.COURSE_EDIT_NOTICE)
     assert len(result.content[0].text.encode()) <= 12000

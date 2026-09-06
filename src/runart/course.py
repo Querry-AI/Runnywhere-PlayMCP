@@ -517,7 +517,8 @@ def _blocked_edge_reason(attrs: dict) -> str:
 
 
 def blocked_reason_near(lat: float, lon: float,
-                        radius_m: float = BLOCKED_PROBE_M) -> str:
+                        radius_m: float = BLOCKED_PROBE_M,
+                        reason_for=None) -> str:
     """Explain why a spot the runner pointed at holds no usable course line.
 
     The probe is the *nearest way*, not the nearest node: every staircase ends
@@ -527,6 +528,7 @@ def blocked_reason_near(lat: float, lon: float,
     another one, which is not something to apologise for.
     """
     g = graphmod.get_graph()
+    reason_for = reason_for or _blocked_edge_reason
     best_blocked = (math.inf, "")
     best_open = math.inf
     seen: set[frozenset] = set()
@@ -541,14 +543,58 @@ def blocked_reason_near(lat: float, lon: float,
             a, b = g.nodes[node], g.nodes[neighbour]
             distance = _perpendicular_m(
                 (lat, lon), (a["lat"], a["lon"]), (b["lat"], b["lon"]))
-            if edge_is_runnable(attrs) and not attrs.get("gated"):
+            reason = reason_for(attrs)
+            if reason:
+                if distance < best_blocked[0]:
+                    best_blocked = (distance, reason)
+            elif edge_is_runnable(attrs) and not attrs.get("gated"):
                 best_open = min(best_open, distance)
-            elif distance < best_blocked[0]:
-                best_blocked = (distance, _blocked_edge_reason(attrs))
     # A tie goes to silence: only claim a way is in the runner's path when it
     # is clearly the closest thing to where they pointed.
     if best_blocked[1] and best_blocked[0] + 8.0 < best_open:
         return best_blocked[1]
+    return ""
+
+
+# A drawing over a staircase or a steep way used to be routed quietly around,
+# so the line that came back was not the line the runner drew. The drawing is
+# an instruction: refuse it and name what is in the way instead.
+DRAWN_STEEP_PCT = 15.0
+# Probe spacing along the drawn line. Well under the 55m probe radius, so a
+# staircase between two samples is still seen, and bounded so a kilometres-long
+# stroke cannot spend the whole edit budget here.
+DRAWN_PROBE_SPACING_M = 40.0
+DRAWN_PROBE_LIMIT = 48
+
+
+def _drawn_block_reason(attrs: dict) -> str:
+    """Why a drawn line cannot sit on this way. Stricter than routing: the
+    slope limit applies to every way, not just an unqualified OSM path."""
+    if highway_class(attrs) == "steps":
+        return "계단 구간이라 코스로 반영할 수 없어요. 계단을 피해 다시 그려 주세요."
+    slope = abs(float(attrs.get("slope_pct", 0.0) or 0.0))
+    if slope > DRAWN_STEEP_PCT:
+        return (f"경사가 {slope:.0f}%로 높은 길이라 코스로 반영할 수 없어요. "
+                "더 완만한 길로 다시 그려 주세요.")
+    return ""
+
+
+def drawn_block_reason(strokes: list[list[CourseWaypoint]]) -> str:
+    """The first staircase or steep way the drawn line runs along, or ""."""
+    probes = 0
+    for stroke in strokes:
+        last = None
+        for point in stroke:
+            here = (point.lat, point.lon)
+            if last is not None and haversine_m(*last, *here) < DRAWN_PROBE_SPACING_M:
+                continue
+            last = here
+            probes += 1
+            if probes > DRAWN_PROBE_LIMIT:
+                return ""
+            reason = blocked_reason_near(*here, reason_for=_drawn_block_reason)
+            if reason:
+                return reason
     return ""
 
 
@@ -1114,6 +1160,9 @@ def snap_drawn_strokes(params: CourseParams, path: list[int],
     """
     course_from_path(params, path)
     clean = [stroke for stroke in strokes if len(stroke) >= 2]
+    blocked = drawn_block_reason(clean)
+    if blocked:
+        raise CourseError(blocked)
     g = graphmod.get_graph()
     weight = easy_route_weight(_routing_weight_for(params), prefer_named_walkways=True)
     current = list(path)

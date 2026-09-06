@@ -20,10 +20,10 @@ WIDGET_NAME = "runnywhere_course"
 # Keep the two useful traits; the badge row wraps whole tags on narrow phones.
 CARD_TRAIT_LIMIT = 2
 FACILITY_EMOJI = {"convenience_store": "🏪", "restroom": "🚻"}
-# The supplied dark reference uses white titles and quieter grey metrics.
-# Keep the light theme legible too; the host still owns the chat background.
-LISTING_TEXT = {"light": "#202020", "dark": "#f5f5f5"}
-LISTING_SECONDARY = {"light": "#666666", "dark": "#a6a6a6"}
+# The host owns the chat background, so every piece of text has to name both
+# themes itself: a grey that read fine on white was the black-on-black line in
+# dark mode. Size and weight carry the hierarchy instead of colour.
+LISTING_TEXT = {"light": "#000000", "dark": "#ffffff"}
 WIDGET_MAX_BYTES = 12_000
 # A Kakao button label is one line on a phone; past this it truncates anyway.
 LABEL_MAX_CHARS = 60
@@ -286,7 +286,7 @@ def _section_heading(title: str, *, lead: bool) -> dict:
     return {
         "type": "Title" if lead else "Text",
         "value": _plain_text(title, 40), "size": "sm",
-        "weight": "bold", "color": "#000000", "maxLines": 1,
+        "weight": "bold", "color": LISTING_TEXT, "maxLines": 1,
     }
 
 
@@ -338,7 +338,7 @@ def _course_card_row(course: Course, course_id: str, origin: str,
                         "children": [
                             {"type": "Col", "gap": "4px", "flex": 1, "minWidth": 0, "children": [
                                 {"type": "Text", "value": _effort_line(course), "size": "sm", "weight": "bold", "color": LISTING_TEXT, "maxLines": 2},
-                                {"type": "Caption", "value": _ascent_line(course), "size": "lg", "color": LISTING_SECONDARY, "maxLines": 1},
+                                {"type": "Caption", "value": _ascent_line(course), "size": "lg", "color": LISTING_TEXT, "maxLines": 1},
                             ]},
                             button,
                         ],
@@ -401,7 +401,7 @@ def build_course_widget(
     # The host may omit/rewrite accompanying assistant prose. Put a changed
     # start in the actual widget, before any route can be mistaken for exact.
     if start_notice:
-        children.append({"type": "Text", "value": start_notice, "size": "sm"})
+        children.append({"type": "Text", "value": start_notice, "size": "sm", "color": LISTING_TEXT})
     children.append(_course_card_row(course, course_id, origin, primary_note))
     if alternatives:
         children.append(_section_heading("다른 코스도 있어요", lead=False))
@@ -410,7 +410,7 @@ def build_course_widget(
                 choice.course, choice.course_id, origin, choice.match_note
             ))
 
-    children.append({"type": "Text", "value": COURSE_EDIT_NOTICE, "size": "sm"})
+    children.append({"type": "Text", "value": COURSE_EDIT_NOTICE, "size": "sm", "color": LISTING_TEXT})
 
     copy_title = _copy_value(title, 80)
     copy_location = _copy_value(location, 120)

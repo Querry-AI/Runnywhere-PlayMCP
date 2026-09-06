@@ -16,6 +16,10 @@ from runart.widget import (
 )
 
 
+# Every widget string names both themes: black on white, white on dark.
+THEME_TEXT = {"light": "#000000", "dark": "#ffffff"}
+
+
 def _course(*, location_name: str = "강남역", shape: str | None = "dog") -> Course:
     params = CourseParams(
         lat=37.4986,
@@ -96,7 +100,7 @@ def test_course_widget_matches_kakao_card_contract_and_is_deterministic():
     # The card leads with a one-line heading so the runner knows what it is.
     header = card["children"][0]
     assert header["type"] == "Title" and header["value"] == "추천 코스"
-    assert header["weight"] == "bold" and header["color"] == "#000000"
+    assert header["weight"] == "bold" and header["color"] == THEME_TEXT
     row = card["children"][1]
     assert row["type"] == "Row"
     assert row["padding"] == {"top": "8px", "bottom": "8px"}
@@ -401,7 +405,7 @@ def test_course_widget_offers_every_alternative_as_a_full_matching_card():
                for child in _components(children, "Text"))
     for child in children:
         if child.get("value") in {"추천 코스", "다른 코스도 있어요"}:
-            assert child["weight"] == "bold" and child["color"] == "#000000"
+            assert child["weight"] == "bold" and child["color"] == THEME_TEXT
     assert "야옹런" in titles[1]
     assert "낙성대역" in titles[0]
     assert "봉천역" in titles[1]

@@ -110,7 +110,7 @@ def test_animal_course_detail_keeps_its_silhouette_and_gains_the_panels():
     course.params = course.params.model_copy(update={"shape": "dog"})
     page = preview_html(course, [], "https://runnywhere.example")
 
-    assert "동물 실루엣" in page
+    assert "러닝 코스" in page   # one label for animal and plain courses alike
     assert "이 코스는 이런 코스예요" in page
 
 
@@ -285,3 +285,17 @@ def test_sharing_an_edited_course_sends_the_edited_link():
     assert "let currentCourseUrl =" in page
     assert "const url = currentCourseUrl;" in page
     assert "currentCourseUrl = " in page.split("const setCourseLinks")[1]
+
+
+def test_run_tab_keeps_sharing_and_drops_the_card_and_animal_map():
+    """The card image and the animal map were two ways out of the run page.
+    Sharing the course is the only secondary action it needs."""
+    from runart.render import preview_html
+    course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
+    page = preview_html(course, [], "https://runnywhere.example", page="run")
+
+    assert 'id="shareCourse"' in page
+    assert "코스 카드" not in page and 'id="cardLink"' not in page
+    assert "동물 지도" not in page and "/animals" not in page
+    # The GPX row and the share preview image are untouched.
+    assert 'id="gpxLink"' in page and "/card.svg" in page

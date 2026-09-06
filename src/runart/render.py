@@ -527,9 +527,7 @@ def _howto_panel_html(base_url: str, cid: str) -> str:
   </ol>
  </div>
  <div class="actions secondary-actions">
-  <a class="btn ghost" id="cardLink" href="{base_url}/c/{cid}/card.svg">코스 카드</a>
   <button class="btn ghost" id="shareCourse" type="button">공유하기</button>
-  <a class="btn ghost" href="{base_url}/animals">동물 지도</a>
  </div>
 </section>"""
 
@@ -572,7 +570,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
          "label": html.escape(f"{LABELS_KO[f['type']]} · {f['at_km']:g}km 지점")}
         for f in facilities
     ])
-    shape_view_label = "동물 실루엣" if shape else "코스 라인"
+    shape_view_label = "러닝 코스"
     # An animal course exists to be looked at. Opening its info page on the
     # running-guide layer buried the one thing that makes it different, so the
     # silhouette leads there and the guide stays one tap away. The run and
@@ -781,7 +779,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .metric-value i{{font-style:normal;font-size:13px;font-weight:700;color:#8a958d;margin-left:2px}}
  /* Secondary actions must not compete with the two primary CTAs above them. */
  .btn.ghost{{background:#f2f6f0;color:#2b3630;border:1px solid #dce3d8;font-weight:700}}
- .actions.secondary-actions{{grid-template-columns:repeat(3,1fr);margin-top:8px}}
+ .actions.secondary-actions{{grid-template-columns:1fr;margin-top:8px}}
  .actions.secondary-actions .btn{{min-height:44px;padding:0 6px;font-size:13px}}
  .metric-note-inline{{margin:14px 0 0;font-size:12px;line-height:1.55;color:#8a958d}}
  .course-metrics{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;
@@ -911,6 +909,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
       background:rgba(20,32,24,.95);color:#fff;font-size:14px;font-weight:700;line-height:1.35;
       box-shadow:0 6px 22px rgba(0,0,0,.3);backdrop-filter:blur(8px);word-break:keep-all;
       opacity:0;transform:translateY(8px);transition:opacity .18s ease-out,transform .18s ease-out}}
+ .edit-toast{{cursor:pointer}}
  .edit-toast[hidden]{{display:none}}
  .edit-toast[data-open]{{opacity:1;transform:none}}
  .edit-toast[data-tone="error"]{{background:#a32b1e}}
@@ -1131,7 +1130,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const editEnabled = {str(edit_enabled).lower()};
  const editNotice = {json.dumps(edit_notice, ensure_ascii=False)};
  const initialLengthKm = {course.length_km:.2f};
- const editEndpoint = '{base_url}/c/{cid}/edit';
+ let editEndpoint = '{base_url}/c/{cid}/edit';
  const runStatus = document.getElementById('runStatus');
  const shareBtn = document.getElementById('shareCourse');
  if (shareBtn) shareBtn.addEventListener('click', () => {{
@@ -1173,7 +1172,9 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  // duplicating announcements across two live regions.
  let toastTimer = null;
  let toastAction = null;
- const AUTO_DISMISS_MS = {{info:3600, success:3600, busy:0, error:0, blocked:0}};
+ // A failure the runner cannot dismiss is a panel over their map; one that
+ // vanishes before it is read is no message at all. Three seconds, or a tap.
+ const AUTO_DISMISS_MS = {{info:3600, success:3600, busy:0, error:3000, blocked:3000}};
  const hideEditToast = () => {{
    if (!editToast) return;
    clearTimeout(toastTimer); toastTimer = null; toastAction = null;
@@ -1197,12 +1198,19 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    editToast.hidden = false;
    void editToast.offsetWidth;  // let the enter transition run from hidden
    editToast.dataset.open = '';
-   const ms = action ? (action.persist ? 0 : 6000) : AUTO_DISMISS_MS[tone || 'info'];
+   const failing = tone === 'error' || tone === 'blocked';
+   const ms = failing ? AUTO_DISMISS_MS[tone]
+     : action ? (action.persist ? 0 : 6000)
+     : AUTO_DISMISS_MS[tone || 'info'];
    if (ms) toastTimer = setTimeout(hideEditToast, ms);
  }};
- if (editToastAction) editToastAction.addEventListener('click', () => {{
+ if (editToastAction) editToastAction.addEventListener('click', event => {{
+   event.stopPropagation();
    const run = toastAction; hideEditToast(); if (run) run();
  }});
+ // Anywhere on the toast dismisses it without running the action -- tapping a
+ // message to make it go away is the one gesture nobody has to be taught.
+ if (editToast) editToast.addEventListener('click', () => hideEditToast());
  const initLocalCourseEditor = () => {{
    const source = initialEditPath.map(([,lat,lon])=>[lat,lon]);
    const all = source;
@@ -1517,15 +1525,15 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  // hands over a different route than the page is describing.
  const setCourseLinks = courseId => {{
    const gpx = document.getElementById('gpxLink');
-   const card = document.getElementById('cardLink');
-   if (!courseId) {{
-     if (gpx) gpx.removeAttribute('href');
-     if (card) card.removeAttribute('href');
-     return;
-   }}
+   // No id means the edited route is too complex to put in a link. The old
+   // links still open a real course, so they stay: stripping them left the
+   // page with dead buttons and nothing saying why.
+   if (!courseId) return;
    currentCourseUrl = {base_url_json} + '/c/' + encodeURIComponent(courseId);
    if (gpx) gpx.href = currentCourseUrl + '.gpx';
-   if (card) card.href = currentCourseUrl + '/card.svg';
+   // Editing again must address the course now on screen, not the one the
+   // page was rendered from.
+   editEndpoint = currentCourseUrl + '/edit';
    // An edited course is fully described by its id, so the other two tabs can
    // carry the edit across without saving first. Leaving them on the original
    // id is how a runner edits a route and then reads about the old one.

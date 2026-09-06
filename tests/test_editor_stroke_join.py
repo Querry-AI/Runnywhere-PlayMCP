@@ -11,6 +11,14 @@ from runart.models import CourseParams, encode_course_id
 from test_course_edit import _json_request
 
 
+@pytest.fixture(autouse=True)
+def _ignore_terrain(monkeypatch):
+    """This file is about where a drawing joins the route, not about terrain.
+    Its detours come from a length-only shortest path, which happily runs up a
+    15% way that drawing refuses on its own (course.drawn_block_reason)."""
+    monkeypatch.setattr("runart.course.drawn_block_reason", lambda strokes: "")
+
+
 @pytest.fixture(scope="module")
 def source():
     return generate_course(CourseParams(lat=37.5665, lon=126.9780,

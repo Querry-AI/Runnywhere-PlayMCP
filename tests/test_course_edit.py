@@ -458,10 +458,11 @@ def test_edit_toast_distinguishes_blocking_errors_from_transient_hints():
     course = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     page = preview_html(course, [], "https://runnywhere.example", page="edit")
 
-    # Errors and blocked states must not auto-dismiss; hints must.
+    # Work in flight stays until it finishes; a failure clears after 3s or a tap.
     assert "AUTO_DISMISS_MS" in page
-    assert "busy:0" in page and "error:0" in page and "blocked:0" in page
+    assert "busy:0" in page and "error:3000" in page and "blocked:3000" in page
     assert "info:3600" in page
+    assert "editToast.addEventListener('click'" in page
     assert '.edit-toast[data-tone="error"]' in page
     assert '.edit-toast[data-tone="blocked"]' in page
     # Errors carry a dismiss control rather than lingering forever.
@@ -1046,7 +1047,7 @@ def test_an_unsteady_hand_still_draws_a_straight_route():
         assert walked <= direct * 2.0, f"±{jitter_m}m: {walked:.0f}m for {direct:.0f}m"
 
 
-def test_a_drawn_detour_survives_spur_removal():
+def test_a_drawn_detour_survives_spur_removal(monkeypatch):
     """Drawing a line out around something and back is an excursion, and so
     is a spur the router invented -- both repeat nodes. Cutting every repeat
     threw the drawn detour away: a line drawn north around 경복궁 came back as
@@ -1056,6 +1057,9 @@ def test_a_drawn_detour_survives_spur_removal():
     from runart.models import CourseWaypoint
 
     g = graphmod.get_graph()
+    # The subject here is spur removal, not terrain: this detour brushes an
+    # 11%-slope way, which drawing now refuses on its own (drawn_block_reason).
+    monkeypatch.setattr("runart.course.drawn_block_reason", lambda strokes: "")
     course = generate_course(CourseParams(**CITY_HALL, distance_km=8.0))
     top = max(range(len(course.path)),
               key=lambda i: g.nodes[course.path[i]]["lat"])
@@ -1543,3 +1547,49 @@ def test_a_tremor_sized_out_and_back_is_never_kept_as_a_spur():
     from runart.course import DRAWN_SPUR_MIN_M, STROKE_CORRIDOR_M
     assert DRAWN_SPUR_MIN_M >= 100.0
     assert STROKE_CORRIDOR_M <= 60.0
+
+
+def _mark_edge(graph, path, highway=None, slope=None):
+    """One long edge next to the course, made impassable for drawing. Not on
+    the path itself: an existing course holding it fails validation first."""
+    off = [(node, other) for node in path for other in graph[node]
+           if other not in path
+           and float(graph.edges[node, other].get("length", 0)) > 60.0]
+    node, other = off[0]
+    attrs = graph.edges[node, other]
+    before = dict(attrs)
+    if highway:
+        attrs["highway"] = highway
+    if slope is not None:
+        attrs["slope_pct"] = slope
+    return node, other, before
+
+
+def _draw_over(source, graph, u, v):
+    """A stroke along the middle of edge u-v, away from the junctions at its
+    ends where a perfectly runnable way is equally close."""
+    a, b = graph.nodes[u], graph.nodes[v]
+    mid = [{"lat": a["lat"] + (b["lat"] - a["lat"]) * t,
+            "lon": a["lon"] + (b["lon"] - a["lon"]) * t} for t in (0.4, 0.6)]
+    return asyncio.run(server.edit_course_route(_json_request(
+        encode_course_id(source.params), {
+            "action": "snap", "path": source.path, "stroke": mid,
+        })))
+
+
+@pytest.mark.parametrize("mark, expected", [
+    (dict(highway="steps"), "계단"),
+    (dict(slope=24.0), "경사"),
+])
+def test_drawing_over_stairs_or_a_steep_way_fails_instead_of_detouring(mark, expected):
+    """Routing around it silently returned a line the runner never drew."""
+    source = generate_course(CourseParams(**CITY_HALL, distance_km=5))
+    graph = graphmod.get_graph()
+    u, v, before = _mark_edge(graph, source.path, **mark)
+    try:
+        response = _draw_over(source, graph, u, v)
+    finally:
+        graph.edges[u, v].clear()
+        graph.edges[u, v].update(before)
+    assert response.status_code != 200
+    assert expected in json.loads(response.body)["error"]

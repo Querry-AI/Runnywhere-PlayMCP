@@ -186,8 +186,9 @@ def test_preview_uses_kakao_maps_without_leaflet():
     assert 'class="run-locate"' not in page
     assert 'class="run-start"' in page
     assert "prefers-reduced-motion" in page
-    assert "동물 실루엣" not in page  # plain courses use the neutral label
-    assert "코스 라인" in page
+    # Both course kinds name the same view: 러닝 코스.
+    assert "동물 실루엣" not in page and "코스 라인" not in page
+    assert "러닝 코스" in page
 
 
 def test_preview_explains_missing_kakao_javascript_key():
