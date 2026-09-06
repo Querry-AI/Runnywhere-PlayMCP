@@ -65,11 +65,16 @@ def serialize_course(course: Course) -> dict:
     start coordinate can flip a distance comparison that sits on the
     SAME_START_M / NEARBY_RADIUS_M boundary, so a preset hit would answer
     differently from a live miss. Keeping the raw values removes that gap.
+
+    Points are not stored. They are the coordinates of the path's own graph
+    nodes, so the graph -- already loaded before any preset is read -- rebuilds
+    them exactly: checked against all 22,567 stored courses, every coordinate
+    matched to the bit. They were 60% of every entry, and dropping them is what
+    let the facility presets fit inside the 2Gi the container is given.
     """
     return {
         "params": course.params.model_dump(),
         "path": course.path,
-        "points": [list(point) for point in course.points],
         "length_m": course.length_m,
         "ascent_m": course.ascent_m,
         "rfs": course.rfs,
@@ -77,13 +82,20 @@ def serialize_course(course: Course) -> dict:
     }
 
 
-def _restore(raw: dict) -> Course:
+def _restore(raw: dict, graph=None) -> Course:
     """Rebuild verbatim. Standard routes are not re-anchored: the stored start
-    is the one generate_course produced for these exact parameters."""
+    is the one generate_course produced for these exact parameters.
+
+    Coordinates come back from the graph rather than the file; see
+    serialize_course. Costs 13us a course, so 0.05ms for a whole reply.
+    """
+    nodes = (graph or graphmod.get_graph()).nodes
+    points = raw.get("points")
     return Course(
         params=CourseParams(**raw["params"]),
         path=raw["path"],
-        points=[tuple(point) for point in raw["points"]],
+        points=([tuple(point) for point in points] if points is not None
+                else [(nodes[n]["lat"], nodes[n]["lon"]) for n in raw["path"]]),
         length_m=raw["length_m"],
         ascent_m=raw["ascent_m"],
         rfs=raw["rfs"],

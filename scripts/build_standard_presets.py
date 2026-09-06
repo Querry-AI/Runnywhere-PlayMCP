@@ -70,18 +70,21 @@ def _start_points(include_gazetteer: bool) -> list[tuple[float, float, str]]:
     return list(seen)
 
 
-def _jobs(points, distances, night: bool = False):
+def _jobs(points, distances, night: bool = False, facilities=((),)):
     for lat, lon, name in points:
         for distance in distances:
-            for variant in VARIANTS:
-                try:
-                    params = CourseParams(lat=lat, lon=lon, location_name=name,
-                                          distance_km=distance, night_mode=night)
-                except Exception:  # noqa: BLE001 - outside the supported bounds
-                    break
-                if variant is not None:
-                    params = params.model_copy(update={"route_variant": variant})
-                yield params
+            for wanted in facilities:
+                for variant in VARIANTS:
+                    try:
+                        params = CourseParams(
+                            lat=lat, lon=lon, location_name=name,
+                            distance_km=distance, night_mode=night,
+                            need_facilities=list(wanted))
+                    except Exception:  # noqa: BLE001 - outside supported bounds
+                        break
+                    if variant is not None:
+                        params = params.model_copy(update={"route_variant": variant})
+                    yield params
 
 
 def _generate(params: CourseParams):
@@ -95,7 +98,7 @@ def _generate(params: CourseParams):
                   f"({', '.join(issues)})", flush=True)
             return key, None
     except CourseError as exc:
-        if params.night_mode:
+        if params.night_mode or params.need_facilities:
             # Measured on the deployed server: a night request that succeeds
             # costs 709ms on average, one that fails only 227ms -- the search
             # gives up quickly when no lit route exists. Storing the cheap half
@@ -149,6 +152,8 @@ def main() -> None:
     parser.add_argument("--no-gazetteer", action="store_true")
     parser.add_argument("--night", action="store_true",
                         help="build night_mode entries (successes only)")
+    parser.add_argument("--facilities", nargs="*", default=None,
+                        help="build one entry set per facility (successes only)")
     parser.add_argument("--fresh", action="store_true")
     parser.add_argument("--retry-unavailable", action="store_true",
                         help="re-run entries previously stored as unavailable")
@@ -165,7 +170,9 @@ def main() -> None:
         points = points[:args.limit_starts]
     if args.retry_unavailable:
         entries = {k: v for k, v in entries.items() if v is not None}
-    jobs = [p for p in _jobs(points, args.distances, night=args.night)
+    wanted = ([(name,) for name in args.facilities] if args.facilities else [()])
+    jobs = [p for p in _jobs(points, args.distances, night=args.night,
+                             facilities=wanted)
             if preset_id(p) not in entries]
     total = len(points) * len(args.distances) * len(VARIANTS)
     print(f"start points {len(points)} x distances {len(args.distances)} x "
