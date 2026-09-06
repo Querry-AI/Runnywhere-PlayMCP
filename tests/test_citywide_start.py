@@ -150,6 +150,9 @@ def test_parallel_variants_use_existing_pool_and_have_inline_fallback(monkeypatc
     course = server._get_course(CourseParams(lat=37.4979, lon=127.0276, location_name="강남역"))
     calls = []
     monkeypatch.setattr(server, "_course_cache", {})
+    # This test is about the pool plumbing, so keep the variants on it: a loop
+    # runs past 강남역 and would otherwise answer all three without generating.
+    monkeypatch.setattr(server, "on_route_preset", lambda _: None)
     def parallel(fn, probes, timeout_s):
         calls.append((fn, probes, timeout_s))
         return {k: None for k in probes}

@@ -703,6 +703,12 @@ def _standard_alternatives(probe: CourseParams, standard: Course | None,
             if isinstance(course, CourseError):
                 _cache_put(cid, course)
                 continue
+            if course is None:
+                # And a start the catalogue has no entry for still has loops
+                # running past it. Without this the primary came back in a few
+                # milliseconds while its three alternatives were generated from
+                # scratch, which is where the whole cost had moved to.
+                course = on_route_preset(params)
             if course is not None:
                 _cache_put(cid, course)
         if course is not None:
