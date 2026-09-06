@@ -59,6 +59,7 @@ def test_concurrent_identical_course_requests_share_one_generation(monkeypatch):
     monkeypatch.setattr(server, "_course_inflight", {})
     monkeypatch.setattr(server, "get_animal_preset", lambda _: None)
     monkeypatch.setattr(server, "get_standard_preset", lambda _: None)
+    monkeypatch.setattr(server, "on_route_preset", lambda _: None)
     monkeypatch.setattr(server, "ensure_course_runnable", lambda _: None)
 
     def fake_offload(*args, **kwargs):

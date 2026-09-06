@@ -14,13 +14,16 @@ from __future__ import annotations
 import gzip
 import json
 import os
+from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 
 from . import graph as graphmod
-from .course import (Course, CourseError, DistanceMissError,
-                     course_route_issues)
+from .course import (MAX_COURSE_START_OFFSET_M, Course, CourseError,
+                     DistanceMissError, course_route_issues,
+                     rebase_closed_course_start)
 from .data_integrity import verify_data_file
+from .courseplan import EFFORT_TOLERANCE
 from .geo import haversine_m
 from .models import CourseParams, decode_course_id, encode_course_id
 
@@ -190,6 +193,116 @@ def get_standard_preset(params: CourseParams) -> Course | CourseError | None:
     if "error" in raw:
         return _restore_failure(raw)
     return _restore(raw)
+
+
+# ~200m cells: a MAX_COURSE_START_OFFSET_M search never leaves the 3x3 block
+# around the requested point.
+_ROUTE_CELL_DEG = 0.0018
+
+
+@lru_cache(maxsize=1)
+def _route_index_for_graph(graph) -> dict:
+    """Grid of every stored loop by the cells its own nodes fall in.
+
+    Only the course keys are held, never their coordinates: the graph already
+    has those, and storing them again cost 100MB where this costs almost
+    nothing.
+    """
+    entries = _load_for_graph(graph)
+    if not entries:
+        return {}
+    nodes = graph.nodes
+    index: dict[tuple[int, int], set] = {}
+    for key, raw in entries.items():
+        if not isinstance(raw, dict) or "error" in raw:
+            continue
+        path = raw.get("path") or []
+        if len(path) < 3 or path[0] != path[-1]:
+            continue
+        for node in path[:-1]:
+            data = nodes[node]
+            cell = (int(data["lat"] / _ROUTE_CELL_DEG),
+                    int(data["lon"] / _ROUTE_CELL_DEG))
+            index.setdefault(cell, set()).add(key)
+    return index
+
+
+def _routes_through(lat: float, lon: float, graph) -> list[tuple[float, str]]:
+    """Stored loops passing within the start-offset limit, nearest first."""
+    index = _route_index_for_graph(graph)
+    if not index:
+        return []
+    entries = _load_for_graph(graph)
+    nodes = graph.nodes
+    base = (int(lat / _ROUTE_CELL_DEG), int(lon / _ROUTE_CELL_DEG))
+    keys = set()
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            keys |= index.get((base[0] + dy, base[1] + dx), set())
+    best: dict[str, float] = {}
+    for key in keys:
+        for node in entries[key]["path"][:-1]:
+            data = nodes[node]
+            d = haversine_m(lat, lon, data["lat"], data["lon"])
+            if d <= MAX_COURSE_START_OFFSET_M and d < best.get(key, 1e9):
+                best[key] = d
+    # Distance first, then the key, so the same request always picks the same
+    # course -- a detail URL re-derives its route from the id alone.
+    return sorted(((d, k) for k, d in best.items()), key=lambda pair: (pair[0], pair[1]))
+
+
+def on_route_preset(params: CourseParams) -> Course | None:
+    """A built loop that already runs past this point, turned to start on it.
+
+    Generating from a coordinate the catalogue does not cover costs 687ms on
+    average. But an address in Seoul is almost never far from a course we have
+    already built -- measured over 22 real addresses and shop names, the
+    nearest stored route passed a median of 46m away and every one within the
+    150m the runtime treats as the same start. A closed loop may begin
+    anywhere on itself, so this is not a substitute start: it is that route,
+    rotated to begin where the runner is standing, with the same streets and
+    the same length.
+
+    route_variant selects successive distinct routes through the point, so the
+    three recommended courses stay three real, different courses.
+    """
+    if params.shape or params.manual_path or params.manual_waypoints:
+        return None
+    if params.include_hills or params.need_facilities:
+        # Both change how a route is searched and ranked; a stored loop built
+        # without them is a different answer, not a faster one.
+        return None
+    graph = graphmod.get_graph()
+    entries = _load_for_graph(graph)
+    if not entries:
+        return None
+    tolerance = params.distance_km * EFFORT_TOLERANCE
+    wanted = max(0, params.route_variant) // 2
+    seen: set[tuple] = set()
+    ranked = 0
+    for _distance, key in _routes_through(params.lat, params.lon, graph):
+        raw = entries[key]
+        stored = raw["params"]
+        if bool(stored.get("night_mode")) != bool(params.night_mode):
+            continue
+        if stored.get("include_hills") or stored.get("need_facilities"):
+            continue
+        course = _restore(raw)
+        if abs(course.length_km - params.distance_km) > tolerance + 1e-9:
+            continue
+        signature = tuple(sorted(course.path))
+        if signature in seen:
+            continue
+        seen.add(signature)
+        if ranked < wanted:
+            ranked += 1
+            continue
+        rotated = rebase_closed_course_start(
+            replace(course, params=params.model_copy()))
+        if course_route_issues(rotated, graph):
+            continue
+        return rotated
+    return None
 
 
 @lru_cache(maxsize=1)

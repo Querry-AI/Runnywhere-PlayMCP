@@ -68,7 +68,8 @@ from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
 from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
 from .rfs import has_sufficient_night_lighting
 from .park_presets import PARK_SPOTS, park_courses, select_park_courses
-from .standard_presets import get_standard_preset, nearest_start_preset
+from .standard_presets import (get_standard_preset, nearest_start_preset,
+                               on_route_preset)
 from .naming import COURSE_EDIT_NOTICE
 from .widget import (WidgetTooLargeError, build_course_widget,
                      course_response_facts, response_start_name)
@@ -1741,6 +1742,13 @@ def _get_course(params: CourseParams, timeout_s: float | None = None) -> Course:
             if isinstance(standard, CourseError):
                 raise standard
             course = standard
+        elif (on_route := on_route_preset(params)) is not None:
+            # No entry for this exact point, but a built loop already runs past
+            # it. A closed loop may start anywhere on itself, so this is that
+            # course turned to begin here -- same streets, same length, and the
+            # start is the one the runner asked for. Derived from the params
+            # alone, so a detail URL rebuilds the identical route.
+            course = on_route
         else:
             try:
                 course = _offload(

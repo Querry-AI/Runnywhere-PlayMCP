@@ -233,6 +233,9 @@ def test_new_course_is_cached_and_widgeted_in_its_first_tool_response(monkeypatc
         return course
 
     monkeypatch.setattr(server, "_offload", generate_once)
+    # A stored loop runs past 강남역, and this test is about what generation
+    # then caches, so keep it on the generation path like the preset stubs do.
+    monkeypatch.setattr(server, "on_route_preset", lambda _: None)
     monkeypatch.setattr(server, "_animal_course_plan", lambda *args: _three_course_plan(course))
     result = server.create_seoul_running_course(
         course_type="standard", location="강남역", distance_km=9.0
