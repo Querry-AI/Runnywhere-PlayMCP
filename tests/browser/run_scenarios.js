@@ -30,23 +30,23 @@ const GAP_HELPERS = `
     l => l._map && l._o.strokeColor === '#087b59');
   window.__gapEnds = () => {
     const segs = window.__greens();
-    if (!segs.length) return null;
-    // A span erased at the loop's seam leaves one stretch, whose own two ends
-    // are the gap's ends.
-    if (segs.length === 1) {
-      const only = segs[0]._o.path;
-      return only.length >= 2 ? [only[only.length - 1], only[0]] : null;
-    }
+    // One stretch is the intact route; a gap needs two.
+    if (segs.length < 2) return null;
     const head = segs[0]._o.path, tail = segs[1]._o.path;
     return [head[head.length - 1], tail[0]];
   };
   window.__hasGap = () => window.__gapEnds() !== null;
-  // What the server actually answers a snap with. Save keeps its own stub so
-  // scenarios can assert the page does not navigate.
-  window.__editReply = body => body.action === 'snap'
-    ? { path: window.initialEditPath, geometry: window.initialEditGeometry,
-        length_km: 5.31, note: '', summary: null }
-    : { preview_url: '#unexpected' };
+  // What the server actually answers a snap with. eraseSelection() branches on
+  // gap_open: with it the span stays open and the runner is asked to draw
+  // across it; without it the server closed the span itself and the edit is
+  // done. An erase carries no strokes, so that is the one that reports the
+  // gap. Save keeps its own stub so scenarios can assert no navigation.
+  window.__editReply = body => {
+    if (body.action !== 'snap') return { preview_url: '#unexpected' };
+    if (!body.strokes || !body.strokes.length) return { gap_open: true };
+    return { path: window.initialEditPath, geometry: window.initialEditGeometry,
+             length_km: 5.31, note: '', summary: null };
+  };
   window.__gapLength = () => {
     const segs = window.__greens();
     if (segs.length < 2) return 0;
@@ -246,11 +246,13 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   } catch (scenarioError) {
     check('scenario 5 (the animal course opens on its silhouette) ran to the end', false, String(scenarioError).slice(0, 200));
   }
-  {
+  try {
     const { p } = await page(browser, 'harness_info.html');
     const cls = await p.evaluate(() => document.body.className);
     check('plain info page still opens on the running guide', !cls.includes('shape-only'), cls);
     await p.close();
+  } catch (scenarioError) {
+    check('unnamed scenario ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
   // ---- 6. the editor draws the real street geometry ----
@@ -300,7 +302,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     check('scenario 7 (the editor draws the real street geometry) ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
-  // ---- 8. the eraser grows along the line and leaves a local red gap ----
+  // ---- 8. the eraser grows along the line and spends the span it swept ----
   try {
     const { p, errors } = await page(browser, 'harness.html');
     const out = await p.evaluate(async () => {
@@ -323,25 +325,41 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       for (const i of [7, 8, 9]) fire('pointermove', at(i));
       fire('pointerup', at(9));
       const swept = document.getElementById('editSave').dataset.action === 'erase';
+      // The sweep marks the span before anything is committed; the press is
+      // what spends it. Both are read, in that order.
+      const mark = (window.__lines || []).filter(
+        l => l._map && l._o.strokeColor === '#e0522d').pop();
+      const markPoints = mark ? mark._o.path.length : 0;
+      const markOpacity = mark && mark._o.strokeOpacity;
 
-      let sent = null;
+      let sent = null, calls = 0;
       window.fetch = async (url, opts) => {
-        sent = JSON.parse(opts.body);
+        sent = JSON.parse(opts.body); calls += 1;
         return { ok: true, json: async () => window.__editReply(sent) };
       };
       document.getElementById('editSave').click();
       await new Promise(r => setTimeout(r, 350));
-      const red = (window.__lines || []).filter(
-        l => l._map && l._o.strokeColor === '#e0522d').pop();
-      return { swept, sent,
-        redPoints: red ? red._o.path.length : 0, redOpacity: red && red._o.strokeOpacity,
+      const stillMarked = (window.__lines || []).some(
+        l => l._map && l._o.strokeColor === '#e0522d');
+      return { swept, sent, calls, markPoints, markOpacity, stillMarked,
+        gap: window.__hasGap(),
         distance: document.getElementById('mLength').textContent,
         state: document.getElementById('editSave').dataset.action };
     });
     check('eraser sweep marks a span', out.swept === true, JSON.stringify(out.swept));
-    check('erasing makes no route-generation request', out.sent === null, JSON.stringify(out.sent));
-    check('the erased geometry remains translucent red',
-      out.redPoints > 1 && out.redOpacity === 0.32, JSON.stringify(out));
+    check('the swept span is drawn over the route before it is spent',
+      out.markPoints > 1 && out.markOpacity === 1,
+      JSON.stringify({ points: out.markPoints, opacity: out.markOpacity }));
+    check('the erase press asks the server for the span it swept',
+      out.calls === 1 && out.sent && out.sent.action === 'snap'
+      && out.sent.strokes.length === 0
+      && Number.isInteger(out.sent.from_index) && Number.isInteger(out.sent.to_index),
+      JSON.stringify(out.sent && { action: out.sent.action, calls: out.calls,
+        strokes: out.sent.strokes.length,
+        range: [out.sent.from_index, out.sent.to_index] }));
+    check('and the selection is spent, leaving a gap in its place',
+      out.stillMarked === false && out.gap === true,
+      JSON.stringify({ stillMarked: out.stillMarked, gap: out.gap }));
     check('the route is visibly marked incomplete',
       out.state === 'verify', `primary=${out.state}`);
     check('no page errors while erasing', errors.length === 0, errors.join(' | '));
@@ -413,7 +431,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       for (const i of [12, 14, 16, 18, 20]) fire('pointermove', at(i));
       fire('pointerup', at(20));
       document.getElementById('editSave').click();
-      await new Promise(r => setTimeout(r, 350));   // the erase press now awaits the server
+      await new Promise(r => setTimeout(r, 350));   // the erase press awaits the server
+      // Everything from here on is the drawing, so the erase's own request is
+      // not counted against it.
+      const sentAfterErase = sent.length;
 
       document.getElementById('drawTool').click();
       const pressed = document.getElementById('drawTool').getAttribute('aria-pressed');
@@ -436,7 +457,9 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       const rp=ends;
       const metres=(a,b)=>Math.hypot((a.getLat()-b.getLat())*111320,(a.getLng()-b.getLng())*88800);
       const state=document.getElementById('editSave').dataset.action;
-      return { pressed, draggable, sent, strokes:(window.__lines || []).filter(
+      return { pressed, draggable, sent, sentAfterErase,
+        drawRequests: sent.length - sentAfterErase,
+        strokes:(window.__lines || []).filter(
           l=>l._map&&l._o.strokeColor==='#1668dc').length,
         bluePoints:blue ? blue._o.path.length : 0,
         connection:state==='verify',
@@ -448,7 +471,11 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     check('drawing tool engages', out.pressed === 'true', out.pressed);
     check('the map stops panning while freehand is active',
       out.draggable === false, `draggable=${out.draggable}`);
-    check('drawing makes no request before save', out.sent.length === 0, JSON.stringify(out.sent));
+    // The erase press has already spent one request by design; drawing itself
+    // stays local until 도보 경로 확인.
+    check('drawing adds no request of its own before the route is confirmed',
+      out.drawRequests === 0,
+      `erase=${out.sentAfterErase} draw=${out.drawRequests}`);
     check('the exact freehand stroke remains visible',
       out.strokes === 1 && out.bluePoints >= 5, JSON.stringify(out));
     check('a stroke touching both red ends becomes preview-ready',
@@ -541,7 +568,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   } catch (scenarioError) {
     check('scenario 12 (saving asks for a name) ran to the end', false, String(scenarioError).slice(0, 200));
   }
-  {
+  try {
     const { p } = await page(browser, 'harness.html');
     const drawn = await p.evaluate(async () => {
       const overlay=document.getElementById('editOverlay');overlay.setPointerCapture=()=>{};
@@ -574,8 +601,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     check('an unconnected draft stays visible and is not accepted',
       /이어지지/.test(drawn.error) && drawn.blue === 1, JSON.stringify(drawn));
     await p.close();
+  } catch (scenarioError) {
+    check('unnamed scenario ran to the end', false, String(scenarioError).slice(0, 200));
   }
-  {
+  try {
     const { p } = await page(browser, 'harness.html');
     const flow = await p.evaluate(async () => {
       const overlay=document.getElementById('editOverlay');overlay.setPointerCapture=()=>{};
@@ -586,6 +615,9 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       const bodies=[];
       window.fetch=async(url,opts)=>{
         const body=JSON.parse(opts.body);bodies.push(body);
+        // The erase carries no strokes: the server reports the span stayed open.
+        if(body.action==='snap'&&!(body.strokes||[]).length)
+          return {ok:true,json:async()=>({gap_open:true})};
         if(body.action==='snap')return {ok:true,json:async()=>({
           path:initialEditPath,geometry:initialEditGeometry,length_km:5.31,summary:{
             course_id:'preview',title:'5.3km 도보 미리보기',name_placeholder:'도보 미리보기런',
@@ -623,17 +655,30 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       await new Promise(r => setTimeout(r, 120));
       return {bodies,preview};
     });
+    // Three requests now, in this order: the erase, the drawn replacement, the
+    // save. Addressed by their role rather than by index, so inserting a step
+    // does not silently retarget the assertion.
+    const eraseBody = flow.bodies[0];
+    const draftBody = flow.bodies.find(b => b.action === 'snap' && (b.strokes || []).length);
+    const saveBody = flow.bodies.find(b => b.action === 'save');
+    check('the erase goes first, carrying its range and no drawing',
+      eraseBody && eraseBody.action === 'snap' && eraseBody.strokes.length === 0 &&
+      Number.isInteger(eraseBody.from_index) && Number.isInteger(eraseBody.to_index),
+      JSON.stringify(eraseBody && { action: eraseBody.action,
+        strokes: eraseBody.strokes.length,
+        range: [eraseBody.from_index, eraseBody.to_index] }));
     check('a connected draft previews a walkable route before naming',
-      flow.bodies[0] && flow.bodies[0].action === 'snap' &&
-      flow.bodies[0].strokes.length === 1 && flow.bodies[0].strokes[0].length >= 2 &&
+      draftBody && draftBody.strokes.length === 1 && draftBody.strokes[0].length >= 2 &&
       flow.preview.sheetHidden === true && flow.preview.state === 'save' &&
       flow.preview.label === '저장' && flow.preview.blue === 0 && flow.preview.red === 0,
-      JSON.stringify(flow));
+      JSON.stringify({ draft: draftBody && draftBody.strokes[0].length, preview: flow.preview }));
     check('only the reviewed snapped path is saved with a name',
-      flow.bodies[1] && flow.bodies[1].action === 'save' &&
-      !('stroke' in flow.bodies[1]) && !('strokes' in flow.bodies[1]) &&
-      flow.bodies[1].name === 'AA런', JSON.stringify(flow.bodies));
+      saveBody && !('stroke' in saveBody) && !('strokes' in saveBody) &&
+      saveBody.name === 'AA런' && flow.bodies.indexOf(saveBody) === flow.bodies.length - 1,
+      JSON.stringify(flow.bodies.map(b => b.action)));
     await p.close();
+  } catch (scenarioError) {
+    check('unnamed scenario ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
   // ---- 13. reset stays in the editor and its discarded draft is undoable ----

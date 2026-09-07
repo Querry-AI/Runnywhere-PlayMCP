@@ -30,24 +30,22 @@ NODE_PATH=$(npm root -g) node tests/browser/run_scenarios.js /tmp/runart-harness
 NODE_PATH=$(npm root -g) node tests/browser/mobile_gestures.js /tmp/runart-harness
 ```
 
-현재 시나리오는 **`63/69 passed`**, 모바일 제스처는 두 화면 크기 모두 `PASS`다. Playwright(`npm i -g playwright`)가 필요하다.
+시나리오는 `71/71 passed`, 모바일 제스처는 두 화면 크기 모두 `PASS`가 나와야 한다. Playwright(`npm i -g playwright`)가 필요하다.
 
-각 시나리오는 `try`/`catch`로 격리돼 있다 — 예전에는 하나가 던지면 러너가 통째로 죽어서 **그 뒤 7개 구획이 아예 보고되지 않았다**. 이제 던진 시나리오는 `scenario N ... ran to the end` FAIL 한 줄로 남고 나머지는 계속 돈다.
+각 시나리오는 `try`/`catch`로 격리돼 있다 — 예전에는 하나가 던지면 러너가 통째로 죽어서 **그 뒤 7개 구획이 아예 보고되지 않았다**. 이제 던진 시나리오는 `... ran to the end` FAIL 한 줄로 남고 나머지는 계속 돈다.
 
-### 알려진 실패 6건 — 코드가 아니라 기대가 낡았다
+### 지우기가 서버를 호출한다는 것
 
-여섯 건 모두 뿌리가 하나다: **`선택 구간 지우기`를 누르면 지금은 서버로 `snap`(stroke 0건)이 나가고 훑어둔 선택 표시가 지워진다.** 이 시나리오들은 지우기가 저장 전까지 완전히 로컬이던 시절에 쓰였다.
+`선택 구간 지우기`는 훑은 범위를 `from_index`/`to_index`에 실은 `snap`을 **stroke 0건으로** 보낸다. 응답의 `gap_open`이 갈림길이다(`eraseSelection`):
 
-| 실패 | 기대 | 실제 |
-| --- | --- | --- |
-| erasing makes no route-generation request | 요청 0건 | `snap` 1건 |
-| drawing makes no request before save | 그리기 전 요청 0건 | 지우기가 이미 1건 보냄 |
-| the erased geometry remains translucent red | 훑은 구간이 붉게 남음 | 지우기 후 선택이 지워짐 |
-| a connected draft previews a walkable route before naming | body 2건(snap→save) | 3건(지우기 snap이 앞에 붙음) |
-| only the reviewed snapped path is saved with a name | 〃 | 〃 |
-| reset restores the original route but remains in editing | 초기화 후 `verify` | `save` |
+- `gap_open: true` — 서버가 스스로 잇지 못했다. 구간이 열린 채 남고 `지운 구간을 이을 선을 그려 주세요.`가 뜬다. 기본 버튼은 `도보 경로 확인`.
+- 없음 — 서버가 알아서 이어 붙였다. `gapRange`가 지워지고 기본 버튼은 `저장`으로 돌아간다.
 
-**단언을 현재 동작에 맞춰 고쳐 쓰지 않았다.** 지우기 누름이 서버를 호출해야 하는지는 제품 결정이고, 맞춰 쓰는 순간 이 테스트는 동작이 바뀌었다는 유일한 기록을 잃는다. 결정이 나면 그때 단언을 갱신하거나 코드를 되돌리면 된다.
+시나리오의 `window.__editReply`가 이 분기를 흉내 낸다: stroke 없는 snap은 `gap_open`을 돌려주고, stroke 있는 snap은 이어진 경로를 돌려준다. **이 분기를 빼면 지우기 뒤 그리기 흐름이 통째로 다른 길로 샌다** — 실제로 그래서 시나리오 다섯 개가 엉뚱한 이유로 실패했다.
+
+### 지운 구간은 선이 아니라 빈 자리다
+
+편집기는 살아남은 초록 구간 두 개(`#087b59`)를 그리고 그 사이에 아무것도 그리지 않는다. 예전에는 붉은 `#e5322e` 선을 그렸고 시나리오들이 그걸 찾다가 `.pop()`이 `undefined`를 돌려주면서 러너가 죽었다. `window.__gapEnds()`가 초록 구간 두 개의 안쪽 끝을 돌려준다 — 구간이 하나면 멀쩡한 코스이므로 `null`이다.
 
 ## 한계
 
