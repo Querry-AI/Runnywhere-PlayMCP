@@ -48,14 +48,96 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   const browser = await chromium.launch();
 
   // ---- 1. every page loads its script to the end (no ReferenceError) ----
-  for (const file of ['harness.html', 'harness_info.html', 'harness_info_animal.html', 'harness_animal.html']) {
+  for (const file of ['harness.html', 'harness_info.html', 'harness_info_animal.html', 'harness_animal.html', 'harness_run.html']) {
     const { p, errors } = await page(browser, file);
     const reached = await p.evaluate(() => typeof window.__map === 'object' && !!window.__map);
     check(`${file}: script runs to the end`, errors.length === 0 && reached, errors.join(' | '));
     await p.close();
   }
 
-  // ---- 2. badge tooltips ----
+  // ---- 2. sharing copies the course link and says so ----
+  {
+    const { p, errors } = await page(browser, 'harness_run.html');
+    // file:// is not a secure context in every build, and the async clipboard
+    // is refused on plenty of real browsers too, so both paths are exercised.
+    const out = await p.evaluate(async () => {
+      // Long enough for the 180ms enter transition to finish, so opacity is
+      // read as what the runner sees rather than mid-fade.
+      const wait = () => new Promise(r => setTimeout(r, 280));
+      const toast = document.getElementById('pageToast');
+      const btn = document.getElementById('shareCourse');
+      const seen = [];
+      const snap = tag => {
+        const r = toast.getBoundingClientRect();
+        const cta = document.querySelector('.run-float');
+        seen.push({ tag, hidden: toast.hidden, tone: toast.dataset.tone,
+          text: toast.textContent.trim(), opacity: getComputedStyle(toast).opacity,
+          onScreen: r.top >= 0 && r.bottom <= window.innerHeight && r.width > 0,
+          clearsCta: !cta || r.bottom <= cta.getBoundingClientRect().top });
+      };
+      const startHidden = toast.hidden;
+
+      // 1. the async clipboard, which the deployed https page uses.
+      let written = null;
+      Object.defineProperty(navigator, 'clipboard',
+        { value: { writeText: t => { written = t; return Promise.resolve(); } }, configurable: true });
+      btn.click();
+      await wait();
+      snap('clipboard');
+
+      // 2. tapping the toast dismisses it.
+      toast.click();
+      snap('dismissed');
+
+      // 3. no async clipboard at all -> the selection copy.
+      let selected = null;
+      const realExec = document.execCommand.bind(document);
+      document.execCommand = cmd => {
+        if (cmd !== 'copy') return realExec(cmd);
+        selected = document.activeElement && document.activeElement.value;
+        return true;
+      };
+      Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+      btn.click();
+      await wait();
+      snap('execCommand');
+      toast.click();
+
+      // 4. neither path works -> a different message, and never silence.
+      document.execCommand = () => false;
+      btn.click();
+      await wait();
+      snap('refused');
+
+      return { startHidden, written, selected, seen,
+        strays: document.querySelectorAll('textarea').length,
+        href: location.href };
+    });
+    const at = tag => out.seen.find(s => s.tag === tag);
+    check('share toast starts hidden', out.startHidden === true, out.startHidden);
+    check('share copies the course detail link',
+      /\/c\/[A-Za-z0-9_-]+$/.test(out.written || ''), out.written);
+    check('and confirms it where the runner can read it',
+      at('clipboard').hidden === false && at('clipboard').text === '링크가 복사되었습니다'
+      && at('clipboard').opacity === '1' && at('clipboard').onScreen,
+      JSON.stringify(at('clipboard')));
+    check('the confirmation never covers the run button',
+      at('clipboard').clearsCta === true, JSON.stringify(at('clipboard')));
+    check('tapping the toast dismisses it', at('dismissed').hidden === true,
+      JSON.stringify(at('dismissed')));
+    check('without the async clipboard it still copies the same link',
+      out.selected === out.written && at('execCommand').text === '링크가 복사되었습니다',
+      JSON.stringify({ selected: out.selected, written: out.written }));
+    check('and the copy field never stays in the page', out.strays === 0, out.strays);
+    check('a refused copy says so instead of failing silently',
+      at('refused').hidden === false && at('refused').tone === 'error'
+      && at('refused').text !== at('clipboard').text,
+      JSON.stringify(at('refused')));
+    check('no page errors while sharing', errors.length === 0, errors.join(' | '));
+    await p.close();
+  }
+
+  // ---- 3. badge tooltips ----
   {
     const { p, errors } = await page(browser, 'harness_info.html');
     const tipCount = await p.locator('.badge-wrap .badge-tip').count();
@@ -79,7 +161,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 3. the map stays draggable on the info page ----
+  // ---- 4. the map stays draggable on the info page ----
   {
     const { p } = await page(browser, 'harness_info.html');
     const draggable = await p.evaluate(() => window.__map.draggable);
@@ -105,7 +187,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 4. the animal course opens on its silhouette ----
+  // ---- 5. the animal course opens on its silhouette ----
   {
     const { p } = await page(browser, 'harness_info_animal.html');
     const cls = await p.evaluate(() => document.body.className);
@@ -121,7 +203,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 5. the editor draws the real street geometry ----
+  // ---- 6. the editor draws the real street geometry ----
   {
     const { p, errors } = await page(browser, 'harness.html');
     const moved = await p.evaluate(() => {
@@ -147,7 +229,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 6. the editor draws the real street geometry ----
+  // ---- 7. the editor draws the real street geometry ----
   {
     const { p } = await page(browser, 'harness.html');
     const info = await p.evaluate(() => ({
@@ -164,7 +246,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 6. the eraser grows along the line and leaves a local red gap ----
+  // ---- 8. the eraser grows along the line and leaves a local red gap ----
   {
     const { p, errors } = await page(browser, 'harness.html');
     const out = await p.evaluate(async () => {
@@ -212,7 +294,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 7. one sweep never jumps to the far side of the loop ----
+  // ---- 9. one sweep never jumps to the far side of the loop ----
   {
     const { p } = await page(browser, 'harness.html');
     const span = await p.evaluate(() => {
@@ -244,7 +326,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 8. freehand stays local and keeps its exact draft shape ----
+  // ---- 10. freehand stays local and keeps its exact draft shape ----
   {
     const { p, errors } = await page(browser, 'harness.html');
     const out = await p.evaluate(async () => {
@@ -316,7 +398,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 8b. multiple strokes can continue an unfinished freehand draft ----
+  // ---- 11. multiple strokes can continue an unfinished freehand draft ----
   {
     const { p } = await page(browser, 'harness.html');
     const undos = await p.evaluate(async () => {
@@ -362,7 +444,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 9. saving asks for a name ----
+  // ---- 12. saving asks for a name ----
   {
     const { p, errors } = await page(browser, 'harness.html');
     const out = await p.evaluate(async () => {
@@ -484,7 +566,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 10. reset stays in the editor and its discarded draft is undoable ----
+  // ---- 13. reset stays in the editor and its discarded draft is undoable ----
   {
     const { p, errors } = await page(browser, 'harness.html');
     const out = await p.evaluate(async () => {
@@ -532,7 +614,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 11. the editing chrome leaves the map alone ----
+  // ---- 14. the editing chrome leaves the map alone ----
   {
     const { p } = await page(browser, 'harness.html');
     const cover = await p.evaluate(() => {
@@ -557,7 +639,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 12. the header row is gone ----
+  // ---- 15. the header row is gone ----
   {
     const { p } = await page(browser, 'harness.html');
     const gone = await p.evaluate(() => ({
@@ -571,7 +653,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 13. the one primary button says and does what comes next ----
+  // ---- 16. the one primary button says and does what comes next ----
   {
     const { p, errors } = await page(browser, 'harness.html');
     const states = await p.evaluate(async () => {
@@ -619,7 +701,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await p.close();
   }
 
-  // ---- 14. 지도 이동 actually pans, on a touch device ----
+  // ---- 17. 지도 이동 actually pans, on a touch device ----
   {
     const ctx = await browser.newContext({ hasTouch: true, isMobile: true,
       viewport: { width: 390, height: 844 },

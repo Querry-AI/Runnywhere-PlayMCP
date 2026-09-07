@@ -10,7 +10,8 @@ import json
 from runart.course import generate_course
 from runart.insights import course_facts
 from runart.models import CourseParams
-from runart.render import course_edit_summary, preview_html, route_points
+from runart.render import (COURSE_PAGES, course_edit_summary, preview_html,
+                           route_points)
 
 CITY_HALL = dict(lat=37.5665, lon=126.9780, location_name="서울시청")
 
@@ -285,6 +286,57 @@ def test_sharing_an_edited_course_sends_the_edited_link():
     assert "let currentCourseUrl =" in page
     assert "const url = currentCourseUrl;" in page
     assert "currentCourseUrl = " in page.split("const setCourseLinks")[1]
+
+
+def test_the_share_handler_can_see_the_url_it_shares():
+    """The press did nothing at all for as long as the button shipped.
+
+    The handler is bound in the top-level script scope, but the url it reads
+    was declared inside the kakao.maps.load() callback -- a scope it cannot
+    see -- so every press threw ReferenceError before it copied anything.
+    String assertions could not tell: both lines were present, just not in
+    scopes that meet."""
+    script = preview_html(_course(), [], "https://runnywhere.example",
+                          page="run").split("<script>")[-1]
+
+    # Declared once, and before the callback that used to enclose it.
+    assert script.count("let currentCourseUrl =") == 1
+    boundary = script.index("else kakao.maps.load(() => {")
+    assert script.index("let currentCourseUrl =") < boundary
+    assert script.index("let currentCourseUrl =") < script.index("const url = currentCourseUrl;")
+
+
+def test_share_answers_the_press_where_the_runner_is_looking():
+    """The share control sits at the bottom of a scrolled page, so the edit
+    toast -- positioned inside the map, and only shipped with the editor --
+    could not have answered for it."""
+    run = preview_html(_course(), [], "https://runnywhere.example", page="run")
+
+    assert 'id="pageToast" class="page-toast" role="status" aria-live="polite"' in run
+    assert "링크가 복사되었습니다" in run
+    # Each failure says something different: one message would hide the cause.
+    assert "링크를 복사하지 못했어요" in run
+    # window.prompt is suppressed outright by several mobile browsers, which is
+    # how "nothing happens" survived even where the handler did run.
+    assert "window.prompt(" not in run
+    assert "document.execCommand('copy')" in run
+    # The shell is identical on all three pages, toast included.
+    for page in COURSE_PAGES:
+        assert 'id="pageToast"' in preview_html(
+            _course(), [], "https://runnywhere.example", page=page)
+
+
+def test_the_share_control_reads_as_a_row_like_the_ones_above_it():
+    """A 13px label in a pale 44px pill read as disabled next to the two rich
+    rows it followed, and gave a thumb the smallest target on the page."""
+    run = preview_html(_course(), [], "https://runnywhere.example", page="run")
+
+    assert '<button class="action-row share-row" id="shareCourse"' in run
+    assert 'class="btn ghost"' not in run
+    # It says what the press does, and the label no longer mutates into a
+    # second, different label ('공유하기' -> '친구에게 공유하기') on first use.
+    assert "링크 복사해 공유하기" in run
+    assert "친구에게 공유하기" not in run
 
 
 def test_run_tab_keeps_sharing_and_drops_the_card_and_animal_map():

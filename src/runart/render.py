@@ -500,12 +500,28 @@ def _tab_bar_html(base_url: str, cid: str, page: str) -> str:
     return f'<nav class="tab-bar" aria-label="코스 화면 전환">{tabs}</nav>'
 
 
+# One confirmation surface for the whole page, on every page. The edit toast
+# is positioned inside .map-wrap and only ships with the editor, so a control
+# further down the page -- sharing sits at the very bottom of the run page --
+# had nowhere on screen to answer from.
+PAGE_TOAST_HTML = (
+    '<div id="pageToast" class="page-toast" role="status" aria-live="polite"'
+    ' data-tone="ok" hidden><span id="pageToastText" class="page-toast-text">'
+    '</span></div>'
+)
+
+
 def _howto_panel_html(base_url: str, cid: str) -> str:
     """The ways to run this course somewhere other than here.
 
     Running it on this page with live location is the product, so it owns the
     bottom bar. These are for a runner who wants their own watch or app, and
     they belong below that, not in competition with it.
+
+    Sharing is the third of those ways -- handing the course to someone else --
+    so it reads as a row like its siblings rather than as the pale ghost pill
+    it used to be, which looked disabled next to them and gave a 13px label a
+    44px box on a phone.
     """
     return f"""<section class="panel" id="howto"><h2>다른 앱으로 달리기</h2>
  <a class="action-row" id="gpxLink" href="{base_url}/c/{cid}.gpx">
@@ -526,9 +542,11 @@ def _howto_panel_html(base_url: str, cid: str) -> str:
    <li>저장한 파일을 고르고 완료한 뒤, 우측 하단 주행 시작을 누르면 안내가 시작됩니다.</li>
   </ol>
  </div>
- <div class="actions secondary-actions">
-  <button class="btn ghost" id="shareCourse" type="button">공유하기</button>
- </div>
+ <button class="action-row share-row" id="shareCourse" type="button">
+  <span class="action-icon" aria-hidden="true">🔗</span>
+  <span class="action-text"><b>링크 복사해 공유하기</b>
+   <span>코스 링크를 복사해 보내면 친구도 같은 코스를 열어 볼 수 있어요.</span></span>
+ </button>
 </section>"""
 
 
@@ -777,10 +795,6 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
       border:3px solid #0a7d43;box-shadow:0 2px 8px rgba(10,28,19,.24);cursor:grab}}
  .pace-range:active::-webkit-slider-thumb{{cursor:grabbing;transform:scale(.94)}}
  .metric-value i{{font-style:normal;font-size:13px;font-weight:700;color:#8a958d;margin-left:2px}}
- /* Secondary actions must not compete with the two primary CTAs above them. */
- .btn.ghost{{background:#f2f6f0;color:#2b3630;border:1px solid #dce3d8;font-weight:700}}
- .actions.secondary-actions{{grid-template-columns:1fr;margin-top:8px}}
- .actions.secondary-actions .btn{{min-height:44px;padding:0 6px;font-size:13px}}
  .metric-note-inline{{margin:14px 0 0;font-size:12px;line-height:1.55;color:#8a958d}}
  .course-metrics{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;
       margin:18px 0 0;padding-top:16px;border-top:1px solid #eef1ed}}
@@ -795,11 +809,6 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .tag{{padding:6px 9px;border-radius:999px;background:#edf5f0;color:#17613e;font-size:13px;font-weight:700;word-break:keep-all}}
  .score{{font-size:1.35em;font-weight:800;color:#0a7d43}}
  .legend{{font-size:13px;color:#55605a;margin:10px 0 0}}
- .btn{{display:inline-flex;align-items:center;justify-content:center;min-height:48px;margin:6px 8px 0 0;padding:0 16px;border-radius:12px;
-      background:#142018;color:#fff;text-decoration:none;font-size:14px;font-weight:700}}
- button.btn{{border:0;cursor:pointer;font-family:inherit;background:#0a7d43}}
- .actions{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:16px}}
- .actions .btn{{margin:0}}
  /* Padding (not flex) keeps the native disclosure marker while reaching a 44px target. */
  details.panel summary{{cursor:pointer;font-size:15px;font-weight:800;color:#344238;padding:13px 0;min-height:44px}}
  details.panel[open] summary{{margin-bottom:10px}}
@@ -1022,6 +1031,14 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .action-text b{{display:block;font-size:15px;letter-spacing:-.02em;color:#142018}}
  .action-text>span{{display:block;margin-top:2px;font-size:12.5px;line-height:1.45;color:#55605a;word-break:keep-all}}
  .action-guide{{display:block;padding:15px 16px 14px;cursor:default;background:#f5f8f4}}
+ /* .action-row is worn by an <a>, a <div> and a <button>; only the button
+    needs the UA font, width and alignment resets to sit flush with the rest. */
+ button.action-row{{width:100%;font-family:inherit;font-size:inherit;text-align:left}}
+ button.action-row:active{{background:#e3eee7}}
+ .action-row:focus-visible{{outline:3px solid #8ee0bb;outline-offset:2px}}
+ /* Sharing hands the course to a person rather than to another app, so it
+    carries the brand tint the two app rows do not. */
+ .action-row.share-row{{background:#eef7f1}}
  .action-head{{display:flex;align-items:center;gap:12px}}
  .action-guide .steps{{margin:10px 0 0;padding-left:19px;font-size:13.5px;line-height:1.7}}
  .tip-box{{margin-top:16px;padding-top:14px;border-top:1px solid #eef1ed;background:none}}
@@ -1068,6 +1085,24 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .tab-icon{{font-size:17px;line-height:1}}
  .tab.current{{color:#0a7d43;background:#eef7f1}}
  .tab.primary.current{{color:#fff;background:#0a7d43}}
+ /* Pinned to the viewport, not to the map: the control it answers for sits at
+    the bottom of a scrolled page, where the map -- and .edit-toast inside it --
+    is long gone. Above the tab bar (z 900) and the run CTA (z 890). */
+ .page-toast{{position:fixed;z-index:970;left:16px;right:16px;margin:0 auto;max-width:420px;
+      bottom:calc(80px + env(safe-area-inset-bottom));
+      display:flex;align-items:center;gap:10px;min-height:48px;padding:12px 15px;border-radius:14px;
+      background:rgba(20,32,24,.96);color:#fff;font-size:14px;font-weight:700;line-height:1.45;
+      letter-spacing:-.01em;box-shadow:0 10px 30px rgba(10,28,19,.34);backdrop-filter:blur(8px);
+      word-break:keep-all;cursor:pointer;
+      opacity:0;transform:translateY(10px);transition:opacity .2s ease-out,transform .2s ease-out}}
+ .page-toast::before{{content:'✅';flex:0 0 auto;font-size:16px;line-height:1}}
+ .page-toast[data-tone="error"]{{background:#a32b1e}}
+ .page-toast[data-tone="error"]::before{{content:'⚠️'}}
+ .page-toast[hidden]{{display:none}}
+ .page-toast[data-open]{{opacity:1;transform:none}}
+ .page-toast-text{{flex:1;min-width:0}}
+ /* The run page parks a 56px start button at 84px; the toast clears it. */
+ body.page-run .page-toast{{bottom:calc(150px + env(safe-area-inset-bottom))}}
  /* Nothing competes with the map once the runner is moving. */
  body.running .wrap,body.running footer{{display:none}}
  body.running .run-float{{bottom:calc(20px + env(safe-area-inset-bottom))}}
@@ -1101,7 +1136,6 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
       .course-head{{gap:8px}}.badge{{width:28px;height:28px;font-size:15px}}
       .badge-tip{{max-width:calc(100vw - 52px)}}
       .wrap{{display:block;padding:0 16px 96px}}.card,.panel{{padding:18px;margin-bottom:12px;border-radius:16px}}h1{{font-size:22px;line-height:1.25;word-break:keep-all}}
-      .actions{{grid-template-columns:1fr 1fr}}.actions .btn{{padding:0 8px;text-align:center}}
       footer{{padding-bottom:96px}}.course-metrics{{gap:6px}}.edit-bar{{left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));}}
       .metric-value{{font-size:19px;line-height:1.2;font-variant-numeric:tabular-nums;white-space:nowrap}}.metric-label{{font-size:12px;line-height:1.35}}
       footer{{padding-bottom:96px}}}}
@@ -1116,7 +1150,7 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
 <div class="wrap">
 {page_sections}
 </div>
-{run_float}{tab_bar}
+{run_float}{tab_bar}{PAGE_TOAST_HTML}
 <footer>러니웨어 · 배경 지도: Kakao Maps · 경로 데이터
 <a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors · ODbL</a> · NASA SRTM · 서울시 공공데이터<br>
 GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이용·안전</a> · <a href="/privacy">개인정보</a> · <a href="/data-licenses">데이터 출처</a></footer>
@@ -1131,19 +1165,65 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const editNotice = {json.dumps(edit_notice, ensure_ascii=False)};
  const initialLengthKm = {course.length_km:.2f};
  let editEndpoint = '{base_url}/c/{cid}/edit';
+ // Every course-addressed link on the page, kept in step with edits. Declared
+ // out here beside editEndpoint, not inside kakao.maps.load() where it used to
+ // live: the share handler below is bound in this scope and could not see it,
+ // so every press threw ReferenceError and the button did nothing at all.
+ let currentCourseUrl = '{base_url}/c/{cid}';
  const runStatus = document.getElementById('runStatus');
+ const pageToast = document.getElementById('pageToast');
+ const pageToastText = document.getElementById('pageToastText');
+ let pageToastTimer = null;
+ const hidePageToast = () => {{
+   if (!pageToast) return;
+   clearTimeout(pageToastTimer); pageToastTimer = null;
+   delete pageToast.dataset.open;
+   pageToast.hidden = true;
+ }};
+ const showPageToast = (text, tone) => {{
+   if (!pageToast) return;
+   clearTimeout(pageToastTimer);
+   pageToast.dataset.tone = tone || 'ok';
+   // Unhidden before the text changes so the live region announces the change
+   // rather than swallowing it inside a display:none subtree.
+   pageToast.hidden = false;
+   pageToastText.textContent = text;
+   void pageToast.offsetWidth;  // let the enter transition run from hidden
+   pageToast.dataset.open = '';
+   pageToastTimer = setTimeout(hidePageToast, 2600);
+ }};
+ if (pageToast) pageToast.addEventListener('click', hidePageToast);
+ // The only copy path left when the async clipboard is missing or refused --
+ // an insecure origin, or a permission the browser declines. window.prompt was
+ // the old fallback: several mobile browsers suppress it outright, which is
+ // how "nothing happens" survived even where the handler did run.
+ const copyBySelection = text => {{
+   const field = document.createElement('textarea');
+   field.value = text;
+   field.setAttribute('readonly', '');
+   field.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0';
+   document.body.appendChild(field);
+   field.focus(); field.select();
+   if (field.setSelectionRange) field.setSelectionRange(0, text.length);
+   let copied = false;
+   try {{ copied = document.execCommand('copy'); }} catch (err) {{ copied = false; }}
+   field.remove();
+   return copied;
+ }};
  const shareBtn = document.getElementById('shareCourse');
  if (shareBtn) shareBtn.addEventListener('click', () => {{
-   // Sharing an edited course used to send the original route's link.
+   // Sharing an edited course used to send the original route's link, so the
+   // url is read at press time from the value setCourseLinks() keeps current.
    const url = currentCourseUrl;
-   const done = () => {{
-     shareBtn.textContent = '링크가 복사됐어요!';
-     setTimeout(() => shareBtn.textContent = '친구에게 공유하기', 2200);
+   const done = () => showPageToast('링크가 복사되었습니다', 'ok');
+   // Each failure says what to do next instead of failing silently.
+   const fallback = () => {{
+     if (copyBySelection(url)) done();
+     else showPageToast('링크를 복사하지 못했어요. 주소창의 주소를 복사해 주세요.', 'error');
    }};
    if (navigator.clipboard && navigator.clipboard.writeText)
-     navigator.clipboard.writeText(url).then(done)
-       .catch(() => window.prompt('아래 링크를 복사하세요', url));
-   else window.prompt('아래 링크를 복사하세요', url);
+     navigator.clipboard.writeText(url).then(done).catch(fallback);
+   else fallback();
  }});
  // Declared like its siblings rather than leaned on as the implicit global
  // an id="" attribute creates: once the edit chrome stopped shipping on every
@@ -1403,8 +1483,6 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  // must follow, or the page shows one route and describes another.
  const initialSummary = {initial_summary};
  // Sets the number while leaving the trailing unit <i> in place.
- // Every course-addressed link on the page, kept in step with edits.
- let currentCourseUrl = '{base_url}/c/{cid}';
  const setValue = (id, value, unit) => {{
    const node = document.getElementById(id);
    if (!node) return;

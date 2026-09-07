@@ -8,7 +8,8 @@
 
 | 영역 | 지키는 것 |
 | --- | --- |
-| 스크립트 완주 | 네 페이지 모두 `kakao.maps.load()` 콜백이 끝까지 돈다(암묵적 전역 `ReferenceError` 회귀 방지) |
+| 스크립트 완주 | 다섯 페이지 모두 `kakao.maps.load()` 콜백이 끝까지 돈다(암묵적 전역 `ReferenceError` 회귀 방지) |
+| 공유하기 | 코스 상세 링크가 실제로 복사되고, 토스트가 화면 안에서 보이며 달리기 버튼을 가리지 않고, 비동기 클립보드가 없거나 거절돼도 같은 링크를 복사하거나 다른 문구로 실패를 알린다 |
 | 배지 툴팁 | 호버 없는 기기에서 탭으로 열리고, 바깥 탭으로 닫히고, 설명 문구가 실제로 보인다 |
 | 지도 드래그 | 편의시설 마커 위에서 시작한 드래그도 지도를 즉시 움직인다(`panBy` 애니메이션 금지) |
 | 모바일 지도 이동 | 320px·390px에서 실제 브라우저 터치 입력으로 한 손가락 이동, 핀치 확대·축소, 핀치→이동 전환, 취소·도구 전환 후 재시작을 확인한다 |
@@ -29,7 +30,7 @@ NODE_PATH=$(npm root -g) node tests/browser/run_scenarios.js /tmp/runart-harness
 NODE_PATH=$(npm root -g) node tests/browser/mobile_gestures.js /tmp/runart-harness
 ```
 
-시나리오는 `59/59 passed`, 모바일 제스처는 두 화면 크기 모두 `PASS`가 나와야 한다. 실패 시 종료 코드는 0이 아니다. Playwright(`npm i -g playwright`)가 필요하다.
+시나리오는 `69/69 passed`, 모바일 제스처는 두 화면 크기 모두 `PASS`가 나와야 한다. 실패 시 종료 코드는 0이 아니다. Playwright(`npm i -g playwright`)가 필요하다.
 
 ## 한계
 

@@ -76,6 +76,10 @@ ETL(그래프·RFS·프리셋 재생성)은 `pip install -e '.[etl]'` 후 README
 
 **`id="x"` 속성이 만드는 암묵적 전역(`window.x`)에 의존하지 말 것.** 그 요소가 어떤 페이지에서 렌더링되지 않는 순간 `ReferenceError`가 나고, `kakao.maps.load()` 콜백 안이면 **그 뒤에 바인딩되는 모든 핸들러가 통째로 죽는다**(증상: 버튼이 전부 무반응). 모든 컨트롤은 `document.getElementById`로 명시 선언하고, `tests/test_course_pages.py`의 가드 테스트가 이를 검사한다.
 
+**핸들러가 읽는 값은 그 핸들러와 같은 스코프에 선언한다.** 위와 같은 뿌리의 두 번째 형태다. `공유하기` 핸들러는 최상위 스코프에 바인딩되는데 그 핸들러가 읽는 `currentCourseUrl`이 `kakao.maps.load()` 콜백 **안에** 선언돼 있어서, 누를 때마다 `ReferenceError`가 나고 **아무 일도 일어나지 않았다**. 문자열 단언으로는 못 잡는다 — 두 줄 다 페이지에 있고, 만나지 않는 스코프에 있을 뿐이다. 콜백 밖에서 쓰는 값은 `editEndpoint`처럼 **밖에 선언하고 안에서 대입한다**(`tests/test_course_detail.py`가 선언 위치를, `tests/browser/run_scenarios.js`가 실제 클릭을 검사한다).
+
+**지도 밖 컨트롤의 피드백은 `#pageToast`.** `.edit-toast`는 `.map-wrap` 안에 있어 편집 화면에서만 뜨고, 스크롤을 내린 지점에서는 화면 밖이다. 세 페이지 공통 셸에 있는 `#pageToast`(`showPageToast(text, tone)`, 뷰포트 고정)가 그 자리를 메운다 — 달리기 페이지에서는 `달리기 시작` 버튼 위로 올라간다(`body.page-run`). 복사 실패는 성공과 다른 문구·다른 색으로 알린다.
+
 **`course_edit_summary()`와 `preview_html()`은 같은 것을 말해야 한다.** 편집 응답이 이 payload를 돌려주고 `applySummary()`가 패널을 다시 그린다. 페이지에 표시되는 값을 추가하면 이 둘과 JS 렌더러 세 곳을 함께 고쳐야 한다. 코스 id를 주소로 쓰는 링크(GPX·코스 카드·공유·탭)도 `setCourseLinks()`로 함께 따라가야 한다 — 편집된 코스가 원본 파일을 넘겨주던 버그가 있었다.
 
 **Kakao Maps JS SDK 제약** — 지도 회전 API가 없다(`setBearing`/`setAngle` 부재). 그래서 달리기 모드는 북쪽 고정 + 마커 방향 콘 회전이다. JS 키는 도메인 제한이라 **배포 도메인에서만 지도가 뜬다**; 로컬에서 보려면 카카오 콘솔 Web 플랫폼에 `http://localhost:8000`을 등록해야 한다.

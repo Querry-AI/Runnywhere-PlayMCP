@@ -104,6 +104,7 @@ def main() -> None:
         ("harness_animal.html", "dog", "edit"),
         ("harness_info.html", None, "info"),
         ("harness_info_animal.html", "dog", "info"),
+        ("harness_run.html", None, "run"),
     ):
         target = outdir / name
         target.write_text(_harness(_page(shape, page)), encoding="utf-8")
