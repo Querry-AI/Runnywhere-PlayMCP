@@ -42,3 +42,22 @@ and real browser click path all passed.
 
 - RED checkpoint: `0b10970 test(ui): reproduce inert share button`
 - GREEN checkpoint: `cf1ee9c fix(ui): restore course sharing action`
+
+## Follow-up: visible copy-success state
+
+- Journey: after a successful copy, the button uses Runnywhere green while
+  `링크가 복사됐어요!` is visible, then returns to its original appearance at
+  the same time as `친구에게 공유하기` returns.
+- RED: `.venv/bin/python -m pytest tests/test_course_detail.py -q -k share_button_uses_brand_green`
+  failed because no success-state class or green style existed.
+- GREEN: the focused share tests passed after adding the `share-success` state.
+- Browser measurement immediately after clicking: background
+  `rgb(10, 125, 67)`, white text, and `링크가 복사됐어요!`.
+- Browser measurement after 2.2 seconds: original background
+  `rgb(242, 246, 240)`, original text color `rgb(43, 54, 48)`, and
+  `친구에게 공유하기`.
+- Full suite: `.venv/bin/python -m pytest -q` — `799 passed`.
+- Coverage remains unavailable because this environment has neither
+  `pytest-cov` nor the `coverage` module installed.
+- RED checkpoint: `900bddc test(ui): define share success color state`
+- GREEN checkpoint: `1c880b0 feat(ui): color share copy success state`
