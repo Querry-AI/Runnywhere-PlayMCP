@@ -20,11 +20,27 @@ ENV PORT=8000
 ENV HOST=0.0.0.0
 ENV RUNART_RELEASE_SHA=${RUNART_RELEASE_SHA}
 ENV RUNART_BASE_URL=${RUNART_BASE_URL}
+# Tuning values live in the PlayMCP in KC console env, not here; the numbers
+# below are the ones that console has to be set from.
+#
+# Measured on the deployed container 2026-08-31 (persistent MCP session,
+# transport cost subtracted), against this laptop on the same coordinates:
+#   per generation      98ms local  vs  333ms deployed
+#   concurrency 1 -> 2  98->103ms local vs 333->640ms deployed
+# Latency doubling when concurrency doubles means the two pool workers share
+# one CPU: deployed effective parallelism is 1, not 2, and throughput stops at
+# ~2.6 generations/s. So a second worker buys no throughput and costs a second
+# ~485MB graph copy (1.56GB total; the container restarted under a
+# 40-sequential + 8-concurrent probe). And admitting 10 concurrent MCP calls
+# makes the back of the queue wait ~3.5s, past MCP_OUTER_RESPONSE_BUDGET_S.
+#
 # Deploy-time env (PlayMCP in KC): RUNART_BASE_URL=<public endpoint>,
 # KAKAO_JAVASCRIPT_KEY, RUNART_TOKEN_SECRET (32+ chars), RUNART_LEGAL_CONTACT,
 # and optional KAKAO_REST_API_KEY.
 #
-# Measured against the 1,000-call gate with the standard-course catalogue:
+# Measured against the 1,000-call gate with the standard-course catalogue —
+# on a laptop, and the corpus is 24 fixed spots so it is nearly all catalogue
+# hits. It does not predict the deployed container; see the numbers above.
 #   WEB_CONCURRENCY=1                   avg 75ms / p99 ~200-390ms, ~1.6GB.
 #                                       2 doubles the pool as well (6 procs,
 #                                       2.5GB) and makes p99 erratic.
