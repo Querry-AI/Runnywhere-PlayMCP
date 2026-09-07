@@ -280,10 +280,13 @@ def test_sharing_an_edited_course_sends_the_edited_link():
     """Share had the original id baked into the handler, so an edited course
     was shared as the route the runner had changed away from."""
     course = _course()
-    page = preview_html(course, [], "https://runnywhere.example")
+    page = preview_html(course, [], "https://runnywhere.example", page="run")
 
     assert "let currentCourseUrl =" in page
     assert "const url = currentCourseUrl;" in page
+    # The click handler runs outside kakao.maps.load(). Keeping this binding
+    # inside that callback leaves the visible button inert at runtime.
+    assert page.index("let currentCourseUrl =") < page.index("const shareBtn =")
     assert "currentCourseUrl = " in page.split("const setCourseLinks")[1]
 
 
