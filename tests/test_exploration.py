@@ -117,3 +117,23 @@ def test_gpx_carries_osm_licence_notice():
     assert "OpenStreetMap contributors" in gpx
     assert "https://www.openstreetmap.org/copyright" in gpx
     assert "안전 &amp; 코스" in gpx
+
+
+def test_the_atlas_share_button_answers_where_a_phone_can_see_it():
+    """Same defect the course page had: the async clipboard is not always
+    there, and window.prompt -- the old fallback -- is suppressed outright by
+    several mobile browsers, so the press did nothing and said nothing. The
+    label swap it used for feedback was wiped the moment the silhouette
+    finished loading and the card re-rendered."""
+    from runart.exploration import atlas_html
+
+    page = atlas_html("https://runnywhere.example", "")
+
+    assert "window.prompt(" not in page
+    assert "document.execCommand('copy')" in page
+    assert 'id="pageToast"' in page and 'role="status"' in page
+    assert "링크가 복사되었습니다" in page
+    # A failure says something different from a success.
+    assert "링크를 복사하지 못했어요" in page
+    # Feedback no longer lives in the button's own label.
+    assert "링크가 복사됐어요" not in page

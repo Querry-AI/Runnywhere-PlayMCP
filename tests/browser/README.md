@@ -30,7 +30,24 @@ NODE_PATH=$(npm root -g) node tests/browser/run_scenarios.js /tmp/runart-harness
 NODE_PATH=$(npm root -g) node tests/browser/mobile_gestures.js /tmp/runart-harness
 ```
 
-시나리오는 `69/69 passed`, 모바일 제스처는 두 화면 크기 모두 `PASS`가 나와야 한다. 실패 시 종료 코드는 0이 아니다. Playwright(`npm i -g playwright`)가 필요하다.
+현재 시나리오는 **`63/69 passed`**, 모바일 제스처는 두 화면 크기 모두 `PASS`다. Playwright(`npm i -g playwright`)가 필요하다.
+
+각 시나리오는 `try`/`catch`로 격리돼 있다 — 예전에는 하나가 던지면 러너가 통째로 죽어서 **그 뒤 7개 구획이 아예 보고되지 않았다**. 이제 던진 시나리오는 `scenario N ... ran to the end` FAIL 한 줄로 남고 나머지는 계속 돈다.
+
+### 알려진 실패 6건 — 코드가 아니라 기대가 낡았다
+
+여섯 건 모두 뿌리가 하나다: **`선택 구간 지우기`를 누르면 지금은 서버로 `snap`(stroke 0건)이 나가고 훑어둔 선택 표시가 지워진다.** 이 시나리오들은 지우기가 저장 전까지 완전히 로컬이던 시절에 쓰였다.
+
+| 실패 | 기대 | 실제 |
+| --- | --- | --- |
+| erasing makes no route-generation request | 요청 0건 | `snap` 1건 |
+| drawing makes no request before save | 그리기 전 요청 0건 | 지우기가 이미 1건 보냄 |
+| the erased geometry remains translucent red | 훑은 구간이 붉게 남음 | 지우기 후 선택이 지워짐 |
+| a connected draft previews a walkable route before naming | body 2건(snap→save) | 3건(지우기 snap이 앞에 붙음) |
+| only the reviewed snapped path is saved with a name | 〃 | 〃 |
+| reset restores the original route but remains in editing | 초기화 후 `verify` | `save` |
+
+**단언을 현재 동작에 맞춰 고쳐 쓰지 않았다.** 지우기 누름이 서버를 호출해야 하는지는 제품 결정이고, 맞춰 쓰는 순간 이 테스트는 동작이 바뀌었다는 유일한 기록을 잃는다. 결정이 나면 그때 단언을 갱신하거나 코드를 되돌리면 된다.
 
 ## 한계
 

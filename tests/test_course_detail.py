@@ -339,6 +339,22 @@ def test_the_share_control_reads_as_a_row_like_the_ones_above_it():
     assert "친구에게 공유하기" not in run
 
 
+def test_an_edit_failure_never_shows_the_browser_its_own_english():
+    """`Failed to fetch` reached the toast verbatim whenever the connection
+    dropped mid-edit, and `Unexpected token '<'` whenever a gateway answered
+    with HTML. Only a message the server wrote is Korean and names a next
+    action, so only that one is repeated back."""
+    script = preview_html(_course(), [], "https://runnywhere.example",
+                          page="edit").split("<script>")[-1]
+
+    assert "error.fromServer" in script and "editFailureText" in script
+    assert "연결이 끊겨 서버에 닿지 못했어요" in script
+    # No call site reads error.message directly any more.
+    assert "error.message||" not in script.replace(" ", "")
+    # A gateway's HTML must not become the runner's error text.
+    assert "try{payload=awaitresponse.json();}catch" in script.replace(" ", "")
+
+
 def test_run_tab_keeps_sharing_and_drops_the_card_and_animal_map():
     """The card image and the animal map were two ways out of the run page.
     Sharing the course is the only secondary action it needs."""

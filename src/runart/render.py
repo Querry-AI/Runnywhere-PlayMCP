@@ -2015,10 +2015,41 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
    }}
    return best;
  }};
+ // Only a message the server wrote is fit to show: it is Korean and it names
+ // the next action. Everything else that can reject here is the browser's own
+ // English -- `Failed to fetch` when the connection drops, `Unexpected token
+ // '<'` when a proxy answers with HTML -- and it used to go straight into the
+ // toast. `fromServer` is how the callers tell the two apart.
+ const serverError = message => {{
+   const error = new Error(message);
+   error.fromServer = true;
+   return error;
+ }};
  const postEdit = async body => {{
    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),3500);
-   try{{const response=await fetch(editEndpoint,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body),signal:controller.signal}});const payload=await response.json();if(!response.ok)throw new Error(payload.error||'코스 선을 처리하지 못했어요.');return payload;}}
+   try{{
+     const response=await fetch(editEndpoint,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body),signal:controller.signal}});
+     // A gateway that answers with HTML makes this throw a SyntaxError, which
+     // is a transport failure, not something the runner did.
+     let payload=null;
+     try{{payload=await response.json();}}catch(err){{payload=null;}}
+     if(!response.ok)throw serverError((payload&&payload.error)||'코스 선을 처리하지 못했어요.');
+     if(!payload)throw new Error('empty edit response');
+     return payload;
+   }}
    finally{{clearTimeout(timer);}}
+ }};
+ // What to say when the request never reached the server, or came back as
+ // something we cannot read. The runner's drawing is untouched either way, and
+ // "check the connection" is the one thing they can act on -- which the old
+ // generic "코스 선이 이어지지 않았어요" was not, since nothing was wrong with
+ // the line. Returns null for a timeout: each caller words its own.
+ const NETWORK_FAILED = '연결이 끊겨 서버에 닿지 못했어요. 네트워크를 확인한 뒤 다시 눌러 주세요.';
+ const editFailureText = error => {{
+   if (!error) return NETWORK_FAILED;
+   if (error.name === 'AbortError') return null;
+   if (error.fromServer && error.message) return error.message;
+   return NETWORK_FAILED;
  }};
  // The eraser widens a range as it sweeps: a runner rubs out the stretch that
  // is wrong rather than tapping one edge of it and hoping that was the one.
@@ -2242,7 +2273,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      return true;
    }}
    catch(error){{
-     setEditStatus(error.name==='AbortError'?'경로 확인 시간이 초과됐어요. 그린 선은 그대로 남아 있어요.':(error.message||'코스 선이 이어지지 않았어요. 실제 코스 선과 교차하도록 이어 그려 주세요.'),'error',{{label:'닫기',run:()=>{{}}}});
+     setEditStatus(editFailureText(error)||'경로 확인 시간이 초과됐어요. 그린 선은 그대로 남아 있어요.','error',{{label:'닫기',run:()=>{{}}}});
      setEditBusy(false);return false;
    }}
  }};
@@ -2282,7 +2313,7 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
      location.assign(payload.preview_url);
    }}
    catch(error){{
-     setEditStatus(error.name==='AbortError'?'저장 시간이 초과됐어요. 수정한 선은 그대로 남아 있어요.':(error.message||'저장하지 못했어요. 다시 시도해 주세요.'),'error',{{label:'닫기',run:()=>{{}}}});
+     setEditStatus(editFailureText(error)||'저장 시간이 초과됐어요. 수정한 선은 그대로 남아 있어요.','error',{{label:'닫기',run:()=>{{}}}});
      setEditBusy(false);
    }}
  }};

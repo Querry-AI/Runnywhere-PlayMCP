@@ -20,13 +20,54 @@ const path = require('path');
 
 const DIR = process.argv[2] || path.join(__dirname, 'harness');
 
+// The erased span is an absence, not a line. The editor keeps the two surviving
+// green stretches (#087b59) and draws nothing between them, so the gap's ends
+// are the inner ends of those two. These scenarios used to look for a red
+// #e5322e polyline, which the editor stopped drawing -- `.pop()` then returned
+// undefined and the whole run died on `red._o`.
+const GAP_HELPERS = `
+  window.__greens = () => (window.__lines || []).filter(
+    l => l._map && l._o.strokeColor === '#087b59');
+  window.__gapEnds = () => {
+    const segs = window.__greens();
+    if (!segs.length) return null;
+    // A span erased at the loop's seam leaves one stretch, whose own two ends
+    // are the gap's ends.
+    if (segs.length === 1) {
+      const only = segs[0]._o.path;
+      return only.length >= 2 ? [only[only.length - 1], only[0]] : null;
+    }
+    const head = segs[0]._o.path, tail = segs[1]._o.path;
+    return [head[head.length - 1], tail[0]];
+  };
+  window.__hasGap = () => window.__gapEnds() !== null;
+  // What the server actually answers a snap with. Save keeps its own stub so
+  // scenarios can assert the page does not navigate.
+  window.__editReply = body => body.action === 'snap'
+    ? { path: window.initialEditPath, geometry: window.initialEditGeometry,
+        length_km: 5.31, note: '', summary: null }
+    : { preview_url: '#unexpected' };
+  window.__gapLength = () => {
+    const segs = window.__greens();
+    if (segs.length < 2) return 0;
+    // How much of the course the gap swallowed, in nodes.
+    const kept = segs.reduce((n, s) => n + s._o.path.length, 0);
+    const whole = (window.__greens()[0] && window.initialEditPath)
+      ? window.initialEditPath.length : 0;
+    return Math.max(0, whole - kept);
+  };
+`;
+
 async function page(browser, file) {
   const p = await browser.newPage();
   const errors = [];
   p.on('pageerror', e => errors.push(String(e)));
-  p.on('console', m => { if (m.type() === 'error' && !/ERR_FILE_NOT_FOUND/.test(m.text())) errors.push('console: ' + m.text()); });
+  p.on('console', m => { if (m.type() === 'error'
+    && !/ERR_FILE_NOT_FOUND|ERR_TUNNEL_CONNECTION_FAILED/.test(m.text()))
+    errors.push('console: ' + m.text()); });
   await p.setViewportSize({ width: 390, height: 844 });
   await p.goto('file://' + path.join(DIR, file));
+  await p.addScriptTag({ content: GAP_HELPERS });
   await p.waitForTimeout(250);
   return { p, errors };
 }
@@ -40,6 +81,7 @@ const SUMMARY = km => ({
   name_placeholder: '서울시청런',
   badges: [{ emoji: '🏟️', label: '일반 러닝 코스', detail: '설명' }],
 });
+
 
 const results = [];
 const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detail === undefined ? '' : String(detail) });
@@ -56,7 +98,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   }
 
   // ---- 2. sharing copies the course link and says so ----
-  {
+  try {
     const { p, errors } = await page(browser, 'harness_run.html');
     // file:// is not a secure context in every build, and the async clipboard
     // is refused on plenty of real browsers too, so both paths are exercised.
@@ -135,10 +177,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       JSON.stringify(at('refused')));
     check('no page errors while sharing', errors.length === 0, errors.join(' | '));
     await p.close();
+  } catch (scenarioError) {
+    check('scenario 2 (sharing copies the course link and says so) ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
   // ---- 3. badge tooltips ----
-  {
+  try {
     const { p, errors } = await page(browser, 'harness_info.html');
     const tipCount = await p.locator('.badge-wrap .badge-tip').count();
     check('info: every badge has a tooltip', tipCount >= 2, `tips=${tipCount}`);
@@ -159,10 +203,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     check('badge tooltip closes on outside tap', stillOpen === false, `open=${stillOpen}`);
     check('no page errors while using tooltips', errors.length === 0, errors.join(' | '));
     await p.close();
+  } catch (scenarioError) {
+    check('scenario 3 (badge tooltips) ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
   // ---- 4. the map stays draggable on the info page ----
-  {
+  try {
     const { p } = await page(browser, 'harness_info.html');
     const draggable = await p.evaluate(() => window.__map.draggable);
     check('info: map is draggable', draggable === true, `draggable=${draggable}`);
@@ -185,16 +231,20 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     const panCount = await p.evaluate(() => window.__map.panCount || 0);
     check('info: no animated panBy during a drag', panCount === 0, `panBy=${panCount}`);
     await p.close();
+  } catch (scenarioError) {
+    check('scenario 4 (the map stays draggable on the info page) ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
   // ---- 5. the animal course opens on its silhouette ----
-  {
+  try {
     const { p } = await page(browser, 'harness_info_animal.html');
     const cls = await p.evaluate(() => document.body.className);
     check('animal info page opens on the silhouette', cls.includes('shape-only'), cls);
     const active = await p.locator('#shapeView').getAttribute('class');
     check('silhouette toggle reads as selected', (active || '').includes('active'), active);
     await p.close();
+  } catch (scenarioError) {
+    check('scenario 5 (the animal course opens on its silhouette) ran to the end', false, String(scenarioError).slice(0, 200));
   }
   {
     const { p } = await page(browser, 'harness_info.html');
@@ -204,7 +254,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   }
 
   // ---- 6. the editor draws the real street geometry ----
-  {
+  try {
     const { p, errors } = await page(browser, 'harness.html');
     const moved = await p.evaluate(() => {
       const overlay = document.getElementById('editOverlay');
@@ -227,10 +277,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       JSON.stringify(moved));
     check('edit: mobile map drag has no page errors', errors.length === 0, errors.join(' | '));
     await p.close();
+  } catch (scenarioError) {
+    check('scenario 6 (the editor draws the real street geometry) ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
   // ---- 7. the editor draws the real street geometry ----
-  {
+  try {
     const { p } = await page(browser, 'harness.html');
     const info = await p.evaluate(() => ({
       nodes: initialEditPath.length,
@@ -244,10 +296,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     check('editor line has more points than it has nodes', info.drawn > info.nodes,
       `drawn=${info.drawn} nodes=${info.nodes} shaped edges=${info.shaped}`);
     await p.close();
+  } catch (scenarioError) {
+    check('scenario 7 (the editor draws the real street geometry) ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
   // ---- 8. the eraser grows along the line and leaves a local red gap ----
-  {
+  try {
     const { p, errors } = await page(browser, 'harness.html');
     const out = await p.evaluate(async () => {
       const overlay = document.getElementById('editOverlay');
@@ -273,12 +327,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       let sent = null;
       window.fetch = async (url, opts) => {
         sent = JSON.parse(opts.body);
-        return { ok: true, json: async () => ({ preview_url: '#unexpected' }) };
+        return { ok: true, json: async () => window.__editReply(sent) };
       };
       document.getElementById('editSave').click();
-      await new Promise(r => setTimeout(r, 40));
+      await new Promise(r => setTimeout(r, 350));
       const red = (window.__lines || []).filter(
-        l => l._map && l._o.strokeColor === '#e5322e').pop();
+        l => l._map && l._o.strokeColor === '#e0522d').pop();
       return { swept, sent,
         redPoints: red ? red._o.path.length : 0, redOpacity: red && red._o.strokeOpacity,
         distance: document.getElementById('mLength').textContent,
@@ -292,10 +346,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       out.state === 'verify', `primary=${out.state}`);
     check('no page errors while erasing', errors.length === 0, errors.join(' | '));
     await p.close();
+  } catch (scenarioError) {
+    check('scenario 8 (the eraser grows along the line and leaves a local red gap) ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
   // ---- 9. one sweep never jumps to the far side of the loop ----
-  {
+  try {
     const { p } = await page(browser, 'harness.html');
     const span = await p.evaluate(() => {
       const overlay = document.getElementById('editOverlay');
@@ -324,10 +380,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     check('a jump across the loop does not swallow the course',
       span.selected > 0 && span.selected < span.total / 3, JSON.stringify(span));
     await p.close();
+  } catch (scenarioError) {
+    check('scenario 9 (one sweep never jumps to the far side of the loop) ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
   // ---- 10. freehand stays local and keeps its exact draft shape ----
-  {
+  try {
     const { p, errors } = await page(browser, 'harness.html');
     const out = await p.evaluate(async () => {
       const overlay = document.getElementById('editOverlay');
@@ -344,8 +402,9 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
         clientY: overlay.getBoundingClientRect().top + pt.y }));
       const sent = [];
       window.fetch = async (url, opts) => {
-        sent.push(JSON.parse(opts.body));
-        return { ok: true, json: async () => ({ preview_url: '#unexpected' }) };
+        const body = JSON.parse(opts.body);
+        sent.push(body);
+        return { ok: true, json: async () => window.__editReply(body) };
       };
       const distanceBefore = document.getElementById('mLength').textContent;
       // Make a gap first.
@@ -354,14 +413,15 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       for (const i of [12, 14, 16, 18, 20]) fire('pointermove', at(i));
       fire('pointerup', at(20));
       document.getElementById('editSave').click();
+      await new Promise(r => setTimeout(r, 350));   // the erase press now awaits the server
 
       document.getElementById('drawTool').click();
       const pressed = document.getElementById('drawTool').getAttribute('aria-pressed');
       const draggable = window.__map.draggable;
 
-      const red=(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#e5322e').pop();
-      const rs=proj.containerPointFromCoords(red._o.path[0]);
-      const re=proj.containerPointFromCoords(red._o.path[red._o.path.length-1]);
+      const ends=window.__gapEnds();
+      const rs=proj.containerPointFromCoords(ends[0]);
+      const re=proj.containerPointFromCoords(ends[1]);
       const start={x:rs.x,y:rs.y},end={x:re.x,y:re.y};
       fire('pointerdown', start);
       for (const t of [.2, .4, .6, .8])
@@ -372,7 +432,8 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       const blue = (window.__lines || []).filter(
         l => l._map && l._o.strokeColor === '#1668dc').pop();
       const bp=blue&&blue._o.path;
-      const rp=red&&red._o.path;
+      // The gap's two ends, to measure how close the drawn line lands to them.
+      const rp=ends;
       const metres=(a,b)=>Math.hypot((a.getLat()-b.getLat())*111320,(a.getLng()-b.getLng())*88800);
       const state=document.getElementById('editSave').dataset.action;
       return { pressed, draggable, sent, strokes:(window.__lines || []).filter(
@@ -396,10 +457,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       out.distance === out.distanceBefore, `${out.distanceBefore} -> ${out.distance}`);
     check('no page errors while drawing', errors.length === 0, errors.join(' | '));
     await p.close();
+  } catch (scenarioError) {
+    check('scenario 10 (freehand stays local and keeps its exact draft shape) ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
   // ---- 11. multiple strokes can continue an unfinished freehand draft ----
-  {
+  try {
     const { p } = await page(browser, 'harness.html');
     const undos = await p.evaluate(async () => {
       const overlay = document.getElementById('editOverlay');
@@ -417,9 +480,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       document.getElementById('eraserTool').click();
       fire('pointerdown', at(10));fire('pointermove', at(15));fire('pointerup', at(20));
       document.getElementById('editSave').click();
+      await new Promise(r => setTimeout(r, 350));   // the erase press now awaits the server
       document.getElementById('drawTool').click();
-      const red=(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#e5322e').pop();
-      const redStart=red._o.path[0],redEnd=red._o.path[red._o.path.length-1];
+      const ends=window.__gapEnds();
+      const redStart=ends[0],redEnd=ends[1];
       const startPoint=proj.containerPointFromCoords(redStart),endPoint=proj.containerPointFromCoords(redEnd);
       const start={x:startPoint.x,y:startPoint.y},end={x:endPoint.x,y:endPoint.y};
       const mid={x:start.x+(end.x-start.x)*.25,y:start.y+(end.y-start.y)*.25};
@@ -427,7 +491,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       fire('pointerdown',mid);fire('pointermove',end);fire('pointerup',end);
       const state=()=>document.getElementById('editSave').dataset.action;
       const strokes=()=>(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#1668dc').length;
-      const hasGap=()=>(window.__lines||[]).some(l=>l._map&&l._o.strokeColor==='#e5322e');
+      const hasGap=()=>window.__hasGap();
       const before={strokes:strokes(),ready:state()==='verify'};
       document.getElementById('editUndo').click();
       const afterOne={strokes:strokes(),ready:state()==='verify'};
@@ -442,10 +506,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     check('a second undo keeps the red gap but removes the first stroke',
       undos.afterTwo.strokes === 0 && !!undos.afterTwo.gap, JSON.stringify(undos));
     await p.close();
+  } catch (scenarioError) {
+    check('scenario 11 (multiple strokes can continue an unfinished freehand draft) ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
   // ---- 12. saving asks for a name ----
-  {
+  try {
     const { p, errors } = await page(browser, 'harness.html');
     const out = await p.evaluate(async () => {
       let sent = null;
@@ -472,6 +538,8 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       JSON.stringify(out.sent));
     check('no page errors while saving', errors.length === 0, errors.join(' | '));
     await p.close();
+  } catch (scenarioError) {
+    check('scenario 12 (saving asks for a name) ran to the end', false, String(scenarioError).slice(0, 200));
   }
   {
     const { p } = await page(browser, 'harness.html');
@@ -489,12 +557,13 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       document.getElementById('eraserTool').click();
       fire('pointerdown',at(10));fire('pointermove',at(15));fire('pointerup',at(20));
       document.getElementById('editSave').click();
+      await new Promise(r => setTimeout(r, 350));   // the erase press now awaits the server
       document.getElementById('drawTool').click();
       // A middle fragment that touches neither red endpoint. It still lands on
       // the green course, which is all the server needs.
       fire('pointerdown',at(13));fire('pointermove',at(15));fire('pointerup',at(17));
       document.getElementById('editSave').click();
-      await new Promise(r=>setTimeout(r,60));
+      await new Promise(r=>setTimeout(r,350));
       return {body,error:document.getElementById('editToastText').textContent,
         blue:(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#1668dc').length};
     }, SUMMARY(4.9));
@@ -528,23 +597,24 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       document.getElementById('eraserTool').click();
       fire('pointerdown',at(10));fire('pointermove',at(15));fire('pointerup',at(20));
       document.getElementById('editSave').click();
+      await new Promise(r => setTimeout(r, 350));   // the erase press now awaits the server
       document.getElementById('drawTool').click();
-      const red=(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#e5322e').pop();
-      const rs=proj.containerPointFromCoords(red._o.path[0]);
-      const re=proj.containerPointFromCoords(red._o.path[red._o.path.length-1]);
+      const ends=window.__gapEnds();
+      const rs=proj.containerPointFromCoords(ends[0]);
+      const re=proj.containerPointFromCoords(ends[1]);
       const start={x:rs.x,y:rs.y},end={x:re.x,y:re.y};
       fire('pointerdown',start);
       fire('pointermove',{x:(start.x+end.x)/2,y:(start.y+end.y)/2});
       fire('pointerup',end);
       document.getElementById('editSave').click();
-      await new Promise(r => setTimeout(r, 80));
+      await new Promise(r => setTimeout(r, 350));
       const preview={
         sheetHidden:document.getElementById('nameSheet').hidden,
         state:document.getElementById('editSave').dataset.action,
         label:document.getElementById('editSaveLabel').textContent,
         error:document.getElementById('editToastText').textContent,
         blue:(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#1668dc').length,
-        red:(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#e5322e').length
+        red:window.__hasGap()?1:0
       };
       document.getElementById('editSave').click();
       const input = document.getElementById('nameSheetInput');
@@ -567,7 +637,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   }
 
   // ---- 13. reset stays in the editor and its discarded draft is undoable ----
-  {
+  try {
     const { p, errors } = await page(browser, 'harness.html');
     const out = await p.evaluate(async () => {
       const overlay = document.getElementById('editOverlay');
@@ -582,13 +652,14 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       document.getElementById('eraserTool').click();
       fire('pointerdown',at(10));fire('pointermove',at(15));fire('pointerup',at(20));
       document.getElementById('editSave').click();
+      await new Promise(r => setTimeout(r, 350));   // the erase press now awaits the server
       document.getElementById('drawTool').click();
-      const red=(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#e5322e').pop();
-      const rs=proj.containerPointFromCoords(red._o.path[0]);
-      const re=proj.containerPointFromCoords(red._o.path[red._o.path.length-1]);
+      const ends=window.__gapEnds();
+      const rs=proj.containerPointFromCoords(ends[0]);
+      const re=proj.containerPointFromCoords(ends[1]);
       const start={x:rs.x,y:rs.y},end={x:re.x,y:re.y};
       fire('pointerdown',start);fire('pointermove',{x:(start.x+end.x)/2,y:(start.y+end.y)/2});fire('pointerup',end);
-      const counts=()=>({gap:(window.__lines||[]).some(l=>l._map&&l._o.strokeColor==='#e5322e'),
+      const counts=()=>({gap:window.__hasGap(),
         strokes:(window.__lines||[]).filter(l=>l._map&&l._o.strokeColor==='#1668dc').length});
       const drafted=counts();
       document.getElementById('editCancel').click();
@@ -612,10 +683,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       JSON.stringify(out));
     check('no page errors while resetting', errors.length === 0, errors.join(' | '));
     await p.close();
+  } catch (scenarioError) {
+    check('scenario 13 (reset stays in the editor and its discarded draft is undoable) ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
   // ---- 14. the editing chrome leaves the map alone ----
-  {
+  try {
     const { p } = await page(browser, 'harness.html');
     const cover = await p.evaluate(() => {
       const map = document.getElementById('map').getBoundingClientRect();
@@ -637,10 +710,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       cover.topInLowerHalf === true,
       `tools ${cover.toolsHeight}px tall on a ${cover.mapHeight}px map`);
     await p.close();
+  } catch (scenarioError) {
+    check('scenario 14 (the editing chrome leaves the map alone) ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
   // ---- 15. the header row is gone ----
-  {
+  try {
     const { p } = await page(browser, 'harness.html');
     const gone = await p.evaluate(() => ({
       distance: !!document.getElementById('editDistance'),
@@ -651,10 +726,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     check('no distance readout, status chip or title row',
       !gone.distance && !gone.state && !gone.head, JSON.stringify(gone));
     await p.close();
+  } catch (scenarioError) {
+    check('scenario 15 (the header row is gone) ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
   // ---- 16. the one primary button says and does what comes next ----
-  {
+  try {
     const { p, errors } = await page(browser, 'harness.html');
     const states = await p.evaluate(async () => {
       const overlay = document.getElementById('editOverlay');
@@ -699,10 +776,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       JSON.stringify(states.erased));
     check('no page errors driving the primary button', errors.length === 0, errors.join(' | '));
     await p.close();
+  } catch (scenarioError) {
+    check('scenario 16 (the one primary button says and does what comes next) ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
   // ---- 17. 지도 이동 actually pans, on a touch device ----
-  {
+  try {
     const ctx = await browser.newContext({ hasTouch: true, isMobile: true,
       viewport: { width: 390, height: 844 },
       userAgent: 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36' });
@@ -730,6 +809,8 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     check('and never through the animated panBy', panned.panBy === 0, `panBy=${panned.panBy}`);
     check('no page errors while panning', errors.length === 0, errors.join(' | '));
     await ctx.close();
+  } catch (scenarioError) {
+    check('scenario 17 (지도 이동 actually pans, on a touch device) ran to the end', false, String(scenarioError).slice(0, 200));
   }
 
   await browser.close();
