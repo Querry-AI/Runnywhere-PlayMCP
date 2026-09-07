@@ -876,8 +876,23 @@ def _start_change_notice(selection: dict) -> str:
     requested = selection.get("requested_start")
     choices = [selection["primary"], *selection["alternatives"]]
     relocated = [c for c in choices if c.get("is_start_alternative")]
-    if not requested or not relocated:
+    if not requested:
         return ""
+    if not relocated:
+        # Inside the station-exit tolerance the start is not treated as moved,
+        # and nothing was said. But an animal course can only start where a
+        # verified preset does, so "테헤란로 8길 8에서 강아지 코스" came back
+        # titled 강남역 -- 98m away, correct, and with the address the runner
+        # typed nowhere in the reply. Name both places whenever the label
+        # differs, however small the distance.
+        renamed = [c for c in choices if c["start"] != requested]
+        if not renamed:
+            return ""
+        places = ", ".join(dict.fromkeys(c["start"] for c in renamed))
+        offset = max(c.get("start_offset_m") or 0 for c in renamed)
+        if offset < 10:
+            return f"{requested} 바로 앞 {places}에서 출발하는 코스예요."
+        return f"{requested}에서 약 {round(offset / 10) * 10:g}m 떨어진 {places} 출발 코스예요."
     places = ", ".join(dict.fromkeys(c["start"] for c in relocated))
     if selection["requested_start_offered"]:
         exact_places = ", ".join(dict.fromkeys(

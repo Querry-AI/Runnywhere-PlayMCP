@@ -99,12 +99,29 @@ def test_exact_primary_with_nearby_alternatives_does_not_deny_the_exact_start():
 
 @pytest.mark.parametrize("offset,relocated", [(0, False), (149.9, False), (150, True)])
 def test_start_disclosure_uses_station_exit_tolerance(offset, relocated):
+    """Inside the tolerance the start is not an alternative and is never
+    offered as one. The runner is still told which place the course starts
+    from, because the name they typed is otherwise absent from the reply."""
     result = server._plan_result(_plan(offsets=(offset,)), "dog")
     selection = result.structuredContent["course_selection"]
     assert selection["primary"]["is_start_alternative"] is relocated
-    assert bool(selection["start_change_notice"]) is relocated
+    notice = selection["start_change_notice"]
+    assert "신당역" in notice
     if not relocated:
         assert "출발 대안" not in result.structuredContent["assistant_final_text"]
+        assert "왕십리역" in notice
+
+
+def test_a_start_under_the_tolerance_is_named_not_silently_replaced():
+    """테헤란로 8길 8 → 강남역 댕댕런: 98m away, correct, and the address the
+    runner typed appeared nowhere in the reply."""
+    result = server._plan_result(_plan(offsets=(98,), requested="테헤란로8길8"), "dog")
+    selection = result.structuredContent["course_selection"]
+
+    assert selection["primary"]["is_start_alternative"] is False
+    assert selection["start_change_notice"] == (
+        "테헤란로8길8에서 약 100m 떨어진 신당역 출발 코스예요.")
+    assert selection["start_change_notice"] in result.structuredContent["assistant_final_text"]
 
 
 def test_same_station_label_does_not_hide_a_measured_start_change():
