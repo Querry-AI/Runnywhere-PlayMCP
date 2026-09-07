@@ -25,7 +25,8 @@ from .course import (MAX_COURSE_START_OFFSET_M, Course, CourseError,
 from .data_integrity import verify_data_file
 from .courseplan import EFFORT_TOLERANCE
 from .geo import haversine_m
-from .models import CourseParams, decode_course_id, encode_course_id
+from .models import (CATALOG_DISTANCES_KM, CourseParams, decode_course_id,
+                     encode_course_id)
 
 
 def _data_path(filename: str) -> Path:
@@ -46,7 +47,7 @@ PRESET_PATH = _data_path("standard_course_presets.json.gz")
 FORMAT_VERSION = 1
 # The distances the catalogue is built for. Shared so the build script and the
 # gazetteer audit cannot drift from what the runtime actually looks up.
-DEFAULT_DISTANCES_KM = (3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0)
+DEFAULT_DISTANCES_KM = CATALOG_DISTANCES_KM
 BLOCKED = object()
 
 _load_status = "not loaded yet"

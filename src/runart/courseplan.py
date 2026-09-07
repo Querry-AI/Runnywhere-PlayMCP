@@ -8,7 +8,8 @@ from typing import Sequence
 from .animal_presets import PresetMatch
 from .course import Course
 from .facilities import facility_requirement_score
-from .models import DEFAULT_PACE_MIN_PER_KM, encode_course_id
+from .models import (CATALOG_DISTANCES_KM, DEFAULT_PACE_MIN_PER_KM,
+                     MAX_DURATION_MIN, encode_course_id)
 from .naming import TRACK_EMOJI, course_title
 from .shapes import SHAPES
 from .rfs import has_sufficient_night_lighting
@@ -71,10 +72,27 @@ class CoursePlan:
 
 def requested_distance(distance_km: float | None,
                        duration_min: float | None) -> float | None:
-    """Use the same conversion as generation; explicit distance wins."""
+    """Use the same conversion as generation; explicit distance wins.
+
+    A time is not a distance the runner measured, so it is answered with the
+    nearest distance the catalogue was built for. The raw conversion produced
+    4.6/6.2/7.7/9.2km -- none of them in the catalogue -- and every one of
+    those fell through to a live search: measured in production, time-based
+    requests averaged 1,101ms against a 100ms budget, and off-catalogue
+    distances 2,436ms with 41% timing out. Snapped, they answer from the
+    catalogue in tens of milliseconds. Distances below the catalogue floor are
+    kept exact: a runner who asks for ten minutes means it.
+    """
     if distance_km is not None:
         return distance_km
-    return round(duration_min / DEFAULT_PACE_MIN_PER_KM, 1) if duration_min else None
+    if not duration_min:
+        return None
+    km = duration_min / DEFAULT_PACE_MIN_PER_KM
+    if km >= max(CATALOG_DISTANCES_KM):
+        return max(CATALOG_DISTANCES_KM)
+    if km <= min(CATALOG_DISTANCES_KM):
+        return round(km, 1)
+    return min(CATALOG_DISTANCES_KM, key=lambda catalogued: abs(catalogued - km))
 
 
 def _preference_misses(course: Course, *, include_hills: bool,

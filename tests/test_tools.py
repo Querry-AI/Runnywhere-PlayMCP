@@ -105,8 +105,16 @@ def test_unified_course_tool_dispatches_standard_and_animal_requests():
 
 
 def test_duration_conversion_is_explained():
+    """A time is answered with a distance the catalogue was built for, and the
+    reading is stated. 30분 used to convert to 4.6km, which no catalogue entry
+    matched and every request regenerated from scratch."""
     out = server.generate_running_course(**CITY_HALL, duration_min=30)
-    assert "6:30/km" in out and "4.6km" in out
+    assert "30분 → 약 5km" in out
+
+
+def test_a_run_longer_than_the_service_builds_is_capped_and_said_so():
+    out = server.generate_running_course(**CITY_HALL, duration_min=120)
+    assert "1시간(10km)" in out and "120분" in out
 
 
 def test_requested_facility_is_reflected_in_course():

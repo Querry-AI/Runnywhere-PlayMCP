@@ -202,7 +202,7 @@ def test_the_duration_note_is_not_dressed_as_a_failure():
     text = server.generate_running_course(location="시청", duration_min=40)
 
     assert not text.startswith(("⏱️", "⚠️"))
-    assert "6.2km" in text
+    assert "40분 → 약 6km" in text
 
 
 @pytest.mark.parametrize("kind", ["standard", "dog", "best_animal"])

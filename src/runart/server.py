@@ -58,7 +58,8 @@ from .exploration import (atlas_html, create_relay, decode_relay,
                           passport_html, home_html, legal_html, record_run,
                           relay_html)
 from .models import (COURSE_NAME_MAX_CHARS, FACILITY_TYPES, CourseParams, CourseWaypoint,
-                     DEFAULT_DISTANCE_KM, DEFAULT_PACE_MIN_PER_KM, decode_course_id,
+                     CATALOG_DISTANCES_KM, DEFAULT_DISTANCE_KM, DEFAULT_PACE_MIN_PER_KM,
+                     MAX_DURATION_MIN, decode_course_id,
                      decode_shape_token, encode_course_id)
 from .render import (card_svg, course_edit_summary, course_markdown,
                      course_thumbnail_svg, edit_path_geometry, edit_path_nodes,
@@ -855,6 +856,21 @@ def _course_summary(facts: dict) -> str:
             f"[지도 보기]({facts['map_url']})")
 
 
+def _duration_cap_notice(request: dict) -> str:
+    """Say so when a time longer than any course we build was answered anyway.
+
+    Silently handing back a 10km course for a 90-minute request looks like the
+    service ignored the number the runner typed.
+    """
+    if request.get("distance_km") is not None:
+        return ""
+    minutes = request.get("duration_min")
+    if not minutes or minutes <= MAX_DURATION_MIN:
+        return ""
+    return (f"{minutes:g}분 코스는 아직 만들지 못해서, 가장 긴 "
+            f"1시간({max(CATALOG_DISTANCES_KM):g}km) 코스로 추천해요.")
+
+
 def _start_change_notice(selection: dict) -> str:
     """Disclose measured relocation without claiming a missing exact option."""
     requested = selection.get("requested_start")
@@ -892,6 +908,8 @@ def _plan_final_text(selection: dict) -> str:
     # answered the question.
     if assumed := selection.get("assumed_distance_km"):
         prefix = f"거리를 말씀하지 않으셔서 기본 {assumed:g}km로 잡았어요. {prefix}"
+    if capped := selection.get("duration_notice"):
+        prefix = f"{capped} {prefix}"
     if not selection["primary_matches_requested_shape"]:
         requested = SHAPES.get(selection["requested_course_type"])
         label = f"{requested.name_ko} 모양" if requested else "요청한 모양"
@@ -1271,11 +1289,13 @@ def _result_from_course_plan(plan: CoursePlan, course_type: str,
                            lead=f"{response_start_name(plan.requested_start)} 출발 코스 {len(exact)}개{effort}를 추천해요.")
     assumed = (DEFAULT_DISTANCE_KM if course_type == "standard" and not requested_distance(
         request.get("distance_km"), request.get("duration_min")) else None)
-    return _plan_result(plan, course_type, assumed_distance_km=assumed)
+    return _plan_result(plan, course_type, assumed_distance_km=assumed,
+                        duration_notice=_duration_cap_notice(request))
 
 
 def _plan_result(plan: CoursePlan, course_type: str, *,
-                 assumed_distance_km: float | None = None) -> CallToolResult:
+                 assumed_distance_km: float | None = None,
+                 duration_notice: str = "") -> CallToolResult:
     # The plan owns one short spoken sentence for every case. Generator copy
     # can contain scoring rationale that belongs on the detail page, not in a
     # concise chat handoff beside the widget.
@@ -1294,8 +1314,12 @@ def _plan_result(plan: CoursePlan, course_type: str, *,
         if plan.requested_start else None)
     selection["start_change_notice"] = _start_change_notice(selection)
     selection["assumed_distance_km"] = assumed_distance_km
+    selection["duration_notice"] = duration_notice
     final_text = _plan_final_text(selection)
-    widget = (_plan_widget(plan, start_notice=selection["start_change_notice"])
+    # Both notices are ordinary copy for the card; the runner reads what was
+    # changed about their request before the courses that answer it.
+    widget = (_plan_widget(plan, start_notice=" ".join(filter(None, (
+                  duration_notice, selection["start_change_notice"]))))
               if KAKAO_WIDGETS_ENABLED else None)
     if widget is None:
         # Never return the original generator's requested-animal copy once a
@@ -1850,12 +1874,19 @@ def _build_params(location, lat, lon, distance_km, duration_min, include_hills,
     rlat, rlon, name = _resolve_start(location, lat, lon, timeout_s=timeout_s)
     asked_by_duration = distance_km is None and bool(duration_min)
     if distance_km is None and duration_min:
-        distance_km = round(duration_min / DEFAULT_PACE_MIN_PER_KM, 1)
+        # One conversion for the whole service. This used to convert here as
+        # well, half a km away from what the planner had already decided, and
+        # a 90-minute ask generated a 13.8km course the planner then rejected
+        # against its own 10km target -- one candidate, zero eligible.
+        distance_km = requested_distance(None, duration_min)
         # 🕒, not ⏱️. The ⚠️/⏱️ prefixes mark failures, and the result
         # classifier reads them as such — dressing a reading of what the user
         # asked for in the timeout prefix made a working course come back as
         # isError with no card, on the commonest phrasing there is.
-        note = f"🕒 {duration_min:g}분 → 6:30/km 페이스 기준 약 {distance_km:g}km로 잡았어요.\n"
+        note = (f"🕒 {duration_min:g}분 코스는 아직 만들지 못해서, 가장 긴 "
+                f"1시간({distance_km:g}km) 코스로 잡았어요.\n"
+                if duration_min > MAX_DURATION_MIN else
+                f"🕒 {duration_min:g}분 → 약 {distance_km:g}km로 잡았어요.\n")
     if distance_km is None:
         distance_km = 5.0
         note = "거리를 말씀하지 않으셔서 기본 5km로 잡았어요. 바꾸고 싶으면 말씀해 주세요.\n"

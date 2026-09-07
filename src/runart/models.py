@@ -32,6 +32,13 @@ def clean_course_name(name: str) -> str:
 
 DEFAULT_DISTANCE_KM = 5.0
 DEFAULT_PACE_MIN_PER_KM = 6.5
+# The distances the standard catalogue is built for. Lives here because both
+# the catalogue and the duration-to-distance conversion need it, and
+# standard_presets already imports courseplan.
+CATALOG_DISTANCES_KM = (3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0)
+# The longest run this service builds. It is the top of the catalogue, and a
+# request past it is answered with that instead of a live 2-second search.
+MAX_DURATION_MIN = 60.0
 
 
 def _safe_decompress(packed: bytes, max_bytes: int) -> bytes:
