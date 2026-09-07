@@ -527,7 +527,7 @@ def _howto_panel_html(base_url: str, cid: str) -> str:
   </ol>
  </div>
  <div class="actions secondary-actions">
-  <button class="btn ghost" id="shareCourse" type="button">공유하기</button>
+  <button class="btn ghost" id="shareCourse" type="button">친구에게 공유하기</button>
  </div>
 </section>"""
 
