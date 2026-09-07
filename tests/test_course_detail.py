@@ -295,6 +295,8 @@ def test_share_button_uses_brand_green_only_while_copy_success_is_visible():
     page = preview_html(
         _course(), [], "https://runnywhere.example", page="run")
 
+    assert ('<button class="btn ghost" id="shareCourse" type="button">'
+            '친구에게 공유하기</button>') in page
     assert ".btn.ghost.share-success" in page
     assert "background:#0a7d43" in page.split(".btn.ghost.share-success", 1)[1]
     assert "shareBtn.classList.add('share-success')" in page
