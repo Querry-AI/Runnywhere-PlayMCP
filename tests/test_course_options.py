@@ -701,3 +701,21 @@ def test_a_named_distance_carries_no_assumption_notice():
         course_type="standard", location="강남역", distance_km=5)
     assert "거리를 말씀하지 않으셔서" not in (
         result.structuredContent.get("assistant_final_text") or "")
+
+
+def test_a_station_restroom_request_returns_a_course_that_passes_one():
+    """A 10m radius meant the facility had to touch the route line, and a
+    station restroom is mapped inside the station: 강남역 courses pass 역삼역
+    at 12.6m and 강남역 지하상가 at 17.4m, so every 화장실 request failed."""
+    from runart.facilities import facilities_along
+    from runart.models import decode_course_id
+    from runart.render import route_points
+
+    result = server.create_seoul_running_course(
+        "standard", location="강남역", distance_km=5, need_facilities=["restroom"])
+    payload = _card(result)
+    url = next(u for u in _urls(payload) if "/c/" in u)
+
+    course = server._get_course(decode_course_id(url.rsplit("/c/", 1)[1]), timeout_s=10)
+    found = facilities_along(route_points(course), ["restroom"], limit=None)
+    assert found, "화장실을 요청했는데 코스가 화장실을 지나지 않는다"

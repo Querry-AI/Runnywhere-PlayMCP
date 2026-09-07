@@ -34,7 +34,14 @@ def _data_path(filename: str) -> Path:
 
 
 FACILITIES_PATH = _data_path("facilities.pkl")
-NEAR_COURSE_M = 10.0  # right on the course: within 10m of the route line
+# How close a facility must be to the route line to count as "on the course".
+# 10m meant *touching* the line, and a station restroom is mapped inside the
+# station: the 강남역 course passes 역삼역 화장실 at 12.6m and 강남역 지하상가
+# at 17.4m, so every station course failed a 화장실 request outright. 30m is
+# "across the street" and restores the requests without widening into the
+# next block (measured on one 5km 강남역 loop: 1 → 4 restrooms, 3 → 18 map
+# markers; 100m gives 13 and 63).
+NEAR_COURSE_M = 30.0
 
 LABELS_KO = {
     "convenience_store": "편의점",
