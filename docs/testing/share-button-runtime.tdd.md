@@ -61,3 +61,11 @@ and real browser click path all passed.
   `pytest-cov` nor the `coverage` module installed.
 - RED checkpoint: `900bddc test(ui): define share success color state`
 - GREEN checkpoint: `1c880b0 feat(ui): color share copy success state`
+
+## Follow-up: consistent default label
+
+- The button now reads `친구에게 공유하기` both on first render and after the
+  temporary copy-success state ends.
+- RED checkpoint: `11392d3 test(ui): require consistent share button label`
+- GREEN checkpoint: `6264011 fix(ui): keep share button label consistent`
+- Related page tests: `52 passed`; full suite: `799 passed`.
