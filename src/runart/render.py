@@ -778,7 +778,11 @@ def preview_html(course: Course, facilities: list[dict], base_url: str,
  .pace-range:active::-webkit-slider-thumb{{cursor:grabbing;transform:scale(.94)}}
  .metric-value i{{font-style:normal;font-size:13px;font-weight:700;color:#8a958d;margin-left:2px}}
  /* Secondary actions must not compete with the two primary CTAs above them. */
- .btn.ghost{{background:#f2f6f0;color:#2b3630;border:1px solid #dce3d8;font-weight:700}}
+ .btn.ghost{{background:#f2f6f0;color:#2b3630;border:1px solid #dce3d8;font-weight:700;
+      transition-property:background-color,color,border-color,box-shadow;
+      transition-duration:.16s;transition-timing-function:ease-out}}
+ .btn.ghost.share-success{{background:#0a7d43;color:#fff;border-color:#0a7d43;
+      box-shadow:0 6px 18px rgba(10,125,67,.22)}}
  .actions.secondary-actions{{grid-template-columns:1fr;margin-top:8px}}
  .actions.secondary-actions .btn{{min-height:44px;padding:0 6px;font-size:13px}}
  .metric-note-inline{{margin:14px 0 0;font-size:12px;line-height:1.55;color:#8a958d}}
@@ -1137,12 +1141,19 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  let currentCourseUrl = '{base_url}/c/{cid}';
  const runStatus = document.getElementById('runStatus');
  const shareBtn = document.getElementById('shareCourse');
+ let shareResetTimer = null;
  if (shareBtn) shareBtn.addEventListener('click', () => {{
    // Sharing an edited course used to send the original route's link.
    const url = currentCourseUrl;
    const done = () => {{
+     clearTimeout(shareResetTimer);
+     shareBtn.classList.add('share-success');
      shareBtn.textContent = '링크가 복사됐어요!';
-     setTimeout(() => shareBtn.textContent = '친구에게 공유하기', 2200);
+     shareResetTimer = setTimeout(() => {{
+       shareBtn.classList.remove('share-success');
+       shareBtn.textContent = '친구에게 공유하기';
+       shareResetTimer = null;
+     }}, 2200);
    }};
    if (navigator.clipboard && navigator.clipboard.writeText)
      navigator.clipboard.writeText(url).then(done)
