@@ -290,6 +290,19 @@ def test_sharing_an_edited_course_sends_the_edited_link():
     assert "currentCourseUrl = " in page.split("const setCourseLinks")[1]
 
 
+def test_share_button_uses_brand_green_only_while_copy_success_is_visible():
+    """The visual success state and its copy must start and end together."""
+    page = preview_html(
+        _course(), [], "https://runnywhere.example", page="run")
+
+    assert ".btn.ghost.share-success" in page
+    assert "background:#0a7d43" in page.split(".btn.ghost.share-success", 1)[1]
+    assert "shareBtn.classList.add('share-success')" in page
+    reset = page.split("setTimeout(() =>", 1)[1]
+    assert "shareBtn.classList.remove('share-success')" in reset
+    assert "shareBtn.textContent = '친구에게 공유하기'" in reset
+
+
 def test_run_tab_keeps_sharing_and_drops_the_card_and_animal_map():
     """The card image and the animal map were two ways out of the run page.
     Sharing the course is the only secondary action it needs."""
