@@ -1131,6 +1131,10 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const editNotice = {json.dumps(edit_notice, ensure_ascii=False)};
  const initialLengthKm = {course.length_km:.2f};
  let editEndpoint = '{base_url}/c/{cid}/edit';
+ // Shared by the page-level share handler and the map/editor callback below.
+ // Declaring it inside kakao.maps.load() made the visible button throw a
+ // ReferenceError because its click handler lives in this outer scope.
+ let currentCourseUrl = '{base_url}/c/{cid}';
  const runStatus = document.getElementById('runStatus');
  const shareBtn = document.getElementById('shareCourse');
  if (shareBtn) shareBtn.addEventListener('click', () => {{
@@ -1404,7 +1408,6 @@ GPS는 러니웨어 서버에 저장되지 않습니다 · <a href="/terms">이�
  const initialSummary = {initial_summary};
  // Sets the number while leaving the trailing unit <i> in place.
  // Every course-addressed link on the page, kept in step with edits.
- let currentCourseUrl = '{base_url}/c/{cid}';
  const setValue = (id, value, unit) => {{
    const node = document.getElementById(id);
    if (!node) return;
