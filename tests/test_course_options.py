@@ -719,3 +719,50 @@ def test_a_station_restroom_request_returns_a_course_that_passes_one():
     course = server._get_course(decode_course_id(url.rsplit("/c/", 1)[1]), timeout_s=10)
     found = facilities_along(route_points(course), ["restroom"], limit=None)
     assert found, "화장실을 요청했는데 코스가 화장실을 지나지 않는다"
+
+
+def test_a_district_ask_names_the_district_beside_the_station_it_picked():
+    """A district request replaces the location with one station inside it, so
+    "강북구에서 5km" came back as 미아사거리역런 with 강북구 nowhere in it."""
+    result = server.create_seoul_running_course(
+        course_type="standard", location="강북구", distance_km=5)
+
+    selection = result.structuredContent["course_selection"]
+    notice = selection["request_notice"]
+    assert "강북구" in notice and selection["primary"]["start"] in notice
+    assert notice in result.structuredContent["assistant_final_text"]
+
+
+def test_a_distance_gap_is_named_by_kilometres_not_only_by_percent():
+    """10% of 5km is nothing; 10% of 42km is a different run. The tolerance
+    still ranks the candidates -- this only decides what is said."""
+    from runart.animal_presets import PresetMatch
+    from runart.course import Course
+    from runart.courseplan import build_course_plan
+    from runart.models import CourseParams
+
+    def course(km):
+        return Course(params=CourseParams(lat=37.4979, lon=127.0276,
+                                          location_name="강남역", distance_km=min(km, 42.195)),
+                      path=[], points=[], length_m=km * 1000, ascent_m=30,
+                      rfs={"score": 80, "highlights": []}, shape_similarity=None)
+
+    def note(target, actual):
+        return build_course_plan(requested_name="강남역", shape="standard", exact=None,
+                                 shape_matches=[], animal_matches=[],
+                                 standard=course(actual), distance_km=target).primary.match_note
+
+    assert note(42, 43.5) == "요청 42km → 43.5km"
+    assert note(5, 5.1) == "요청 조건 일치"
+
+
+def test_the_tool_refuses_to_substitute_an_animal_it_cannot_draw():
+    """곰 became a cat course with nothing said. The server cannot see the
+    word, so the instruction has to reach the model that chose the argument."""
+    import asyncio
+
+    tools = asyncio.run(server.mcp.list_tools())
+    tool = next(t for t in tools if t.name == "create_seoul_running_course")
+    described = tool.inputSchema["properties"]["course_type"]["description"]
+    assert "강아지·고양이·토끼·고래" in described
+    assert "best_animal로 바꿔 호출하지 말고" in described

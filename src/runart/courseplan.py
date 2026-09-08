@@ -17,6 +17,8 @@ from .rfs import has_sufficient_night_lighting
 NEARBY_RADIUS_M = 2000.0
 SAME_START_M = 150.0
 EFFORT_TOLERANCE = 0.10
+# A distance gap the runner would notice, whatever the percentage says.
+DISTANCE_NOTE_MIN_KM = 1.0
 CASE_EXACT = "exact"
 CASE_NEARBY = "nearby"
 CASE_FAR = "far"
@@ -159,6 +161,11 @@ def build_course_plan(
         course = choice.course
         error = abs(course.length_km - target) / target if target else 0
         effort_miss = error > EFFORT_TOLERANCE + 1e-9
+        # 10% of 5km is 500m and worth nothing; 10% of 42km is a different run.
+        # The tolerance still decides ranking -- this only decides whether the
+        # gap is worth a sentence.
+        gap_km = abs(course.length_km - target) if target else 0.0
+        say_distance = effort_miss or gap_km > DISTANCE_NOTE_MIN_KM
         moved = choice.is_detour
         shape_miss = (not course.params.shape if shape == "best_animal" else
                       course.params.shape != (shape if wants_animal else None))
@@ -168,7 +175,7 @@ def build_course_plan(
         notes = []
         if moved:
             notes.append(f"출발지 {choice.distance_m / 1000:.1f}km 이동")
-        if effort_miss:
+        if say_distance:
             if duration_min and distance_km is None:
                 minutes = round(course.length_km * DEFAULT_PACE_MIN_PER_KM)
                 notes.append(f"요청 {duration_min:g}분 → 약 {minutes}분")

@@ -49,7 +49,7 @@ from .courseplan import (CASE_EXACT, EFFORT_TOLERANCE, KIND_REQUESTED, NEARBY_RA
                          RECOMMENDATION_COUNT, SAME_START_M,
                          CourseChoice, CoursePlan, build_course_plan, requested_distance,
                          route_signature)
-from .facilities import LABELS_KO, facilities_along
+from .facilities import LABELS_KO, facilities_along, get_facilities
 from .geocode import (DISTRICT_STATIONS, STATION_DISTRICTS, district_scope,
                       is_citywide_scope, resolve_location)
 from .geo import haversine_m
@@ -856,6 +856,20 @@ def _course_summary(facts: dict) -> str:
             f"[지도 보기]({facts['map_url']})")
 
 
+def _district_notice(request: dict) -> str:
+    """Name the district the runner asked for beside the start we picked.
+
+    A district ask replaces request["location"] with one station inside it, so
+    "강북구에서 5km" came back as 미아사거리역런 with 강북구 nowhere in the reply.
+    """
+    district = request.get("_district")
+    resolved = request.get("_resolved")
+    if not district or not resolved:
+        return ""
+    name = response_start_name(resolved[2])
+    return f"{district} 안에서 {name} 출발 코스를 골랐어요."
+
+
 def _duration_cap_notice(request: dict) -> str:
     """Say so when a time longer than any course we build was answered anyway.
 
@@ -923,8 +937,8 @@ def _plan_final_text(selection: dict) -> str:
     # answered the question.
     if assumed := selection.get("assumed_distance_km"):
         prefix = f"거리를 말씀하지 않으셔서 기본 {assumed:g}km로 잡았어요. {prefix}"
-    if capped := selection.get("duration_notice"):
-        prefix = f"{capped} {prefix}"
+    if said := selection.get("request_notice"):
+        prefix = f"{said} {prefix}"
     if not selection["primary_matches_requested_shape"]:
         requested = SHAPES.get(selection["requested_course_type"])
         label = f"{requested.name_ko} 모양" if requested else "요청한 모양"
@@ -969,6 +983,33 @@ def _public_course_arguments(request: dict, course_type: str) -> dict:
                  if key in request and request[key] is not None}
     arguments["course_type"] = course_type
     return arguments
+
+
+@functools.lru_cache(maxsize=1)
+def _facility_counts() -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for facility in get_facilities():
+        counts[facility["type"]] = counts.get(facility["type"], 0) + 1
+    return counts
+
+
+# Below this many places in Seoul, "no course passes one" is a fact about the
+# data rather than about the runner's start, and saying only that the condition
+# failed leaves them retrying a request that cannot succeed.
+SCARCE_FACILITY_MAX = 500
+
+
+def _scarce_facility_note(reasons: set[str]) -> str:
+    """Why a facility condition is hard to meet anywhere, in one sentence."""
+    counts = _facility_counts()
+    scarce = [(kind, counts.get(kind, 0)) for kind in sorted(reasons & set(FACILITY_TYPES))
+              if counts.get(kind, 0) <= SCARCE_FACILITY_MAX]
+    if not scarce:
+        return ""
+    listed = ", ".join(f"{LABELS_KO.get(kind, kind)}는 서울에 {count:,}곳"
+                       for kind, count in scarce)
+    return (f"{listed}만 등록돼 있어서 코스가 그 앞을 지나기 어려워요. "
+            "이 조건을 빼면 코스를 찾을 수 있어요.")
 
 
 def _reason_labels(reasons: set[str]) -> list[str]:
@@ -1159,6 +1200,8 @@ def _failure_result(request: dict, course_type: str) -> CallToolResult:
         "모두 만족하는 코스는 현재 확인되지 않았어요.\n\n"
         f"가장 가까운 검증 후보는 {'·'.join(labels)} 조건을 충족하지 못했어요."
     )
+    if scarce := _scarce_facility_note(set(best.reasons)):
+        text += "\n\n" + scarce
     if options:
         # Name the changes in prose as well as in the numbered list. When only
         # the list carried them, Preview compressed the reply to "거리를 조금
@@ -1305,12 +1348,13 @@ def _result_from_course_plan(plan: CoursePlan, course_type: str,
     assumed = (DEFAULT_DISTANCE_KM if course_type == "standard" and not requested_distance(
         request.get("distance_km"), request.get("duration_min")) else None)
     return _plan_result(plan, course_type, assumed_distance_km=assumed,
-                        duration_notice=_duration_cap_notice(request))
+                        request_notice=" ".join(filter(None, (
+                            _district_notice(request), _duration_cap_notice(request)))))
 
 
 def _plan_result(plan: CoursePlan, course_type: str, *,
                  assumed_distance_km: float | None = None,
-                 duration_notice: str = "") -> CallToolResult:
+                 request_notice: str = "") -> CallToolResult:
     # The plan owns one short spoken sentence for every case. Generator copy
     # can contain scoring rationale that belongs on the detail page, not in a
     # concise chat handoff beside the widget.
@@ -1329,12 +1373,12 @@ def _plan_result(plan: CoursePlan, course_type: str, *,
         if plan.requested_start else None)
     selection["start_change_notice"] = _start_change_notice(selection)
     selection["assumed_distance_km"] = assumed_distance_km
-    selection["duration_notice"] = duration_notice
+    selection["request_notice"] = request_notice
     final_text = _plan_final_text(selection)
     # Both notices are ordinary copy for the card; the runner reads what was
     # changed about their request before the courses that answer it.
     widget = (_plan_widget(plan, start_notice=" ".join(filter(None, (
-                  duration_notice, selection["start_change_notice"]))))
+                  request_notice, selection["start_change_notice"]))))
               if KAKAO_WIDGETS_ENABLED else None)
     if widget is None:
         # Never return the original generator's requested-animal copy once a
@@ -2447,6 +2491,9 @@ def create_seoul_running_course(
         Field(description=(
             "Required course intent. standard=일반 러닝/달리기 코스; "
             "best_animal=동물 종류를 지정하지 않은 동물/GPS 아트 추천; "
+            "지원 동물은 강아지·고양이·토끼·고래 4종뿐입니다. 곰·사자처럼 "
+            "지원하지 않는 동물을 요청받으면 best_animal로 바꿔 호출하지 말고, "
+            "그 동물은 아직 만들 수 없다는 것과 이 4종을 안내하세요. "
             "dog=강아지·댕댕이; cat=고양이·야옹이; rabbit=토끼; whale=고래. "
             "동물 표현이 있으면 standard를 선택하지 마세요."
         )),

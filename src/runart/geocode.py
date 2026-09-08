@@ -104,6 +104,23 @@ except ImportError:  # pragma: no cover
 # seven catalogue distances (선유도 is an island: 4 of 7, including the 5km
 # default, up from 3). Offsets are 145-299m; the name still describes where
 # the runner starts. Verified by scripts/audit_gazetteer_starts.py.
+def _subject_josa(word: str) -> str:
+    """이/가 by the last syllable's final consonant."""
+    last = word.strip()[-1:] if word.strip() else ""
+    if not ("가" <= last <= "힣"):
+        return "이"
+    return "이" if (ord(last) - 0xAC00) % 28 else "가"
+
+
+# Deictic and generic words: they name a place only to the speaker.
+DEICTIC_STARTS = frozenset({
+    "우리집", "저희집", "집", "집앞", "집근처", "우리집근처", "울집",
+    "회사", "저희회사", "우리회사", "회사근처", "사무실", "직장",
+    "학교", "우리학교", "저희학교", "학교근처", "기숙사", "자취방",
+    "우리동네", "저희동네", "동네", "동네근처", "근처", "이근처", "여기",
+    "현위치", "내위치", "지금위치", "여기근처", "아무데나", "아무곳",
+})
+
 GAZETTEER: dict[str, tuple[float, float]] = {
     # 도심
     "서울시청": (37.5665, 126.9780), "시청": (37.5665, 126.9780),
@@ -638,6 +655,17 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
         raise CourseError("구 단위 새 코스는 코스 추천을 요청해 주세요. 출발점 변경에는 역·주소 등 특정 위치가 필요해요.")
     if location:
         key = location.replace(" ", "")
+        # A word that only means something to the person who said it. The
+        # keyword API answers every one of them with a shop that happens to
+        # carry the name -- measured in production: 우리집 became a restaurant
+        # called 우리집, 회사 became 상장회사회관, 학교 became 홍익대학교 -- and
+        # the reply looked like a success with the runner's own word on it.
+        if key in DEICTIC_STARTS:
+            shown = _echo(location)
+            raise CourseError(
+                f"'{shown}'{_subject_josa(shown)} 어디인지는 알 수 없어요. "
+                "역 이름이나 주소로 알려주세요. 예: 성수역, 테헤란로 8길 8"
+            )
         # Explicit station intent must use the same canonical coordinates as
         # the bundled animal presets, even when a landmark alias also exists.
         station_intent = _looks_like_station_query(location)

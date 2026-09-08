@@ -2,6 +2,8 @@
 
 import asyncio
 
+import pytest
+
 from runart import server
 from runart.animal_presets import PresetMatch
 from runart.course import Course
@@ -144,3 +146,33 @@ def test_a_verified_course_at_the_asked_start_is_offered_as_a_distance_change(mo
     assert option["changed_fields"][0] == "location"
     assert "출발지를" in option["label"]
     assert "직선 372m" in moved["assistant_final_text"]
+
+
+def test_a_word_that_only_the_speaker_can_place_is_asked_about():
+    """Measured in production: 우리집 resolved to a restaurant of that name,
+    회사 to 상장회사회관, 학교 to 홍익대학교 -- each a course somewhere the
+    runner had never been, returned as a success under their own word."""
+    from runart.course import CourseError
+
+    for word in ("우리집", "회사", "학교", "집 근처", "여기"):
+        with pytest.raises(CourseError) as exc:
+            server.resolve_location(word, None, None)
+        assert "어디인지는 알 수 없어요" in str(exc.value)
+        assert "성수역" in str(exc.value)   # 무엇을 말해야 하는지 예시로 보여준다
+
+
+def test_a_real_place_name_is_not_caught_by_the_word_list():
+    """Exact matches only: 우리집닭갈비 and 홍익대학교 are real places."""
+    from runart.geocode import DEICTIC_STARTS
+
+    assert "우리집닭갈비" not in DEICTIC_STARTS
+    assert "홍익대학교" not in DEICTIC_STARTS
+    assert all(" " not in word for word in DEICTIC_STARTS)
+
+
+def test_a_facility_too_rare_to_meet_says_how_rare():
+    """음수대 is 213 places in Seoul against 14,128 facilities: no start can
+    satisfy it, and "조건을 충족하지 못했어요" left the runner retrying."""
+    note = server._scarce_facility_note({"water"})
+    assert "음수대는 서울에" in note and "곳만 등록" in note
+    assert server._scarce_facility_note({"convenience_store"}) == ""
