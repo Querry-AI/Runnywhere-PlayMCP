@@ -146,7 +146,7 @@ def course_badges(course) -> list[dict]:
         badges.append({
             "emoji": NIGHT_EMOJI,
             "label": night_lighting_label(course.rfs),
-            "detail": f"{night_basis_text(course.rfs)}. 현장 안전을 보장하지는 않아요.",
+            "detail": f"{night_basis_text(course.rfs)} 현장 안전을 보장하지는 않아요.",
         })
 
     return badges

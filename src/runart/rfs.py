@@ -123,9 +123,8 @@ def night_basis_text(summary: dict) -> str:
         return ""
     lit = (summary.get("components") or {}).get("lighting")
     if isinstance(lit, (int, float)) and not isinstance(lit, bool) and lit >= NIGHT_LIGHTING_MIN:
-        return "가로등 데이터가 야간 추천 최소 기준을 통과했어요"
-    ratio = summary.get("major_road_ratio") or 0
-    return f"큰길 구간이 {ratio:.0%}라 야간 추천 기준을 통과했어요"
+        return "코스에 가로등이 많아 야간 안심 코스로 추천드렸어요!"
+    return "코스에 큰길 구간이 많아 야간 안심 코스로 추천드렸어요!"
 
 
 COMPONENT_LABELS_KO = {

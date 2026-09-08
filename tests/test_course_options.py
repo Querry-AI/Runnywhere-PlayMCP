@@ -789,6 +789,6 @@ def test_a_big_road_course_qualifies_for_night_without_streetlight_data():
     assert has_sufficient_night_lighting(dark_big_road)
     assert not has_sufficient_night_lighting(dark_alley)
     assert night_lighting_label(dark_big_road) == "야간 안심"
-    assert "큰길 구간이 50%" in night_basis_text(dark_big_road)
-    assert "가로등" in night_basis_text(
-        {"components": {"lighting": .5}, "lighting_observed_ratio": 1.0})
+    assert night_basis_text(dark_big_road) == "코스에 큰길 구간이 많아 야간 안심 코스로 추천드렸어요!"
+    assert night_basis_text({"components": {"lighting": .5}, "lighting_observed_ratio": 1.0}) == (
+        "코스에 가로등이 많아 야간 안심 코스로 추천드렸어요!")
