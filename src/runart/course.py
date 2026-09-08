@@ -67,6 +67,15 @@ class CourseError(Exception):
     """User-facing generation failure; message must say what to do next."""
 
 
+class StartNotFoundError(CourseError):
+    """The start cannot be placed on a map at all.
+
+    Distinct from a course that could not be built: the classifier downstream
+    matches phrases, so a new wording fell through to "검증 가능한 후보를
+    확보하지 못했어요" and buried the only useful thing we knew.
+    """
+
+
 class CourseAccessError(CourseError):
     """An existing route cannot be served under the current access rules."""
 

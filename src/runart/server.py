@@ -42,9 +42,10 @@ from .animal_presets import (MISSING as PRESET_MISSING, PresetMatch,
                              find_nearest_animal_preset, get_animal_preset,
                              preset_status)
 from .course import (MAX_VIA_POINTS, Course, CourseAccessError, CourseError,
-                     CourseGapOpen, DistanceMissError, course_from_path,
-                     ensure_course_runnable, generate_course, reroute_segment,
-                     route_via_points, snap_drawn_segment, snap_drawn_strokes)
+                     CourseGapOpen, DistanceMissError, StartNotFoundError,
+                     course_from_path, ensure_course_runnable, generate_course,
+                     reroute_segment, route_via_points, snap_drawn_segment,
+                     snap_drawn_strokes)
 from .courseplan import (CASE_EXACT, EFFORT_TOLERANCE, KIND_REQUESTED, NEARBY_RADIUS_M,
                          RECOMMENDATION_COUNT, SAME_START_M,
                          CourseChoice, CoursePlan, build_course_plan, requested_distance,
@@ -885,6 +886,15 @@ def _duration_cap_notice(request: dict) -> str:
             f"1시간({max(CATALOG_DISTANCES_KM):g}km) 코스로 추천해요.")
 
 
+# One name inside the other, near enough to be the same doorway: 시청 and
+# 시청역 20m apart is the label the preset happens to carry, not news.
+SAME_PLACE_M = 50.0
+
+
+def _same_place(actual: str, requested: str, offset_m: float) -> bool:
+    return offset_m < SAME_PLACE_M and (actual in requested or requested in actual)
+
+
 def _start_change_notice(selection: dict) -> str:
     """Disclose measured relocation without claiming a missing exact option."""
     requested = selection.get("requested_start")
@@ -899,7 +909,8 @@ def _start_change_notice(selection: dict) -> str:
         # titled 강남역 -- 98m away, correct, and with the address the runner
         # typed nowhere in the reply. Name both places whenever the label
         # differs, however small the distance.
-        renamed = [c for c in choices if c["start"] != requested]
+        renamed = [c for c in choices if not _same_place(c["start"], requested,
+                                                        c.get("start_offset_m") or 0)]
         if not renamed:
             return ""
         places = ", ".join(dict.fromkeys(c["start"] for c in renamed))
@@ -1656,6 +1667,11 @@ def _specific_course_result(request: dict, course_type: str) -> CallToolResult:
         lat, lon, name = request.get("_resolved") or _resolve_start(
             request.get("location"), request.get("lat"), request.get("lon"),
             timeout_s=ADDRESS_TRY_BUDGET_S)
+    except StartNotFoundError as exc:
+        # A start that cannot be placed is not a shortage of courses, and the
+        # phrase classifier below would have called it one.
+        return _mcp_result(f"⚠️ {error_text(str(exc))}",
+                           code="location_not_found", is_error=True)
     except CourseError as exc:
         return _course_tool_result(f"⚠️ {error_text(str(exc))}", course_type=course_type, request=request)
     request.update(_resolved=(lat, lon, name))

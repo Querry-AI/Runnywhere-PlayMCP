@@ -19,7 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from .course import CourseError
+from .course import CourseError, StartNotFoundError
 from .stations import SEOUL_METRO_STATIONS
 
 log = logging.getLogger(__name__)
@@ -662,7 +662,7 @@ def resolve_location(location: str | None, lat: float | None, lon: float | None,
         # the reply looked like a success with the runner's own word on it.
         if key in DEICTIC_STARTS:
             shown = _echo(location)
-            raise CourseError(
+            raise StartNotFoundError(
                 f"'{shown}'{_subject_josa(shown)} 어디인지는 알 수 없어요. "
                 "역 이름이나 주소로 알려주세요. 예: 성수역, 테헤란로 8길 8"
             )

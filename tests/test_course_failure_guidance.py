@@ -176,3 +176,14 @@ def test_a_facility_too_rare_to_meet_says_how_rare():
     note = server._scarce_facility_note({"water"})
     assert "음수대는 서울에" in note and "곳만 등록" in note
     assert server._scarce_facility_note({"convenience_store"}) == ""
+
+
+def test_the_tool_refuses_a_deictic_start_as_a_location_failure():
+    """resolve_location refusing is not enough: the ⚠️ classifier matches
+    phrases, and a new one fell through to "검증 가능한 후보를 확보하지
+    못했어요", which reads as our shortage rather than their word."""
+    result = server.create_seoul_running_course(
+        course_type="standard", location="우리집", distance_km=5)
+
+    assert result.structuredContent["result_code"] == "location_not_found"
+    assert "어디인지는 알 수 없어요" in result.content[0].text
