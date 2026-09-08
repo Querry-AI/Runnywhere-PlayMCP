@@ -18,7 +18,7 @@ from .facilities import facilities_along
 from .geo import haversine_m
 from .infrastructure import pedestrian_signals_crossed
 from .naming import GREEN_SHARE_MIN, green_share
-from .rfs import GOOD_LIGHTING_MIN, has_sufficient_night_lighting, night_lighting_label
+from .rfs import GOOD_LIGHTING_MIN, course_is_night_ready, night_lighting_label
 
 # Four chips is one comfortable line on a phone; past that they wrap into a
 # block that competes with the headline numbers.
@@ -193,7 +193,7 @@ def course_traits(course: Course) -> tuple[dict, ...]:
     else:
         traits.append({"emoji": "🏙️", "label": "도심 위주"})
 
-    if course.params.night_mode and has_sufficient_night_lighting(course.rfs):
+    if course.params.night_mode and course_is_night_ready(course):
         traits.append({"emoji": "💡", "label": night_lighting_label(course.rfs)})
 
     comps = _components(course)
@@ -241,7 +241,7 @@ def course_cautions(course: Course, counts: dict[str, int],
     gain_per_km = course.ascent_m / course.length_km if course.length_km else 0.0
     notes: list[str] = []
 
-    if course.params.night_mode and not has_sufficient_night_lighting(course.rfs):
+    if course.params.night_mode and not course_is_night_ready(course):
         notes.append("가로등이 충분한지 확인되지 않아 야간 러닝에는 추천하지 않아요.")
 
     if _verdict(comps, "crossing") == "poor" and signals:

@@ -68,7 +68,7 @@ from .render import (card_svg, course_edit_summary, course_markdown,
 from .shapes import (MAX_ANIMAL_ART_KM, SHAPES, find_min_clean_course,
                      generate_shape_course, list_shapes)
 from .rfs import route_rfs_summary  # noqa: F401  (re-export for tests)
-from .rfs import has_sufficient_night_lighting
+from .rfs import course_is_night_ready
 from .park_presets import PARK_SPOTS, park_courses, select_park_courses
 from .standard_presets import (get_standard_preset, nearest_start_preset,
                                on_route_preset)
@@ -728,7 +728,7 @@ def _standard_alternatives(probe: CourseParams, standard: Course | None,
         course = courses.get(variant)
         if not isinstance(course, Course):
             continue
-        if probe.night_mode and not has_sufficient_night_lighting(course.rfs):
+        if probe.night_mode and not course_is_night_ready(course):
             continue
         signature = route_signature(course)
         if signature is None or signature in seen:
@@ -761,7 +761,7 @@ def _animal_course_plan(request: dict, shape: str, text: str,
               if (c := _cached_course(cid)) is not None]
     standard = next((c for c in cached if c.params.shape is None and
                      haversine_m(lat, lon, c.params.lat, c.params.lon) < SAME_START_M
-                     and (not probe.night_mode or has_sufficient_night_lighting(c.rfs))), None)
+                     and (not probe.night_mode or course_is_night_ready(c))), None)
     # No base route means no variants: never spend the remaining budget
     # re-running an already failed standard generation.
     if shape == "standard" and standard is None:
@@ -1262,7 +1262,7 @@ def _recommendation_shortage(count: int, *, night_mode: bool = False,
     text = f"현재 조건에서 {condition}코스를 찾지 못했어요. 출발지나 거리 조건을 조정해 다시 요청해 주세요."
     if night_mode:
         counts = Counter(_course_district(c) for c in all_verified_animal_presets()
-                         if has_sufficient_night_lighting(c.rfs))
+                         if course_is_night_ready(c))
         alternatives = sorted((d for d in counts if d and d != district), key=lambda d: (-counts[d], d))[:3]
         text = f"{district + '에서는' if district else '이 출발지에서는'} 조명이 확인된 야간 코스를 찾지 못했어요. 야간 최소 기준에 못 미치거나 조명이 미확인인 코스는 제외했어요."
         if alternatives:
@@ -1561,7 +1561,7 @@ def _eligible_matches(matches: list[PresetMatch], request: dict, course_type: st
         hills = request.get("include_hills")
         if hills is not None and course.is_flat == hills:
             reasons.append("terrain")
-        if request.get("night_mode") and not has_sufficient_night_lighting(course.rfs):
+        if request.get("night_mode") and not course_is_night_ready(course):
             reasons.append("lighting")
         # A daytime animal preset cannot acquire night parameters: its URL
         # would regenerate a different route after cache eviction/restart.
@@ -1647,7 +1647,7 @@ def _district_course_result(request: dict, course_type: str) -> CallToolResult:
     stations = DISTRICT_STATIONS[district]
     if night:
         lit_points = Counter((round(c.params.lat, 5), round(c.params.lon, 5))
-                             for c in pool if has_sufficient_night_lighting(c.rfs))
+                             for c in pool if course_is_night_ready(c))
         stations = [s for s in stations if (round(s[0], 5), round(s[1], 5)) in lit_points]
         stations = sorted(stations, key=lambda s: (-lit_points[(round(s[0], 5), round(s[1], 5))], s[2], s[:2]))
     else:
@@ -1996,7 +1996,7 @@ def _run(params: CourseParams, note: str = "",
          asked_minutes: float | None = None) -> str:
     try:
         course = _get_course(params, timeout_s=timeout_s)
-        if params.night_mode and not has_sufficient_night_lighting(course.rfs):
+        if params.night_mode and not course_is_night_ready(course):
             raise CourseError("가로등이 충분한지 확인되지 않아 야간 코스로 추천할 수 없어요. "
                               "출발지나 거리를 바꿔 다시 요청해 주세요.")
         facs = facilities_along(route_points(course), params.need_facilities or None)

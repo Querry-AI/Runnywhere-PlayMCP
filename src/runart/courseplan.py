@@ -12,7 +12,7 @@ from .models import (CATALOG_DISTANCES_KM, DEFAULT_PACE_MIN_PER_KM,
                      MAX_DURATION_MIN, encode_course_id)
 from .naming import TRACK_EMOJI, course_title
 from .shapes import SHAPES
-from .rfs import has_sufficient_night_lighting
+from .rfs import course_is_night_ready
 
 NEARBY_RADIUS_M = 2000.0
 SAME_START_M = 150.0
@@ -106,7 +106,7 @@ def _preference_misses(course: Course, *, include_hills: bool,
         misses += 1
     # Night eligibility uses the shared measured-lighting threshold, without
     # a separate CCTV quota. CCTV remains a soft routing weight.
-    if night_mode and not has_sufficient_night_lighting(course.rfs):
+    if night_mode and not course_is_night_ready(course):
         misses += 1
     return misses
 
@@ -137,7 +137,7 @@ def build_course_plan(
     def add(course: Course | None, moved: float) -> None:
         if course is None:
             return
-        if night_mode and not has_sufficient_night_lighting(course.rfs):
+        if night_mode and not course_is_night_ready(course):
             return
         kind = (KIND_STANDARD if not course.params.shape else
                 KIND_REQUESTED if shape == "best_animal" or course.params.shape == shape

@@ -94,6 +94,23 @@ def has_sufficient_night_lighting(summary: dict) -> bool:
     return value != .5 or _major_road_ok(summary)
 
 
+def course_is_night_ready(course) -> bool:
+    """The night rule for a course whose summary predates the major-road half.
+
+    Computing the ratio for every restored catalogue entry cost 12ms against a
+    0.02ms restore -- measured -- and only a night request ever asks. So it is
+    computed here, on demand, and kept on the summary it belongs to.
+    """
+    summary = course.rfs
+    if has_sufficient_night_lighting(summary):
+        return True
+    if "major_road_ratio" not in summary and getattr(course, "path", None):
+        from . import graph as graphmod   # 지연 임포트: graph는 rfs를 쓰지 않는다
+        summary["major_road_ratio"] = round(
+            major_road_ratio(graphmod.get_graph(), course.path), 2)
+    return _major_road_ok(summary)
+
+
 def night_lighting_label(summary: dict) -> str:
     if not has_sufficient_night_lighting(summary):
         return ""

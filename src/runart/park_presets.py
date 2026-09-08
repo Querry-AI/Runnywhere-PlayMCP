@@ -13,7 +13,7 @@ from .data_integrity import verify_data_file
 from .geo import haversine_m
 from .models import CourseParams
 from .naming import green_share
-from .rfs import has_sufficient_night_lighting
+from .rfs import course_is_night_ready
 
 
 @dataclass(frozen=True)
@@ -77,7 +77,7 @@ def select_park_courses(origin: tuple[float, float] | None = None, *,
     """One distinct course per destination. Distance is to the actual start."""
     candidates = list(park_courses() if candidates is None else candidates)
     if night_mode:
-        candidates = [item for item in candidates if has_sufficient_night_lighting(item[1].rfs)]
+        candidates = [item for item in candidates if course_is_night_ready(item[1])]
     if origin is None:
         return random.sample(candidates, min(3, len(candidates)))
     candidates.sort(key=lambda item: (

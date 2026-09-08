@@ -102,7 +102,7 @@ def test_district_standard_uses_one_station_without_geocoding(monkeypatch):
 
 def test_night_uncovered_district_gives_evidence_based_alternatives():
     covered = {server._course_district(c) for c in server.all_verified_animal_presets()
-               if server.has_sufficient_night_lighting(c.rfs)}
+               if server.course_is_night_ready(c)}
     uncovered = set(geocode._SEOUL_DISTRICTS) - covered
     assert "강북구" in uncovered
     for district in uncovered:

@@ -25,22 +25,10 @@ from .course import (MAX_COURSE_START_OFFSET_M, Course, CourseError,
 from .data_integrity import verify_data_file
 from .courseplan import EFFORT_TOLERANCE
 from .geo import haversine_m
-from .rfs import major_road_ratio
 from .models import (CATALOG_DISTANCES_KM, CourseParams, decode_course_id,
                      encode_course_id)
 
 
-
-def _with_major_road_ratio(summary: dict, path: list) -> dict:
-    """Fill the night rule's second input on catalogues built before it.
-
-    0.074ms per course against a rebuild of 22,567 entries, and the stored
-    summary is the only thing the night check ever sees.
-    """
-    if not isinstance(summary, dict) or "major_road_ratio" in summary or not path:
-        return summary
-    return {**summary, "major_road_ratio": round(
-        major_road_ratio(graphmod.get_graph(), path), 2)}
 
 def _data_path(filename: str) -> Path:
     """Same search order as graph.py/animal_presets.py."""
@@ -112,7 +100,7 @@ def _restore(raw: dict, graph=None) -> Course:
                 else [(nodes[n]["lat"], nodes[n]["lon"]) for n in raw["path"]]),
         length_m=raw["length_m"],
         ascent_m=raw["ascent_m"],
-        rfs=_with_major_road_ratio(raw["rfs"], raw["path"]),
+        rfs=raw["rfs"],
         shape_similarity=raw.get("shape_similarity"),
     )
 
