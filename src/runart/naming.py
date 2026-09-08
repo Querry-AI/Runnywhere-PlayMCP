@@ -11,7 +11,8 @@ import re
 from . import graph as graphmod
 from .models import clean_course_name
 from .shapes import SHAPES
-from .rfs import has_sufficient_night_lighting, night_lighting_label
+from .rfs import (has_sufficient_night_lighting, night_basis_text,
+                   night_lighting_label)
 
 COURSE_EDIT_NOTICE = "코스를 열면 경로를 직접 편집할 수 있어요."
 
@@ -146,7 +147,7 @@ def course_badges(course) -> list[dict]:
         badges.append({
             "emoji": NIGHT_EMOJI,
             "label": night_lighting_label(course.rfs),
-            "detail": "가로등 데이터가 야간 추천 최소 기준을 통과했어요. 현장 안전을 보장하지는 않아요.",
+            "detail": f"{night_basis_text(course.rfs)}. 현장 안전을 보장하지는 않아요.",
         })
 
     return badges

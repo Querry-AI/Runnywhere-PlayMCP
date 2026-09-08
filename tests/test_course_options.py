@@ -415,9 +415,10 @@ def test_park_recommendations_accept_coordinates_and_preserve_night_lighting():
     assert all(c.params.night_mode and has_sufficient_night_lighting(c.rfs) for c in courses)
     # Yangjae (.34) is below .4; Yeouido (.47) no longer needs the old .6 cutoff.
     assert "양재천" not in {c.params.location_name for c in courses}
-    assert all(c.rfs["components"]["lighting"] >= .4 for c in courses)
+    assert all(c.rfs["components"]["lighting"] >= .4
+               or c.rfs.get("major_road_ratio", 0) >= .5 for c in courses)
     assert "야간 조명이 많은" in _lead(result)
-    assert "야간 조명 많음" in result.content[0].text
+    assert "야간 안심" in result.content[0].text
 
 
 @pytest.mark.parametrize("widget_fails", [False, True])
@@ -463,6 +464,7 @@ def test_park_catalogue_returns_up_to_three_without_filling_with_dark_routes(mon
     courses = deepcopy(park_presets.park_courses())
     for i, (_, course) in enumerate(courses):
         course.rfs["components"]["lighting"] = .4 if i < eligible_count else .39
+        course.rfs["major_road_ratio"] = 0.0   # 이 경우는 조명 규칙만 본다
     monkeypatch.setattr(server, "park_courses", lambda: courses)
     result = server.create_seoul_running_course(
         course_type="standard", need_facilities=["park"], night_mode=True, location=location)
@@ -567,7 +569,7 @@ def test_partial_recommendations_survive_all_course_modes(
     if widget_enabled:
         assert len(set(_urls(_card(result)))) == count
         if night_mode:
-            assert result.content[0].text.count("야간 조명 많음") >= count
+            assert result.content[0].text.count("야간 안심") >= count
     else:
         assert result.content[0].text.endswith(server.COURSE_EDIT_NOTICE)
     if count < 3:
@@ -601,6 +603,9 @@ def test_night_request_returns_three_lit_routes_or_no_recommendation(monkeypatch
         summary["components"].pop("lighting", None)
         if lighting is not None:
             summary["components"]["lighting"] = lighting
+        # This case is about the lighting rule; the major-road rule is the
+        # other way in and would answer for it.
+        summary["major_road_ratio"] = 0.0
         return summary
 
     # Controlled measurements exercise the real router and MCP boundary;
@@ -632,6 +637,7 @@ def test_night_refinement_rejects_cached_course_with_insufficient_lighting(monke
 
     course = generate_course(CourseParams(lat=37.4986, lon=127.0281))
     course.rfs["components"]["lighting"] = .3
+    course.rfs["major_road_ratio"] = 0.0
     monkeypatch.setattr(server, "_get_course", lambda *args, **kwargs: course)
     text = server.refine_course(encode_course_id(course.params), night_mode=True)
     assert text.startswith("⚠️")
@@ -766,3 +772,23 @@ def test_the_tool_refuses_to_substitute_an_animal_it_cannot_draw():
     described = tool.inputSchema["properties"]["course_type"]["description"]
     assert "강아지·고양이·토끼·고래" in described
     assert "best_animal로 바꿔 호출하지 말고" in described
+
+
+def test_a_big_road_course_qualifies_for_night_without_streetlight_data():
+    """The bundled streetlight file is bridge and overpass lighting -- 19,316
+    points, 13% of walkable edges -- so 강남대로 scored 0.32 (nothing in reach)
+    and every 밤에 뛸 코스 request around it failed. Half the route on roads a
+    map draws thick is the second way in."""
+    from runart.rfs import (NIGHT_MAJOR_ROAD_MIN, has_sufficient_night_lighting,
+                            night_basis_text, night_lighting_label)
+
+    dark_big_road = {"components": {"lighting": .32}, "lighting_observed_ratio": 1.0,
+                     "major_road_ratio": NIGHT_MAJOR_ROAD_MIN}
+    dark_alley = {**dark_big_road, "major_road_ratio": .49}
+
+    assert has_sufficient_night_lighting(dark_big_road)
+    assert not has_sufficient_night_lighting(dark_alley)
+    assert night_lighting_label(dark_big_road) == "야간 안심"
+    assert "큰길 구간이 50%" in night_basis_text(dark_big_road)
+    assert "가로등" in night_basis_text(
+        {"components": {"lighting": .5}, "lighting_observed_ratio": 1.0})

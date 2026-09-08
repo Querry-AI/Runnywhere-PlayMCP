@@ -28,10 +28,53 @@ WEIGHTS_NIGHT = {
 FLAT_MAX_SLOPE_PCT = 3.0
 HILL_SWEET_LO, HILL_SWEET_HI = 3.0, 8.0
 SCORE_FLOOR = 0.25
-# Product threshold for night recommendations and the "야간 조명 많음" label.
+# Product threshold for the lighting half of the night rule; see
+# NIGHT_MAJOR_ROAD_MIN for the other half. Both carry the "야간 안심" label.
 # This dataset score is not a lux measurement or a guarantee of safety.
 NIGHT_LIGHTING_MIN = 0.40
 GOOD_LIGHTING_MIN = 0.60
+
+
+# The road classes a map draws thick: lit shopfronts, traffic, and people.
+# Kept here rather than imported from course.py, which imports this module.
+MAJOR_ROAD_HIGHWAYS = frozenset({
+    "primary", "primary_link", "secondary", "secondary_link",
+    "tertiary", "tertiary_link", "trunk",
+})
+# Half the route on such roads is the second way a course qualifies for night.
+# The streetlight dataset is bridge and overpass lighting -- 19,316 points, and
+# only 13% of Seoul's walkable edges have one in reach -- so 강남대로 scored
+# 0.32 (nothing nearby) while a riverside path beside a bridge scored 0.44.
+NIGHT_MAJOR_ROAD_MIN = 0.50
+
+
+def _highway(attrs: dict) -> str:
+    value = attrs.get("highway")
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else ""
+    return str(value or "")
+
+
+def major_road_ratio(graph, path: list) -> float:
+    """Share of the route's length on roads a map draws thick."""
+    total = major = 0.0
+    for u, v in zip(path, path[1:]):
+        # A stored path can name an edge this graph build no longer has, and a
+        # night label is not worth raising over: skip what cannot be measured.
+        if not graph.has_edge(u, v):
+            continue
+        attrs = graph.edges[u, v]
+        length = float(attrs.get("length", 0.0))
+        total += length
+        if _highway(attrs) in MAJOR_ROAD_HIGHWAYS:
+            major += length
+    return major / total if total else 0.0
+
+
+def _major_road_ok(summary: dict) -> bool:
+    ratio = summary.get("major_road_ratio")
+    return (isinstance(ratio, (int, float)) and not isinstance(ratio, bool)
+            and ratio >= NIGHT_MAJOR_ROAD_MIN)
 
 
 def has_sufficient_night_lighting(summary: dict) -> bool:
@@ -39,20 +82,33 @@ def has_sufficient_night_lighting(summary: dict) -> bool:
     value = (summary.get("components") or {}).get("lighting")
     if not (isinstance(value, (int, float)) and not isinstance(value, bool)
             and NIGHT_LIGHTING_MIN <= value <= 1):
-        return False
+        return _major_road_ok(summary)
     observed = summary.get("lighting_observed_ratio")
     if observed is not None:
-        return (isinstance(observed, (int, float)) and not isinstance(observed, bool)
-                and 0 < observed <= 1)
+        if (isinstance(observed, (int, float)) and not isinstance(observed, bool)
+                and 0 < observed <= 1):
+            return True
+        return _major_road_ok(summary)
     # Older preset summaries have no observation field. Any non-neutral
     # aggregate proves some measured input, but .5 alone could be all defaults.
-    return value != .5
+    return value != .5 or _major_road_ok(summary)
 
 
 def night_lighting_label(summary: dict) -> str:
     if not has_sufficient_night_lighting(summary):
         return ""
-    return "야간 조명 많음"
+    return "야간 안심"
+
+
+def night_basis_text(summary: dict) -> str:
+    """Which of the two rules let this course through, in the runner's words."""
+    if not has_sufficient_night_lighting(summary):
+        return ""
+    lit = (summary.get("components") or {}).get("lighting")
+    if isinstance(lit, (int, float)) and not isinstance(lit, bool) and lit >= NIGHT_LIGHTING_MIN:
+        return "가로등 데이터가 야간 추천 최소 기준을 통과했어요"
+    ratio = summary.get("major_road_ratio") or 0
+    return f"큰길 구간이 {ratio:.0%}라 야간 추천 기준을 통과했어요"
 
 
 COMPONENT_LABELS_KO = {
@@ -104,6 +160,7 @@ def route_rfs_summary(
     score_len = 0.0
     comp_len: dict[str, float] = {k: 0.0 for k in w}
     park_len = 0.0
+    major_len = 0.0
     lighting_observed_len = 0.0
     for u, v in zip(path, path[1:]):
         attrs = graph.edges[u, v]
@@ -118,6 +175,8 @@ def route_rfs_summary(
         comp_len["crossing"] += attrs.get("crossing_score", 0.5) * length
         if attrs.get("park_score", 0.0) >= 0.8:
             park_len += length
+        if _highway(attrs) in MAJOR_ROAD_HIGHWAYS:
+            major_len += length
         # Missing/untagged graph inputs use .5. A measured .5 can be known
         # from the raw OSM tag; other non-neutral scores include ETL evidence.
         lighting = attrs.get("lighting_score")
@@ -140,6 +199,7 @@ def route_rfs_summary(
         "top_percent": citywide_top_percent(score01),
         "highlights": highlights[:3],
         "park_ratio": park_ratio,
+        "major_road_ratio": round(major_len / total_len, 2),
         "components": {k: round(v, 2) for k, v in comps.items()},
         "lighting_observed_ratio": lighting_observed_len / total_len,
         "weights": w,

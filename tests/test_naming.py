@@ -74,15 +74,20 @@ def test_night_badge_says_many_lights_from_point_four():
     day = generate_course(CourseParams(**CITY_HALL, distance_km=5.0))
     assert len(course_badges(day)) == 2
     day.params.night_mode = True
+    day.rfs["major_road_ratio"] = 0.0     # 조명 규칙만 보는 경우
     day.rfs["components"]["lighting"] = .39
     assert len(course_badges(day)) == 2
     day.rfs["components"]["lighting"] = .4
-    assert course_badges(day)[2]["label"] == "야간 조명 많음"
+    assert course_badges(day)[2]["label"] == "야간 안심"
     day.rfs["components"]["lighting"] = .9
     night_badges = course_badges(day)
     assert len(night_badges) == 3
     assert night_badges[2]["emoji"] == "💡"
-    assert night_badges[2]["label"] == "야간 조명 많음"
+    assert night_badges[2]["label"] == "야간 안심"
+    # 조명이 없어도 큰길 위주면 같은 배지를 받는다.
+    day.rfs["components"]["lighting"] = .32
+    day.rfs["major_road_ratio"] = .5
+    assert course_badges(day)[2]["label"] == "야간 안심"
 
 
 def test_green_share_separates_riverside_from_city_courses():

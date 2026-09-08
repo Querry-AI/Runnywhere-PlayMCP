@@ -45,6 +45,7 @@ def test_night_label_depends_on_actual_lighting_not_request_flag(lighting):
     course = _course()
     course.params.night_mode = True
     course.rfs["components"].pop("lighting", None)
+    course.rfs["major_road_ratio"] = 0.0   # 조명 규칙만 보는 경우
     if lighting is not None:
         course.rfs["components"]["lighting"] = lighting
     facts = course_facts(course)
@@ -53,7 +54,7 @@ def test_night_label_depends_on_actual_lighting_not_request_flag(lighting):
     assert any("야간 러닝에는 추천하지" in note for note in facts.cautions) is (not qualified)
     markdown = course_markdown(course, "https://runnywhere.example", [])
     assert markdown.endswith("코스를 열면 경로를 직접 편집할 수 있어요.")
-    assert ("야간 조명 많음" in markdown) is qualified
+    assert ("야간 안심" in markdown) is qualified
     assert "야간 조명 보통" not in markdown and "야간 조명 양호" not in markdown
     if qualified and lighting < .6:
         assert not any(trait["label"] == "조명 좋음" for trait in facts.traits)

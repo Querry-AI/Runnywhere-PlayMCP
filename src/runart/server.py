@@ -176,8 +176,9 @@ mcp = FastMCP(
         "call once per course or vary arguments to fill a list. If the result "
         "has only one or two eligible courses, show those without repeat calls or padding. "
         "Only zero eligible courses is insufficient_courses; explain it without repeat calls. "
-        "Night recommendations require measured lighting >=0.40 and use the label "
-        "'야간 조명 많음'. This is a dataset threshold, not a safety guarantee. Never silently "
+        "Night recommendations need measured lighting >=0.40 or at least half the "
+        "route on major roads, and use the label '야간 안심'. These are dataset "
+        "thresholds, not a safety guarantee. Never silently "
         "substitute poorly lit or unknown-lighting routes. Do not claim safety "
         "merely because night_mode was requested. "
         "Use this tool for 러닝 코스/달리기 코스/그려줘/짜줘/만들어줘/추천해줘/GPS 아트 "
@@ -2539,8 +2540,9 @@ def create_seoul_running_course(
     ))] = None,
     night_mode: Annotated[bool, Field(description=(
         "야간·밤·가로등·CCTV·안전 경로를 요청했을 때 true; 언급이 없으면 false. "
-        "true이면 관측된 조명 점수 0.4 이상인 코스만 추천하고 '야간 조명 많음'으로 표시합니다. "
-        "0.4 미만·미확인 코스는 제외합니다. 실제 안전을 보장하는 기준은 아닙니다."
+        "true이면 조명 점수 0.4 이상이거나 큰길 구간 50% 이상인 코스만 추천하고 "
+        "'야간 안심'으로 표시합니다. 둘 다 아닌 코스는 제외합니다. "
+        "실제 안전을 보장하는 기준은 아닙니다."
     ))] = False,
     need_facilities: Annotated[list[Literal["convenience_store", "restroom", "water", "park"]] | None, Field(description=(
         "convenience_store=편의점, restroom=화장실, water=마실 물·음수대. "

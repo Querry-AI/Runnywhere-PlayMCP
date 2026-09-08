@@ -18,8 +18,21 @@ from pathlib import Path
 from . import graph as graphmod
 from .course import Course, course_route_issues, rebase_closed_course_start
 from .data_integrity import verify_data_file
+from .rfs import major_road_ratio
 from .models import CourseParams
 
+
+
+def _with_major_road_ratio(summary: dict, path: list) -> dict:
+    """Fill the night rule's second input on catalogues built before it.
+
+    0.074ms per course against a rebuild of 22,567 entries, and the stored
+    summary is the only thing the night check ever sees.
+    """
+    if not isinstance(summary, dict) or "major_road_ratio" in summary or not path:
+        return summary
+    return {**summary, "major_road_ratio": round(
+        major_road_ratio(graphmod.get_graph(), path), 2)}
 
 def _data_path(filename: str) -> Path:
     """Same search order as graph.py/facilities.py: RUNART_DATA_DIR, then the
@@ -191,7 +204,7 @@ def _deserialize_course(raw: dict) -> Course:
         points=[tuple(point) for point in raw["points"]],
         length_m=raw["length_m"],
         ascent_m=raw["ascent_m"],
-        rfs=raw["rfs"],
+        rfs=_with_major_road_ratio(raw["rfs"], raw["path"]),
         shape_similarity=raw.get("shape_similarity"),
     ))
 
