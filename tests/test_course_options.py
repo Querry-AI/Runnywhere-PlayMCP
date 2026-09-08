@@ -792,3 +792,36 @@ def test_a_big_road_course_qualifies_for_night_without_streetlight_data():
     assert night_basis_text(dark_big_road) == "코스에 큰길 구간이 많아 야간 안심 코스로 추천드렸어요!"
     assert night_basis_text({"components": {"lighting": .5}, "lighting_observed_ratio": 1.0}) == (
         "코스에 가로등이 많아 야간 안심 코스로 추천드렸어요!")
+
+
+@pytest.mark.parametrize("asked, served", [(4.3, 4.0), (6.7, 7.0), (9.1, 10.0)])
+def test_an_odd_distance_is_served_from_the_catalogue_it_already_fits(asked, served):
+    """The catalogue holds 3/4/5/6/7/8/10km and a request already accepts a
+    course within EFFORT_TOLERANCE. Generating instead of using it cost 703ms
+    on average in production, peaking at 2,094ms against a 100ms budget."""
+    from runart.courseplan import requested_distance
+
+    assert requested_distance(asked, None) == served
+    # "정확히" means it, and nothing is snapped.
+    assert requested_distance(asked, None, True) == asked
+
+
+@pytest.mark.parametrize("asked", [12.0, 1.5, 42.0])
+def test_a_distance_no_catalogue_entry_fits_is_left_alone(asked):
+    from runart.courseplan import requested_distance
+
+    assert requested_distance(asked, None) == asked
+
+
+def test_a_snapped_distance_reaches_generation_too():
+    """The planner and the generator have to read one number: a 90-minute ask
+    once generated 13.8km against the planner's own 10km target and came back
+    as "조건을 만족하는 코스가 없어요"."""
+    params, _ = server._build_params("강남역", None, None, 4.3, None,
+                                     False, False, [], timeout_s=3.0)
+    assert params.distance_km == 4.0
+
+    strict, _ = server._build_params("강남역", None, None, 4.3, None,
+                                     False, False, [], timeout_s=3.0,
+                                     strict_distance=True)
+    assert strict.distance_km == 4.3

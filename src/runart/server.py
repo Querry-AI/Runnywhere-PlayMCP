@@ -742,7 +742,8 @@ def _animal_course_plan(request: dict, shape: str, text: str,
                         timeout_s: float) -> CoursePlan | None:
     """Shared priority order for standard, named and unspecified animal asks."""
     started = time.monotonic()
-    target = requested_distance(request.get("distance_km"), request.get("duration_min"))
+    target = requested_distance(request.get("distance_km"), request.get("duration_min"),
+                                bool(request.get("strict_distance")))
     try:
         lat, lon, name = request.get("_resolved") or _resolve_start(
             request.get("location"), request.get("lat"), request.get("lon"),
@@ -801,6 +802,7 @@ def _animal_course_plan(request: dict, shape: str, text: str,
         shape_matches=[], animal_matches=animals, standard=standard,
         standard_matches=standards,
         distance_km=request.get("distance_km"), duration_min=request.get("duration_min"),
+        strict_distance=bool(request.get("strict_distance")),
         include_hills=bool(request.get("include_hills")),
         night_mode=bool(request.get("night_mode")),
         need_facilities=request.get("need_facilities") or [],
@@ -1354,11 +1356,13 @@ def _result_from_course_plan(plan: CoursePlan, course_type: str,
         # Never fill unused card slots with an unapproved change of origin.
         if len(exact) != 1 + len(plan.alternatives):
             effort = " (기본 5km)" if course_type == "standard" and not requested_distance(
-                request.get("distance_km"), request.get("duration_min")) else ""
+                request.get("distance_km"), request.get("duration_min"),
+                bool(request.get("strict_distance"))) else ""
             plan = replace(plan, primary=exact[0], alternatives=tuple(exact[1:]), case=CASE_EXACT,
                            lead=f"{response_start_name(plan.requested_start)} 출발 코스 {len(exact)}개{effort}를 추천해요.")
     assumed = (DEFAULT_DISTANCE_KM if course_type == "standard" and not requested_distance(
-        request.get("distance_km"), request.get("duration_min")) else None)
+        request.get("distance_km"), request.get("duration_min"),
+        bool(request.get("strict_distance"))) else None)
     return _plan_result(plan, course_type, assumed_distance_km=assumed,
                         request_notice=" ".join(filter(None, (
                             _district_notice(request), _duration_cap_notice(request)))))
@@ -1536,7 +1540,8 @@ def _course_district(course: Course) -> str | None:
 def _eligible_matches(matches: list[PresetMatch], request: dict, course_type: str,
                       *, allow_animal_alternatives: bool = False) -> list[PresetMatch]:
     """Hard gates at the recommendation boundary; never mutate preset IDs."""
-    target = requested_distance(request.get("distance_km"), request.get("duration_min"))
+    target = requested_distance(request.get("distance_km"), request.get("duration_min"),
+                                bool(request.get("strict_distance")))
     district = request.get("_district")
     stats = request.setdefault("_stats", {"candidate_count": 0, "eligible_count": 0,
                                           "rejection_counts": Counter()})
@@ -1682,6 +1687,7 @@ def _specific_course_result(request: dict, course_type: str) -> CallToolResult:
         return fast
     common = {k: request.get(k) for k in ("location", "lat", "lon", "distance_km",
               "duration_min", "include_hills", "night_mode", "need_facilities")}
+    common["strict_distance"] = bool(request.get("strict_distance"))
     common["include_hills"] = bool(common["include_hills"])
     common["night_mode"] = bool(common["night_mode"])
     common.update(location=name, lat=lat, lon=lon)
@@ -1725,7 +1731,9 @@ def _dispatch_course_request(course_type: str, request: dict) -> CallToolResult:
             result = _specific_course_result(request, course_type)
         stats = request.get("_stats", {"candidate_count": 0, "eligible_count": 0, "rejection_counts": {}})
         conditions = {"course_type": course_type,
-                      "distance_km": requested_distance(request.get("distance_km"), request.get("duration_min")) if valid_effort else None,
+                      "distance_km": requested_distance(
+                          request.get("distance_km"), request.get("duration_min"),
+                          bool(request.get("strict_distance"))) if valid_effort else None,
                       "strict_distance": bool(request.get("strict_distance")),
                       "terrain": None if request.get("include_hills") is None else "hills" if request["include_hills"] else "flat",
                       "facilities": request.get("need_facilities") or [], "night_mode": bool(request.get("night_mode"))}
@@ -1943,12 +1951,18 @@ def _resolve_start(location, lat, lon, timeout_s=None):
 
 def _build_params(location, lat, lon, distance_km, duration_min, include_hills,
                   night_mode, need_facilities, shape=None,
-                  timeout_s: float | None = None) -> tuple[CourseParams, str]:
+                  timeout_s: float | None = None,
+                  strict_distance: bool = False) -> tuple[CourseParams, str]:
     """Returns (params, note). note explains any interpretation we made
     (e.g. duration→distance conversion) so the user sees the reasoning."""
     note = ""
     rlat, rlon, name = _resolve_start(location, lat, lon, timeout_s=timeout_s)
     asked_by_duration = distance_km is None and bool(duration_min)
+    # The planner reads the same request through requested_distance; generating
+    # against the raw number instead would search for a course the catalogue
+    # already holds one tolerance-width away.
+    if distance_km is not None:
+        distance_km = requested_distance(distance_km, None, strict_distance)
     if distance_km is None and duration_min:
         # One conversion for the whole service. This used to convert here as
         # well, half a km away from what the planner had already decided, and
@@ -2279,6 +2293,7 @@ def generate_running_course(
     lon: Annotated[float | None, Field(description="Start longitude (alternative to location). Seoul only: 126.76-127.19")] = None,
     distance_km: Annotated[float | None, Field(description="Target distance in km, 1-42.195")] = None,
     duration_min: Annotated[float | None, Field(description="Target duration in minutes, 10-360; converted to distance at 6:30/km if distance_km is absent")] = None,
+    strict_distance: bool = False,
     include_hills: Annotated[bool, Field(description="True to include uphill training segments (3-8% grade); False prefers flat routes")] = False,
     night_mode: Annotated[bool, Field(description="Night runs require measured lighting >=0.4; CCTV remains a preference")] = False,
     need_facilities: Annotated[list[str] | None, Field(description=(
@@ -2304,7 +2319,8 @@ def generate_running_course(
     try:
         params, note = _build_params(location, lat, lon, distance_km, duration_min,
                                      include_hills, night_mode, need_facilities,
-                                     timeout_s=remaining())
+                                     timeout_s=remaining(),
+                                     strict_distance=strict_distance)
     except CourseError as e:
         return f"⚠️ {e}"
     # The ask was a duration only when no distance came with it; that is the
@@ -2321,6 +2337,7 @@ def generate_animal_course(
     lon: Annotated[float | None, Field(description="Start longitude (alternative to location). Seoul only: 126.76-127.19")] = None,
     distance_km: Annotated[float | None, Field(description="Target distance in km, 1-42.195")] = None,
     duration_min: Annotated[float | None, Field(description="Target duration in minutes, 10-360")] = None,
+    strict_distance: bool = False,
     include_hills: Annotated[bool, Field(description="Include uphill segments")] = False,
     night_mode: Annotated[bool, Field(description="Allow ordinary lighting; exclude dark or unknown-lighting routes")] = False,
     need_facilities: Annotated[list[str] | None, Field(description=(
@@ -2431,7 +2448,8 @@ def generate_animal_course(
     try:
         params, note = _build_params(location, lat, lon, distance_km, duration_min,
                                      include_hills, night_mode, need_facilities,
-                                     shape=shape, timeout_s=remaining())
+                                     shape=shape, timeout_s=remaining(),
+                                     strict_distance=strict_distance)
     except CourseError as e:
         return f"⚠️ {e}"
     if shape in SHAPES and distance_km is not None:

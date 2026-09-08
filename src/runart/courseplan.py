@@ -72,8 +72,18 @@ class CoursePlan:
     requested_start: str | None = None
 
 
+def _snapped(km: float) -> float:
+    """The catalogue distance nearest ``km``, or ``km`` when none is close."""
+    if km >= max(CATALOG_DISTANCES_KM):
+        return max(CATALOG_DISTANCES_KM)
+    if km <= min(CATALOG_DISTANCES_KM):
+        return km
+    return min(CATALOG_DISTANCES_KM, key=lambda catalogued: abs(catalogued - km))
+
+
 def requested_distance(distance_km: float | None,
-                       duration_min: float | None) -> float | None:
+                       duration_min: float | None,
+                       strict: bool = False) -> float | None:
     """Use the same conversion as generation; explicit distance wins.
 
     A time is not a distance the runner measured, so it is answered with the
@@ -86,15 +96,23 @@ def requested_distance(distance_km: float | None,
     kept exact: a runner who asks for ten minutes means it.
     """
     if distance_km is not None:
-        return distance_km
+        # "정확히 5km" means it; anything else already accepts a course within
+        # EFFORT_TOLERANCE, and the catalogue holds one. Measured in
+        # production, first-time requests: 4.3/6.7/7.4/9.1km averaged 703ms
+        # and peaked at 2,094ms against a 100ms budget, while catalogue
+        # distances answered in 89ms -- for a course the runner would have
+        # been given anyway.
+        if strict:
+            return distance_km
+        snapped = _snapped(distance_km)
+        inside = abs(snapped - distance_km) <= distance_km * EFFORT_TOLERANCE + 1e-9
+        return snapped if inside else distance_km
     if not duration_min:
         return None
     km = duration_min / DEFAULT_PACE_MIN_PER_KM
-    if km >= max(CATALOG_DISTANCES_KM):
-        return max(CATALOG_DISTANCES_KM)
     if km <= min(CATALOG_DISTANCES_KM):
         return round(km, 1)
-    return min(CATALOG_DISTANCES_KM, key=lambda catalogued: abs(catalogued - km))
+    return _snapped(km)
 
 
 def _preference_misses(course: Course, *, include_hills: bool,
@@ -117,6 +135,7 @@ def build_course_plan(
     animal_matches: Sequence[PresetMatch], standard: Course | None,
     standard_matches: Sequence[PresetMatch] = (),
     distance_km: float | None = None, duration_min: float | None = None,
+    strict_distance: bool = False,
     include_hills: bool = False, night_mode: bool = False,
     need_facilities: Sequence[str] = (),
 ) -> CoursePlan | None:
@@ -128,7 +147,7 @@ def build_course_plan(
     deviations win before shape or preferences. Unspecified animal distance
     stays open rather than silently imposing a new 5km constraint.
     """
-    target = requested_distance(distance_km, duration_min)
+    target = requested_distance(distance_km, duration_min, strict_distance)
     wants_animal = shape not in (None, "standard")
     name = requested_name or "요청한 출발지"
     candidates: dict[str, CourseChoice] = {}
