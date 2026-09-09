@@ -193,12 +193,18 @@ def course_traits(course: Course) -> tuple[dict, ...]:
     else:
         traits.append({"emoji": "🏙️", "label": "도심 위주"})
 
-    if course.params.night_mode and course_is_night_ready(course):
+    night_pick = course.params.night_mode and course_is_night_ready(course)
+    if night_pick:
         traits.append({"emoji": "💡", "label": night_lighting_label(course.rfs)})
 
     comps = _components(course)
     # Ordered by how much the quality changes the run, not by RFS weight.
     for key, (_, _, good, poor) in COMPONENT_BANDS.items():
+        # A course recommended for night on its road mix carried 야간 안심 and
+        # 조명 어두움 side by side -- two answers to the same question, and the
+        # runner has no way to reconcile them. The recommendation speaks.
+        if night_pick and key == "lighting":
+            continue
         verdict = _verdict(comps, key)
         if verdict is None:
             continue

@@ -788,8 +788,15 @@ def _animal_course_plan(request: dict, shape: str, text: str,
         standard = None
     standards = []
     # Count distinct roads, not duplicate presets, before deciding whether
-    # the two remaining slots need CPU work.
-    signatures = {route_signature(m.course) for m in animals}
+    # the two remaining slots need CPU work. A candidate that a later rule will
+    # drop must not hold a slot: 강남역 5km found two 고양이 presets, stopped
+    # looking because three routes were "in hand", and then lost both of them
+    # to the start rule -- one card for a start whose catalogue holds four
+    # distinct 5km routes.
+    keeps_start = (request.get("allow_nearby_start") is True
+                   or not request.get("_resolved"))
+    signatures = {route_signature(m.course) for m in animals
+                  if keeps_start or m.distance_m < SAME_START_M}
     if standard is not None:
         signatures.add(route_signature(standard))
     if shape == "standard" and len(signatures) < RECOMMENDATION_COUNT:
@@ -1087,7 +1094,17 @@ def _verified_relaxation_options(request: dict, course_type: str) -> list[dict]:
             arguments["distance_km"] = round(item.course.length_km, 3)
             arguments.pop("duration_min", None)
             changed.extend(["distance_km", "duration_min"])
-            copy.append(f"거리를 {item.course.length_km:.1f}km로 변경")
+            if request.get("strict_distance"):
+                # Keeping 정확히 while moving the number produced an option that
+                # verified here and failed when the runner actually chose it:
+                # "정확히 5.131km(±128m)" re-ran the whole search and did not
+                # land on that same candidate again. Nobody asked for 5.131km
+                # anyway -- what they can accept is 5km without the 정확히.
+                arguments["strict_distance"] = False
+                changed.append("strict_distance")
+                copy.append(f"'정확히' 조건을 풀고 가장 가까운 {item.course.length_km:.1f}km 코스로")
+            else:
+                copy.append(f"거리를 {item.course.length_km:.1f}km로 변경")
         if "terrain" in reasons:
             arguments["include_hills"] = not item.course.is_flat
             changed.append("include_hills")
@@ -1312,11 +1329,17 @@ def _start_change_question(plan: CoursePlan, course_type: str, request: dict) ->
     common = {key: request[key] for key in ("location", "lat", "lon", "distance_km",
               "duration_min", "strict_distance", "include_hills", "night_mode", "need_facilities")
               if key in request and request[key] is not None}
+    # relaxation_options carry a label and these did not, so the host had only
+    # the prose to name choice 1 from -- and a compressed reply loses it.
     options = [dict(choice=1, tool="create_seoul_running_course",
+                    label=f"가까운 출발지의 {label} 코스 찾기",
+                    changed_fields=["allow_nearby_start"],
                     arguments=dict(common, course_type=course_type, allow_nearby_start=True))]
     if course_type != "standard":
         text += f"\n2. 아니면 {start}에서 출발하는 일반 러닝 코스를 찾아드릴까요?"
         options.append(dict(choice=2, tool="create_seoul_running_course",
+                            label=f"{start} 출발 일반 러닝 코스로 변경",
+                            changed_fields=["course_type"],
                             arguments=dict(common, course_type="standard", allow_nearby_start=False)))
     text += "\n선택해 주시면 기존 거리·지형·시설 조건을 유지해 찾아드릴게요."
     result = _speak_verbatim(

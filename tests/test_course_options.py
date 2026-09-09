@@ -825,3 +825,38 @@ def test_a_snapped_distance_reaches_generation_too():
                                      False, False, [], timeout_s=3.0,
                                      strict_distance=True)
     assert strict.distance_km == 4.3
+
+
+def test_a_candidate_that_a_later_rule_drops_does_not_hold_a_card_slot():
+    """강남역 5km found two 고양이 presets, counted three routes "in hand", and
+    stopped looking -- then lost both to the start rule. One card, for a start
+    whose catalogue holds four distinct 5km routes."""
+    result = server.create_seoul_running_course(
+        course_type="standard", location="강남역", distance_km=5)
+
+    selection = result.structuredContent["course_selection"]
+    assert selection["returned_count"] >= 2, "카탈로그에 경로가 있는데 카드가 한 장뿐"
+    starts = {selection["primary"]["start"],
+              *(c["start"] for c in selection["alternatives"])}
+    assert starts == {"강남역"}, "요청한 출발지가 아닌 카드가 섞였다"
+
+
+def test_a_night_pick_does_not_also_call_itself_dark():
+    """야간 안심 and 조명 어두움 rode the same card: two answers to one
+    question, with nothing telling the runner which to believe."""
+    from runart.insights import course_facts
+    from runart.models import decode_course_id
+    import re
+
+    for _ in range(3):
+        result = server.create_seoul_running_course(
+            course_type="standard", location="강남역", distance_km=5, night_mode=True)
+        if result.structuredContent["result_code"] == "course_ready":
+            break
+    text = "".join(getattr(c, "text", "") for c in result.content)
+    cid = re.search(r"/c/([A-Za-z0-9_-]{20,})", text).group(1)
+    labels = [t["label"] for t in course_facts(
+        server._get_course(decode_course_id(cid), timeout_s=10)).traits]
+
+    assert "야간 안심" in labels
+    assert "조명 어두움" not in labels

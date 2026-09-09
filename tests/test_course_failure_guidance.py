@@ -39,7 +39,11 @@ def test_complex_failure_uses_real_candidates_and_replayable_options():
         arguments = option["arguments"]
         assert arguments["course_type"] == "dog"
         assert arguments["location"] == "왕십리역"
-        assert arguments["strict_distance"] is True
+        # "정확히"는 그 옵션이 스스로 푼다고 말할 때만 풀린다. 후보의 실제 길이를
+        # 새 목표로 밀어 넣고 strict를 남기면, 다시 불러도 그 후보가 재현되지 않아
+        # 서비스가 제안한 선택지가 또 실패했다.
+        relaxed_strict = "strict_distance" in option["changed_fields"]
+        assert arguments["strict_distance"] is not relaxed_strict
         assert arguments["need_facilities"] == ["restroom"]
         replay = server.create_seoul_running_course(**arguments)
         assert not replay.isError, replay.content[0].text
@@ -187,3 +191,30 @@ def test_the_tool_refuses_a_deictic_start_as_a_location_failure():
 
     assert result.structuredContent["result_code"] == "location_not_found"
     assert "어디인지는 알 수 없어요" in result.content[0].text
+
+
+def test_a_strict_distance_offer_is_one_the_runner_can_actually_take():
+    """The offer used to keep 정확히 while moving the number to the candidate's
+    own length: it verified against that candidate and then failed when chosen,
+    because "정확히 5.131km" re-ran the search and landed elsewhere."""
+    result = server.create_seoul_running_course(
+        course_type="standard", location="강남역", distance_km=5, strict_distance=True)
+    assert result.structuredContent["result_code"] == "constraint_mismatch"
+
+    options = result.structuredContent["relaxation_options"]
+    assert options, "실패했으면 실행 가능한 선택지를 줘야 한다"
+    for option in options:
+        assert option["label"]
+        replay = server.create_seoul_running_course(**option["arguments"])
+        assert not replay.isError, option["label"]
+        assert replay.structuredContent["result_code"] == "course_ready"
+
+
+def test_a_confirmation_question_names_its_choices():
+    """confirmation_options carried only {choice, tool, arguments}: the host had
+    nothing but the prose to say what "1" meant."""
+    result = server.create_seoul_running_course(course_type="rabbit", location="노원역")
+    assert result.structuredContent["result_code"] == "start_change_confirmation_required"
+
+    options = result.structuredContent["confirmation_options"]
+    assert options and all(o.get("label") and o.get("changed_fields") for o in options)
