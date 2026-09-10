@@ -259,7 +259,22 @@ _COURSE_LINK_RE = re.compile(
 # instead of 8 web workers (~4.5GB) that previously risked OOM crashes.
 _POOL: "concurrent.futures.ProcessPoolExecutor | None" = None
 _POOL_LOCK = threading.Lock()
-_POOL_BROKEN = False
+# A killed worker breaks the whole executor, and this used to latch: every
+# generation ran inline for the life of the process, /healthz still said ok,
+# and only a redeploy brought the pool back. Each worker holds a ~560MB graph
+# copy under a 2GB limit, so losing one is an expected event over a four-week
+# run, not a hypothetical. The pool is rebuilt in the background instead --
+# never on a request's path, because a fresh worker loads its own graph and a
+# cold pool measured 21.9s for eight concurrent generations. Requests keep the
+# inline fallback until the new pool is warm and only then see it.
+_POOL_RETRY_AT = 0.0
+_POOL_FAILURES = 0
+_POOL_REVIVING = False
+# Backoff doubles from a minute; if the cause was memory, retrying fast just
+# repeats the kill. After enough failures the pool stays off and says so.
+POOL_RETRY_BASE_S = float(os.environ.get("RUNART_POOL_RETRY_S", "60"))
+POOL_RETRY_MAX_S = 900.0
+POOL_MAX_FAILURES = 5
 MCP_OUTER_RESPONSE_BUDGET_S = 2.85
 ANIMAL_RESPONSE_BUDGET_S = 2.65
 # Card requests reserve time for the higher-priority local/effort candidate.
@@ -305,21 +320,104 @@ class _GenerationTimeout(RuntimeError):
 _TIMED_OUT = object()
 
 
-def _get_pool() -> "concurrent.futures.ProcessPoolExecutor | None":
-    global _POOL, _POOL_BROKEN
-    if _POOL_BROKEN:
-        return None
-    if _POOL is None:
+def _pool_workers() -> int:
+    return max(1, int(os.environ.get("RUNART_POOL_WORKERS", "2")))
+
+
+def _new_pool() -> "concurrent.futures.ProcessPoolExecutor":
+    ctx = multiprocessing.get_context("spawn")
+    return concurrent.futures.ProcessPoolExecutor(
+        max_workers=_pool_workers(), mp_context=ctx)
+
+
+def pool_state() -> str:
+    """What an operator needs to see from outside: ok / reviving / off."""
+    if _POOL is not None:
+        return "ok"
+    if _POOL_FAILURES >= POOL_MAX_FAILURES:
+        return "off"
+    return "reviving" if _POOL_FAILURES else "starting"
+
+
+def _mark_pool_broken(reason: str) -> None:
+    """Drop the pool and schedule one background attempt to bring it back."""
+    global _POOL, _POOL_FAILURES, _POOL_RETRY_AT, _POOL_REVIVING
+    with _POOL_LOCK:
+        dead, _POOL = _POOL, None
+        _POOL_FAILURES += 1
+        wait = min(POOL_RETRY_MAX_S, POOL_RETRY_BASE_S * (2 ** (_POOL_FAILURES - 1)))
+        _POOL_RETRY_AT = time.monotonic() + wait
+        start = not _POOL_REVIVING and _POOL_FAILURES < POOL_MAX_FAILURES
+        if start:
+            _POOL_REVIVING = True
+    log.warning("process-pool broken (%s); failures=%d retry_in=%.0fs",
+                reason, _POOL_FAILURES, wait)
+    if dead is not None:
+        try:
+            dead.shutdown(wait=False, cancel_futures=True)
+        except Exception:  # noqa: BLE001 — the executor is already broken
+            pass
+    if start:
+        threading.Thread(target=_revive_pool, name="pool-revive", daemon=True).start()
+
+
+def _revive_pool() -> None:
+    """Rebuild and warm a pool off the request path, then publish it."""
+    global _POOL, _POOL_FAILURES, _POOL_REVIVING
+    try:
+        while True:
+            delay = _POOL_RETRY_AT - time.monotonic()
+            if delay > 0:
+                time.sleep(min(delay, 30.0))
+                continue
+            if _POOL_FAILURES >= POOL_MAX_FAILURES:
+                return
+            try:
+                candidate = _new_pool()
+                # A worker is only useful once it holds its own graph copy.
+                # Warm it here so no runner waits for that load.
+                from . import graph as graphmod
+                for future in [candidate.submit(graphmod.warmup)
+                               for _ in range(_pool_workers())]:
+                    future.result(timeout=180)
+            except Exception as exc:  # noqa: BLE001 — try again after backoff
+                _bump_backoff(f"revive failed: {exc}")
+                continue
+            with _POOL_LOCK:
+                _POOL = candidate
+                _POOL_FAILURES = 0
+            log.warning("process-pool revived")
+            return
+    finally:
         with _POOL_LOCK:
-            if _POOL is None and not _POOL_BROKEN:
-                try:
-                    workers = max(1, int(os.environ.get("RUNART_POOL_WORKERS", "2")))
-                    ctx = multiprocessing.get_context("spawn")
-                    _POOL = concurrent.futures.ProcessPoolExecutor(
-                        max_workers=workers, mp_context=ctx)
-                except Exception:  # noqa: BLE001 — never let pool setup crash a request
-                    _POOL_BROKEN = True
-                    _POOL = None
+            _POOL_REVIVING = False
+
+
+def _bump_backoff(reason: str) -> None:
+    global _POOL_FAILURES, _POOL_RETRY_AT
+    with _POOL_LOCK:
+        _POOL_FAILURES += 1
+        wait = min(POOL_RETRY_MAX_S, POOL_RETRY_BASE_S * (2 ** (_POOL_FAILURES - 1)))
+        _POOL_RETRY_AT = time.monotonic() + wait
+    log.warning("process-pool %s; failures=%d retry_in=%.0fs",
+                reason, _POOL_FAILURES, wait)
+
+
+def _get_pool() -> "concurrent.futures.ProcessPoolExecutor | None":
+    """The live pool, or None while it is being rebuilt. Never blocks."""
+    global _POOL
+    if _POOL is not None:
+        return _POOL
+    if _POOL_FAILURES or _POOL_REVIVING:
+        return None                      # 되살리는 중 — 요청은 inline으로 간다
+    with _POOL_LOCK:
+        if _POOL is None and not _POOL_FAILURES:
+            try:
+                _POOL = _new_pool()
+            except Exception as exc:  # noqa: BLE001 — never crash a request
+                _POOL = None
+                threading.Thread(target=_mark_pool_broken, args=(f"start failed: {exc}",),
+                                 daemon=True).start()
     return _POOL
 
 
@@ -328,7 +426,6 @@ def _offload(fn, *args, timeout_s: float | None = None):
     worker thread (not the event loop). Falls back to in-process execution if
     the pool is unavailable or broken, so a pool failure degrades latency
     rather than breaking the tool."""
-    global _POOL, _POOL_BROKEN
     pool = _get_pool()
     if pool is not None:
         try:
@@ -343,9 +440,7 @@ def _offload(fn, *args, timeout_s: float | None = None):
         except CourseError:
             raise  # a real generation error — propagate as-is
         except concurrent.futures.process.BrokenProcessPool:
-            with _POOL_LOCK:
-                _POOL_BROKEN = True
-                _POOL = None
+            _mark_pool_broken("worker died during offload")
         except Exception as exc:  # noqa: BLE001 — degrade to bounded inline
             log.debug("process-pool offload failed; using bounded inline path: %s", exc)
     if timeout_s is not None and not _intrinsically_bounded(fn):
@@ -380,10 +475,7 @@ def _offload_map(fn, items: dict, timeout_s: float | None = None) -> dict:
                     out[k] = None
             return out
         except concurrent.futures.process.BrokenProcessPool:
-            global _POOL, _POOL_BROKEN
-            with _POOL_LOCK:
-                _POOL_BROKEN = True
-                _POOL = None
+            _mark_pool_broken("worker died during map offload")
         except Exception as exc:  # noqa: BLE001
             log.debug("process-pool map failed; using bounded inline path: %s", exc)
     if timeout_s is not None:
@@ -2863,6 +2955,9 @@ async def healthz(_: Request) -> Response:
         "ready": _WARM_READY.is_set(),
         "service": "runnywhere",
         "release_sha": RELEASE_SHA,
+        # ok / starting / reviving / off. A pool that quietly died used to be
+        # invisible from outside for the life of the process.
+        "pool": pool_state(),
         "animal_presets": preset_status(),
     })
 
