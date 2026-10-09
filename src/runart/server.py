@@ -3499,14 +3499,20 @@ class _TokenBucketMiddleware:
                     # origin; send only the origin on cross-site SDK requests.
                     (b"referrer-policy", b"strict-origin-when-cross-origin"),
                     (b"permissions-policy", b"geolocation=(self), camera=(), microphone=()"),
+                    # Kakao moved the map engine that sdk.js injects from
+                    # t1.daumcdn.net to t1.kakaocdn.net without a code change
+                    # on our side; blocking it leaves kakao.maps.load() waiting
+                    # forever (grey map, no course line, no error message).
                     (b"content-security-policy",
                      b"default-src 'self'; base-uri 'self'; object-src 'none'; "
                      b"frame-ancestors 'none'; script-src 'self' 'unsafe-inline' "
-                     b"https://dapi.kakao.com https://t1.daumcdn.net; "
-                     b"style-src 'self' 'unsafe-inline'; img-src 'self' data: "
+                     b"https://dapi.kakao.com https://t1.kakaocdn.net https://t1.daumcdn.net; "
+                     b"style-src 'self' 'unsafe-inline' https://t1.kakaocdn.net; "
+                     b"img-src 'self' data: "
                      b"https://*.kakaocdn.net https://*.daumcdn.net; "
                      b"font-src 'self'; "
-                     b"connect-src 'self' https://*.kakao.com https://*.daum.net"),
+                     b"connect-src 'self' https://*.kakao.com https://*.kakaocdn.net "
+                     b"https://*.daum.net"),
                 ])
                 message["headers"] = headers
             await send(message)

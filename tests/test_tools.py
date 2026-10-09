@@ -608,6 +608,36 @@ def test_http_middleware_adds_security_headers():
     assert b"frame-ancestors 'none'" in headers[b"content-security-policy"]
 
 
+def test_csp_lets_kakao_maps_sdk_load_its_engine():
+    # sdk.js (autoload=false) injects the map engine from t1.kakaocdn.net, not
+    # t1.daumcdn.net any more. Blocking it leaves kakao.maps.load() waiting
+    # forever: a grey map with no course line and no error message.
+    import asyncio
+
+    async def inner(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    messages = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        messages.append(message)
+
+    middleware = server._TokenBucketMiddleware(inner)
+    asyncio.run(middleware({"type": "http", "client": ("127.0.0.1", 1)},
+                           receive, send))
+    csp = dict(messages[0]["headers"])[b"content-security-policy"].decode()
+    directives = {d.split()[0]: d.split()[1:] for d in csp.split("; ")}
+    for host in ("https://dapi.kakao.com", "https://t1.kakaocdn.net",
+                 "https://t1.daumcdn.net"):
+        assert host in directives["script-src"], host
+    for host in ("https://*.kakaocdn.net", "https://*.daumcdn.net"):
+        assert host in directives["img-src"], host
+
+
 def test_rate_limit_rejects_burst_but_health_remains_available():
     import asyncio
 
